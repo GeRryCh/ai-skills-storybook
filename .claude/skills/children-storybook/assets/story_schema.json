@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StoryManifest",
+  "type": "object",
+  "required": ["title", "age_band", "style", "character_refs", "pages"],
+  "additionalProperties": false,
+  "properties": {
+    "title": { "type": "string", "description": "Book title" },
+    "age_band": { "type": "string", "enum": ["3-5", "5-8"] },
+    "style": { "type": "string", "description": "Illustration style, e.g. 'soft watercolor, pastel palette'" },
+    "character_refs": {
+      "type": "array",
+      "description": "Absolute paths to user-supplied character reference images",
+      "items": { "type": "string" }
+    },
+    "style_sheet_path": {
+      "type": "string",
+      "description": "Path to generated style sheet PNG (filled in by make_style_sheet.py)"
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["page_num", "text", "image_prompt", "text_placement"],
+        "additionalProperties": false,
+        "properties": {
+          "page_num": { "type": "integer", "minimum": 1 },
+          "text": {
+            "type": "string",
+            "description": "Story text for this page/spread. Empty string for cover or wordless pages."
+          },
+          "image_prompt": {
+            "type": "string",
+            "description": "Full image generation prompt. Must name characters, mention style, and include text-safe-zone directive."
+          },
+          "text_placement": {
+            "type": "string",
+            "enum": ["top", "bottom"],
+            "description": "Where text overlay lands on the image"
+          },
+          "text_color_hint": {
+            "type": "string",
+            "description": "Optional hint for text color, e.g. 'dark' or 'light'. Default: dark.",
+            "default": "dark"
+          }
+        }
+      }
+    }
+  }
+}
