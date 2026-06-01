@@ -264,30 +264,39 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     nn = f"{page_num:02d}"
     suffix = "-native" if text_mode == "native" else ""
     final_path = pages_dir / f"page-{nn}{suffix}.png"
-    raw_path = pages_dir / f"raw-page-{nn}.png"
 
     prompt = build_image_prompt(page, story, text_mode)
 
-    ok = await run_nano_banana(client, prompt, raw_path, story, resolution, log)
-    if not ok or not raw_path.exists():
-        log.append(f"  ERROR: image generation failed for page {page_num}")
-        print("\n" + "\n".join(log))
-        return False
+    if text_mode == "native":
+        # In native mode the model bakes text into the illustration — write directly
+        # to final_path; no separate raw file needed.
+        ok = await run_nano_banana(client, prompt, final_path, story, resolution, log)
+        if not ok or not final_path.exists():
+            log.append(f"  ERROR: image generation failed for page {page_num}")
+            print("\n" + "\n".join(log))
+            return False
+    else:
+        raw_path = pages_dir / f"raw-page-{nn}.png"
+        ok = await run_nano_banana(client, prompt, raw_path, story, resolution, log)
+        if not ok or not raw_path.exists():
+            log.append(f"  ERROR: image generation failed for page {page_num}")
+            print("\n" + "\n".join(log))
+            return False
 
-    text = page.get("text", "")
-    placement = page.get("text_placement", "bottom")
-    color = page.get("text_color_hint", "dark")
-    font = page.get("font", "reader")
-    # Book-wide role -> family-name map; the resolved name (if any) overrides the
-    # bundled role font. Omitted/unknown role -> None -> bundled font used.
-    font_name = (story.get("fonts") or {}).get(font)
-    align = page.get("text_align", "left")
+        text = page.get("text", "")
+        placement = page.get("text_placement", "bottom")
+        color = page.get("text_color_hint", "dark")
+        font = page.get("font", "reader")
+        # Book-wide role -> family-name map; the resolved name (if any) overrides the
+        # bundled role font. Omitted/unknown role -> None -> bundled font used.
+        font_name = (story.get("fonts") or {}).get(font)
+        align = page.get("text_align", "left")
 
-    ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, final_path, log)
-    if not ok or not final_path.exists():
-        log.append(f"  ERROR: text overlay failed for page {page_num}")
-        print("\n" + "\n".join(log))
-        return False
+        ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, final_path, log)
+        if not ok or not final_path.exists():
+            log.append(f"  ERROR: text overlay failed for page {page_num}")
+            print("\n" + "\n".join(log))
+            return False
 
     log.append(f"  Done: {final_path}")
     log.append(f"MEDIA: {final_path}")
