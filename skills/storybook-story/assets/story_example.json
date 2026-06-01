@@ -11,20 +11,23 @@
   ],
   "character_refs": ["/path/to/hedgehog-photo.jpg"],
   "style_sheet_path": null,
+  "fonts": { "reader": "Andika", "display": "Patrick Hand" },
   "pages": [
     {
       "page_num": 1,
       "text": "Pip and the Big Storm",
       "image_prompt": "Cover of a children's picture book. A small brave hedgehog named Pip stands at the edge of a meadow looking up at dark storm clouds gathering on the horizon. Soft watercolor, gentle pastel palette. Square composition. Leave the bottom quarter of the image as a soft, low-detail, lightly-toned area suitable for overlaying text.",
       "text_placement": "bottom",
-      "text_color_hint": "dark"
+      "text_color_hint": "dark",
+      "font": "display"
     },
     {
       "page_num": 2,
       "text": "Pip loved sunny days in the meadow. But today, the sky turned grey.",
       "image_prompt": "A small brave hedgehog named Pip playing happily among wildflowers in a meadow. Warm golden light. Children's picture book illustration, soft watercolor, gentle pastel palette. Square composition. Leave the bottom quarter of the image as a soft, low-detail, pale-sky area suitable for overlaying text.",
       "text_placement": "bottom",
-      "text_color_hint": "dark"
+      "text_color_hint": "dark",
+      "font": "reader"
     },
     {
       "page_num": 3,

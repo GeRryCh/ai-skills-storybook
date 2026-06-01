@@ -69,7 +69,15 @@ To re-render a page after editing its `image_prompt`, delete `pages/page-NN.png`
 | `reader` | `Andika-Regular.ttf` | Body text — literacy-designed, open letterforms |
 | `display` | `PatrickHand-Regular.ttf` | Cover/title overlays |
 
-Pass `--font display` to `overlay_text.py` for title pages if desired.
+These are **roles**. Each page's `font` field in `story.json` selects the role (default `reader`); set the cover to `"font": "display"` for a title look.
+
+**Custom fonts (config-level).** A top-level `fonts` map in `story.json` redefines what each role's font is:
+```json
+"fonts": { "reader": "Arial", "display": "Patrick Hand" }
+```
+Family names resolve at render time, in order: (1) bundled asset in `assets/fonts/`, (2) system-installed font (Arial, Georgia, Helvetica… — no manual install needed), (3) the bundled role default + a warning if the name can't be found. Rendering rasterizes to pixels, so using a system font does not redistribute the font file. Omit `fonts` to keep bundled Andika/PatrickHand.
+
+Ad-hoc test: `overlay_text.py --font display --font-name "Arial"` (the `--font` role is the fallback if `--font-name` can't be resolved).
 
 ---
 

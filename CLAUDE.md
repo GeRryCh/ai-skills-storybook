@@ -82,10 +82,18 @@ API input limit): per-character `ref_image` first, then the global `character_re
 
 Pillow composites text on a feathered, semi-transparent rounded white panel that blends into
 the art (no hard edge). Font size auto-shrinks to fit the bottom/top 25% safe zone. Two
-bundled OFL fonts: `reader` (Andika, body) and `display` (PatrickHand, titles). Tunables are
-module constants near the top (`BOX_ALPHA`, `FEATHER_PX`, padding, font px range) exposed as
-`--box-alpha` / `--feather` flags. The render script never bakes story text into the
-generated image — every `image_prompt` reserves a low-detail safe zone for this overlay.
+bundled OFL fonts back two **roles**: `reader` (Andika, body) and `display` (PatrickHand,
+titles), selected per page via the `font` field in `story.json` (default `reader`);
+`render_book.py`'s `run_overlay` passes the role through as `--font`. An optional top-level
+`fonts` map (`{"reader": "Arial", "display": "Patrick Hand"}`) redefines each role's font;
+`render_book.py` looks up the page's role in it and passes the family name as `--font-name`.
+`overlay_text.py`'s `_resolve_font_ref()` resolves a name in order: bundled asset
+(`_bundled_font_path`) → system font (PIL searches OS font dirs) → bundled role default +
+one-time warning. So system fonts (Arial, etc.) need no manual install, and unknown names
+never crash the render. Tunables are module constants near the top (`BOX_ALPHA`,
+`FEATHER_PX`, padding, font px range) exposed as `--box-alpha` / `--feather` flags. The render
+script never bakes story text into the generated image — every `image_prompt` reserves a
+low-detail safe zone for this overlay.
 
 ## Repo layout notes
 

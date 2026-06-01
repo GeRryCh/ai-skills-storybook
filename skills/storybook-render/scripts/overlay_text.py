@@ -18,6 +18,7 @@ Importable:
 from __future__ import annotations
 import argparse
 import math
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -51,9 +52,58 @@ FEATHER_PX = 14
 EDGE_MARGIN_FRACTION = 0.04
 
 
-def _load_font(font_key: str, size: int) -> ImageFont.FreeTypeFont:
-    path = FONTS.get(font_key, FONTS["reader"])
-    return ImageFont.truetype(str(path), size)
+def _normalize_family(name: str) -> str:
+    """Lowercase, keep only alphanumerics — so 'Patrick Hand' == 'PatrickHand'."""
+    return "".join(c for c in name.lower() if c.isalnum())
+
+
+def _bundled_font_path(name: str) -> Path | None:
+    """Match a requested family name against a bundled .ttf in assets/fonts/.
+
+    Bundled OFL fonts always win over a same-named system font, so 'Andika' /
+    'Patrick Hand' resolve to the shipped files regardless of what's installed.
+    """
+    target = _normalize_family(name)
+    fonts_dir = SKILL_DIR / "assets" / "fonts"
+    for ttf in sorted(fonts_dir.glob("*.ttf")):
+        stem = ttf.stem.lower().removesuffix("-regular")
+        if _normalize_family(stem) == target:
+            return ttf
+    return None
+
+
+def _resolve_font_ref(role: str, name: str | None = None) -> str:
+    """Resolve a role + optional family name to a truetype reference (path or system name).
+
+    Resolution order when an explicit family `name` is given:
+      1. bundled asset matching the name (assets/fonts/)
+      2. system-installed font (PIL searches OS font dirs by family name)
+      3. bundled default for the role (reader -> Andika, display -> PatrickHand) + warning
+
+    Rendering is rasterized to pixels, so using a system font (e.g. Arial) does not
+    redistribute the font file. Unresolvable names never crash the render. Resolved
+    once per overlay so the not-found warning fires at most once.
+    """
+    if name:
+        bundled = _bundled_font_path(name)
+        if bundled is not None:
+            return str(bundled)
+        for candidate in (name, f"{name}.ttf"):
+            try:
+                ImageFont.truetype(candidate, 12)  # probe OS font dirs
+                return candidate
+            except OSError:
+                continue
+        print(
+            f"Warning: font {name!r} not found (no bundled asset, not a system font); "
+            f"falling back to the bundled {role!r} font.",
+            file=sys.stderr,
+        )
+    return str(FONTS.get(role, FONTS["reader"]))
+
+
+def _load_font(font_ref: str, size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(font_ref, size)
 
 
 def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
@@ -74,12 +124,13 @@ def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Im
     return lines
 
 
-def _pick_font_size(img_w: int, img_h: int, word_count: int, font_key: str) -> int:
+def _pick_font_size(img_w: int, img_h: int, word_count: int, font_ref: str) -> int:
     zone_h = img_h * TEXT_ZONE_FRACTION
     max_w = int(img_w * (1 - 2 * H_PAD_FRACTION))
-    # Start large and shrink until text fits in zone
+    # Start large and shrink until text fits in zone. Measure with the *resolved*
+    # font so sizing matches what is actually rendered.
     for size in range(MAX_FONT_PX, MIN_FONT_PX - 1, -2):
-        font = _load_font(font_key, size)
+        font = _load_font(font_ref, size)
         dummy_img = Image.new("RGBA", (img_w, img_h))
         draw = ImageDraw.Draw(dummy_img)
         lines = _word_wrap("X " * word_count, font, max_w, draw)
@@ -104,6 +155,7 @@ def overlay(
     color: str = "dark",
     box_alpha: int = BOX_ALPHA,
     feather: int = FEATHER_PX,
+    font_name: str | None = None,
 ) -> Path:
     """
     Composite text onto an image in the top or bottom zone.
@@ -113,8 +165,10 @@ def overlay(
         text: Story text. Empty string = no overlay, just copies file.
         placement: 'top' or 'bottom'.
         out_path: Destination path.
-        font: 'reader' (Andika) or 'display' (PatrickHand).
+        font: role 'reader' or 'display' — selects the bundled fallback font.
         color: 'dark' (near-black text) or 'light' (near-white text).
+        font_name: optional explicit family name (e.g. 'Arial'); resolved via bundled
+            asset -> system font -> bundled role fallback. None = use the role font.
 
     Returns:
         Path to written file.
@@ -130,8 +184,9 @@ def overlay(
 
     w, h = img.size
     word_count = len(text.split())
-    font_size = _pick_font_size(w, h, word_count, font)
-    pil_font = _load_font(font, font_size)
+    font_ref = _resolve_font_ref(font, font_name)
+    font_size = _pick_font_size(w, h, word_count, font_ref)
+    pil_font = _load_font(font_ref, font_size)
 
     max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
     h_pad = int(w * H_PAD_FRACTION)
@@ -195,7 +250,11 @@ def main() -> None:
     parser.add_argument("--text", required=True, help="Text to overlay")
     parser.add_argument("--placement", choices=["top", "bottom"], default="bottom")
     parser.add_argument("--out", required=True, help="Output image path")
-    parser.add_argument("--font", choices=["reader", "display"], default="reader")
+    parser.add_argument("--font", choices=["reader", "display"], default="reader",
+                        help="Font role; selects the bundled fallback font")
+    parser.add_argument("--font-name", default=None,
+                        help="Explicit font family (e.g. 'Arial'); resolved via bundled asset "
+                             "-> system font -> bundled role fallback")
     parser.add_argument("--color", choices=["dark", "light"], default="dark")
     parser.add_argument("--box-alpha", type=int, default=BOX_ALPHA,
                         help=f"Panel opacity 0-255 (default {BOX_ALPHA}; lower = more transparent)")
@@ -205,7 +264,7 @@ def main() -> None:
 
     result = overlay(
         args.image, args.text, args.placement, args.out, args.font, args.color,
-        box_alpha=args.box_alpha, feather=args.feather,
+        box_alpha=args.box_alpha, feather=args.feather, font_name=args.font_name,
     )
     print(f"Saved: {result}")
 

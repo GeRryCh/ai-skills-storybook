@@ -32,6 +32,15 @@
       "type": "string",
       "description": "Path to generated style sheet PNG (filled in by make_style_sheet.py)"
     },
+    "fonts": {
+      "type": "object",
+      "description": "Optional book-wide map of text role -> font family name. Defines which font each per-page 'font' role uses. Values are family names (e.g. 'Arial', 'Patrick Hand') resolved at render time: bundled asset in assets/fonts/ -> system-installed font -> bundled role default. Omit to use the bundled Andika (reader) / PatrickHand (display).",
+      "additionalProperties": false,
+      "properties": {
+        "reader": { "type": "string", "description": "Body-text font family. Default: Andika (bundled)." },
+        "display": { "type": "string", "description": "Title/cover font family. Default: Patrick Hand (bundled)." }
+      }
+    },
     "pages": {
       "type": "array",
       "minItems": 1,
@@ -58,6 +67,12 @@
             "type": "string",
             "description": "Optional hint for text color, e.g. 'dark' or 'light'. Default: dark.",
             "default": "dark"
+          },
+          "font": {
+            "type": "string",
+            "enum": ["reader", "display"],
+            "description": "Font for the text overlay. 'reader' (Andika, body text) or 'display' (PatrickHand, titles/cover). Default: reader.",
+            "default": "reader"
           }
         }
       }

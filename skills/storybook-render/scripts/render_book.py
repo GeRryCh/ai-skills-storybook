@@ -204,7 +204,8 @@ async def run_nano_banana(
 
 
 async def run_overlay(
-    raw_path: Path, text: str, placement: str, color: str, final_path: Path, log: list[str]
+    raw_path: Path, text: str, placement: str, color: str, font: str,
+    font_name: str | None, final_path: Path, log: list[str]
 ) -> bool:
     cmd = [
         "uv", "run", str(OVERLAY_SCRIPT),
@@ -213,7 +214,10 @@ async def run_overlay(
         "--placement", placement,
         "--out", str(final_path),
         "--color", color,
+        "--font", font,
     ]
+    if font_name:
+        cmd += ["--font-name", font_name]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -247,8 +251,12 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     text = page.get("text", "")
     placement = page.get("text_placement", "bottom")
     color = page.get("text_color_hint", "dark")
+    font = page.get("font", "reader")
+    # Book-wide role -> family-name map; the resolved name (if any) overrides the
+    # bundled role font. Omitted/unknown role -> None -> bundled font used.
+    font_name = (story.get("fonts") or {}).get(font)
 
-    ok = await run_overlay(raw_path, text, placement, color, final_path, log)
+    ok = await run_overlay(raw_path, text, placement, color, font, font_name, final_path, log)
     if not ok or not final_path.exists():
         log.append(f"  ERROR: text overlay failed for page {page_num}")
         print("\n" + "\n".join(log))
