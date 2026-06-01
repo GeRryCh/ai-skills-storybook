@@ -350,11 +350,13 @@ def main() -> None:
         "--text-mode",
         dest="text_mode",
         choices=["overlay", "native"],
-        default="overlay",
+        default=None,
         help=(
-            "overlay (default): generate image with text-safe zone, then Pillow-composite text. "
+            "Override story.json's text_mode for this run. "
+            "overlay: generate image with text-safe zone, then Pillow-composite text. "
             "native: ask the model to render story text directly into the illustration "
-            "(exploration mode — output goes to page-NN-native.png)."
+            "(output goes to page-NN-native.png). "
+            "If omitted, uses story.json's top-level 'text_mode' (default overlay)."
         ),
     )
     args = parser.parse_args()
@@ -364,6 +366,8 @@ def main() -> None:
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
+    # text_mode precedence: CLI flag (if given) > story.json top-level > "overlay".
+    text_mode = args.text_mode or story.get("text_mode", "overlay")
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     pages_dir = out_dir / "pages"
@@ -381,7 +385,7 @@ def main() -> None:
         print()
 
     # Select pages to render, skipping filtered-out and already-existing ones.
-    suffix = "-native" if args.text_mode == "native" else ""
+    suffix = "-native" if text_mode == "native" else ""
     todo: list[dict] = []
     for page in pages:
         page_num = page["page_num"]
@@ -396,7 +400,7 @@ def main() -> None:
             continue
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, args.text_mode)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:
