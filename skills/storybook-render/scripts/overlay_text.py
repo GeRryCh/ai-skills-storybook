@@ -39,8 +39,10 @@ V_PAD_TOP = 40
 V_PAD_BOTTOM = 56
 # Horizontal inner padding: gap between text and box left/right edges (pixels)
 H_INNER_PAD = 40
-# Min/max font sizes in pixels
-MIN_FONT_PX = 28
+# Min/max font sizes in pixels. MIN is a legibility floor; the longest pages
+# shrink toward it, and if text still overflows the zone the panel grows rather
+# than clipping (see overlay()).
+MIN_FONT_PX = 22
 MAX_FONT_PX = 72
 # Background box alpha (0=transparent, 255=opaque)
 BOX_ALPHA = 205
@@ -156,6 +158,7 @@ def overlay(
     box_alpha: int = BOX_ALPHA,
     feather: int = FEATHER_PX,
     font_name: str | None = None,
+    align: str = "left",
 ) -> Path:
     """
     Composite text onto an image in the top or bottom zone.
@@ -169,6 +172,7 @@ def overlay(
         color: 'dark' (near-black text) or 'light' (near-white text).
         font_name: optional explicit family name (e.g. 'Arial'); resolved via bundled
             asset -> system font -> bundled role fallback. None = use the role font.
+        align: 'left' (default) or 'center' — horizontal alignment of each text line.
 
     Returns:
         Path to written file.
@@ -198,18 +202,24 @@ def overlay(
     text_block_h = len(lines) * line_h
     box_h = text_block_h + V_PAD_TOP + V_PAD_BOTTOM
 
-    zone_h = int(h * TEXT_ZONE_FRACTION)
-    # Clamp box height to zone
-    box_h = min(box_h, zone_h - 8)
-
+    # TEXT_ZONE_FRACTION is the preferred height (drives font-size auto-fit). If a
+    # long page can't fit even at MIN_FONT_PX, let the panel grow rather than clip
+    # the last line — capped to the canvas minus edge margins so it always fits.
     edge_margin = int(h * EDGE_MARGIN_FRACTION)
-    if placement == "top":
-        box_y0 = edge_margin
-    else:
-        box_y0 = h - box_h - edge_margin
+    max_box_h = h - 2 * edge_margin
+    box_h = min(box_h, max_box_h)
 
     box_x0 = h_pad - H_INNER_PAD
     box_x1 = w - h_pad + H_INNER_PAD
+    # Bottom placement anchors the panel flush to the image bottom (no gap); it is
+    # drawn past the canvas edge so its rounded corners fall off-frame and the
+    # bottom reads as a straight, full-bleed edge. Top keeps the edge margin.
+    if placement == "top":
+        box_y0 = edge_margin
+        panel_y0, panel_y1 = box_y0, box_y0 + box_h
+    else:
+        box_y0 = h - box_h
+        panel_y0, panel_y1 = box_y0, h + BOX_RADIUS
     box_y1 = box_y0 + box_h
 
     # Build the panel on its own alpha mask, then blur the mask so the panel
@@ -219,7 +229,7 @@ def overlay(
     mask = Image.new("L", (w, h), 0)
     mask_draw = ImageDraw.Draw(mask)
     mask_draw.rounded_rectangle(
-        [box_x0, box_y0, box_x1, box_y1], radius=BOX_RADIUS, fill=box_alpha
+        [box_x0, panel_y0, box_x1, panel_y1], radius=BOX_RADIUS, fill=box_alpha
     )
     if feather > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(feather))
@@ -234,7 +244,12 @@ def overlay(
     text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
     text_y = box_y0 + V_PAD_TOP
     for line in lines:
-        text_draw.text((h_pad, text_y), line, font=pil_font, fill=text_color)
+        if align == "center":
+            line_w = text_draw.textlength(line, font=pil_font)
+            x = int((w - line_w) / 2)
+        else:
+            x = h_pad
+        text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
         text_y += line_h
         if text_y > box_y1 - V_PAD_BOTTOM:
             break
@@ -256,6 +271,8 @@ def main() -> None:
                         help="Explicit font family (e.g. 'Arial'); resolved via bundled asset "
                              "-> system font -> bundled role fallback")
     parser.add_argument("--color", choices=["dark", "light"], default="dark")
+    parser.add_argument("--align", choices=["left", "center"], default="left",
+                        help="Horizontal text alignment (default left)")
     parser.add_argument("--box-alpha", type=int, default=BOX_ALPHA,
                         help=f"Panel opacity 0-255 (default {BOX_ALPHA}; lower = more transparent)")
     parser.add_argument("--feather", type=int, default=FEATHER_PX,
@@ -265,6 +282,7 @@ def main() -> None:
     result = overlay(
         args.image, args.text, args.placement, args.out, args.font, args.color,
         box_alpha=args.box_alpha, feather=args.feather, font_name=args.font_name,
+        align=args.align,
     )
     print(f"Saved: {result}")
 

@@ -68,6 +68,12 @@
             "description": "Optional hint for text color, e.g. 'dark' or 'light'. Default: dark.",
             "default": "dark"
           },
+          "text_align": {
+            "type": "string",
+            "enum": ["left", "center"],
+            "description": "Horizontal alignment of the overlay text. Default: left. Use 'center' for cover/title pages.",
+            "default": "left"
+          },
           "font": {
             "type": "string",
             "enum": ["reader", "display"],

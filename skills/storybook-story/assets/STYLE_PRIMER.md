@@ -32,6 +32,7 @@ Do **not** bake the narrative story text into the illustration. Text is overlaid
 - Semi-transparent white rounded box behind text for contrast on any background.
 - Font: Andika-Regular (literacy-tested, clear letterforms) for body. PatrickHand-Regular for titles/display.
 - Per-page `font` field selects the *role*: `"reader"` (body, default) or `"display"` (titles). Set the cover/title page to `"display"`; leave body pages on `"reader"` (or omit — it defaults).
+- Per-page `text_align`: `"left"` (default) or `"center"`. Center the cover/title; leave body pages left-aligned.
 - Optional top-level `fonts` map redefines what each role's font is, e.g. `"fonts": {"reader": "Arial", "display": "Patrick Hand"}`. Family names resolve at render time: bundled asset → system-installed font → bundled role default. No manual install needed for system fonts (Arial, Georgia, …); unknown names fall back to the bundled font. Omit `fonts` to keep the bundled Andika/PatrickHand.
 
 ## Illustration style tips

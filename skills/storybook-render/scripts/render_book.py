@@ -205,7 +205,7 @@ async def run_nano_banana(
 
 async def run_overlay(
     raw_path: Path, text: str, placement: str, color: str, font: str,
-    font_name: str | None, final_path: Path, log: list[str]
+    font_name: str | None, align: str, final_path: Path, log: list[str]
 ) -> bool:
     cmd = [
         "uv", "run", str(OVERLAY_SCRIPT),
@@ -215,6 +215,7 @@ async def run_overlay(
         "--out", str(final_path),
         "--color", color,
         "--font", font,
+        "--align", align,
     ]
     if font_name:
         cmd += ["--font-name", font_name]
@@ -255,8 +256,9 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     # Book-wide role -> family-name map; the resolved name (if any) overrides the
     # bundled role font. Omitted/unknown role -> None -> bundled font used.
     font_name = (story.get("fonts") or {}).get(font)
+    align = page.get("text_align", "left")
 
-    ok = await run_overlay(raw_path, text, placement, color, font, font_name, final_path, log)
+    ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, final_path, log)
     if not ok or not final_path.exists():
         log.append(f"  ERROR: text overlay failed for page {page_num}")
         print("\n" + "\n".join(log))

@@ -93,8 +93,13 @@ uv run {skillDir}/scripts/overlay_text.py \
   --out /tmp/test-overlay.png
 ```
 
-**Text-panel blending:** the text sits on a soft, feathered white panel that blends into the illustration (no hard edge). The panel keeps a 4%-of-image-height margin from the image edge so the feather fades naturally instead of clipping at the frame. Tune with:
+**Text-panel blending:** the text sits on a soft, feathered white panel that blends into the illustration (no hard edge). A `bottom` panel is anchored flush to the image bottom (full-bleed, no gap); a `top` panel keeps a 4%-of-image-height margin so its feather fades instead of clipping. Tune with:
 - `--box-alpha N` — panel opacity 0–255 (default `205`; lower = more transparent, higher = more legible over busy art)
 - `--feather N` — edge blur radius in px (default `14`; `0` = hard edge)
+- `--align left|center` — horizontal text alignment (default `left`); driven per page by `text_align` in `story.json`. Use `center` for cover/title pages.
 
 These default sensibly in `render_book.py`; only pass them when overriding for a specific image.
+
+**Sizing:** font size auto-fits — it shrinks from 72px toward a 22px floor so the text fills the safe zone without overflowing. If a long page can't fit even at the floor, the panel grows downward (capped to the canvas) rather than clipping the last line.
+
+Per-page `story.json` text fields: `text_placement` (top/bottom), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display).

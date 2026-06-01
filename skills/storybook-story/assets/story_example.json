@@ -19,6 +19,7 @@
       "image_prompt": "Cover of a children's picture book. A small brave hedgehog named Pip stands at the edge of a meadow looking up at dark storm clouds gathering on the horizon. Soft watercolor, gentle pastel palette. Square composition. Leave the bottom quarter of the image as a soft, low-detail, lightly-toned area suitable for overlaying text.",
       "text_placement": "bottom",
       "text_color_hint": "dark",
+      "text_align": "center",
       "font": "display"
     },
     {

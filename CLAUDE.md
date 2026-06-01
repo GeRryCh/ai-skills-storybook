@@ -81,7 +81,11 @@ API input limit): per-character `ref_image` first, then the global `character_re
 ## Text overlay (`overlay_text.py`)
 
 Pillow composites text on a feathered, semi-transparent rounded white panel that blends into
-the art (no hard edge). Font size auto-shrinks to fit the bottom/top 25% safe zone. Two
+the art (no hard edge). A `bottom` panel anchors flush to the image bottom (full-bleed); a
+`top` panel keeps a 4%-height margin. Font size auto-shrinks (72px → 22px floor) to fit the
+25% safe zone; if a long page won't fit at the floor, the panel grows toward the canvas edge
+instead of clipping the last line. Per-page `text_align` (`left`/`center`, default `left`,
+passed as `--align`) centers cover titles. Two
 bundled OFL fonts back two **roles**: `reader` (Andika, body) and `display` (PatrickHand,
 titles), selected per page via the `font` field in `story.json` (default `reader`);
 `render_book.py`'s `run_overlay` passes the role through as `--font`. An optional top-level
