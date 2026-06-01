@@ -41,7 +41,8 @@ uv run {skillDir}/scripts/render_book.py \
 - `--from N` — resume from page N (skips earlier pages, also skips any already-existing files)
 - `--only N` — render a single page (good for testing one page before a full run, or re-doing one page)
 - `--resolution 1K|2K|4K` — 1K is faster/cheaper for proofing, 2K for final output
-- `--concurrency N` — render N pages in parallel (default `4`; pass `1` for serial). Pages are independent (each call only uses the shared style sheet + character refs), so parallel generation is safe and much faster. Lower it if you hit OpenRouter rate limits.
+
+All pages are fired concurrently via `asyncio` — one async OpenRouter request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
 Output: `{out_dir}/pages/page-01.png` … `page-NN.png`
 

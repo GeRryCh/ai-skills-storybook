@@ -14,6 +14,10 @@ For each page in story.json:
   2. Runs overlay_text.py to composite the story text.
   3. Prints MEDIA: <path> for each final page.
 
+Pages are fully independent, so they are all fired concurrently via asyncio
+(one async OpenRouter request per page, no thread pool, no local concurrency cap).
+Transient 429/5xx responses are retried with exponential backoff + jitter.
+
 Skips pages whose final file already exists (safe to re-run after partial failure).
 
 Requires OPENROUTER_API_KEY in the environment.
@@ -25,13 +29,13 @@ Usage:
 
 from __future__ import annotations
 import argparse
+import asyncio
 import base64
 import json
 import mimetypes
 import os
-import subprocess
+import random
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
@@ -41,6 +45,13 @@ OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 IMAGE_MODEL = "google/gemini-3-pro-image-preview"
 MAX_INPUT_IMAGES = 3
+
+# Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all
+# at once, so a single 429 must not silently drop a page.
+MAX_RETRIES = 5
+BACKOFF_BASE_SECONDS = 2.0
+BACKOFF_MAX_SECONDS = 60.0
+
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
     "vivid, concrete, model-ready illustration. Pay attention to composition, "
@@ -96,7 +107,28 @@ def collect_input_images(story: dict) -> list[str]:
     return input_images
 
 
-def run_nano_banana(
+def _retry_delay(attempt: int, exc: Exception) -> float:
+    """Backoff for the given attempt (0-indexed). Honors a Retry-After header if present."""
+    retry_after = None
+    response = getattr(exc, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            raw = headers.get("retry-after")
+            if raw:
+                try:
+                    retry_after = float(raw)
+                except (TypeError, ValueError):
+                    retry_after = None
+    if retry_after is not None:
+        return min(retry_after, BACKOFF_MAX_SECONDS)
+    # Exponential backoff with full jitter.
+    capped = min(BACKOFF_BASE_SECONDS * (2 ** attempt), BACKOFF_MAX_SECONDS)
+    return random.uniform(0, capped)
+
+
+async def run_nano_banana(
+    client,
     prompt: str,
     raw_path: Path,
     story: dict,
@@ -104,12 +136,7 @@ def run_nano_banana(
     log: list[str],
 ) -> bool:
     """Generate one illustration via OpenRouter and write it to raw_path."""
-    from openai import OpenAI
-
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        log.append("ERROR: OPENROUTER_API_KEY is not set in the environment.")
-        return False
+    from openai import APIConnectionError, APIStatusError, RateLimitError
 
     content: list[dict] = [{"type": "text", "text": prompt}]
     for img in collect_input_images(story):
@@ -123,19 +150,36 @@ def run_nano_banana(
     ]
 
     log.append(f"  Generating: {raw_path.name}")
-    try:
-        client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
-        response = client.chat.completions.create(
-            model=IMAGE_MODEL,
-            messages=messages,
-            extra_body={
-                "modalities": ["image", "text"],
-                "image_config": {"image_size": resolution},
-            },
-        )
-    except Exception as e:
-        log.append(f"  ERROR: image API request failed: {e}")
-        return False
+    response = None
+    for attempt in range(MAX_RETRIES):
+        last_exc: Exception
+        try:
+            response = await client.chat.completions.create(
+                model=IMAGE_MODEL,
+                messages=messages,
+                extra_body={
+                    "modalities": ["image", "text"],
+                    "image_config": {"image_size": resolution},
+                },
+            )
+            break
+        except (RateLimitError, APIConnectionError) as e:
+            last_exc = e
+        except APIStatusError as e:
+            if e.status_code < 500:
+                log.append(f"  ERROR: image API request failed ({e.status_code}): {e}")
+                return False
+            last_exc = e
+        except Exception as e:
+            log.append(f"  ERROR: image API request failed: {e}")
+            return False
+
+        if attempt == MAX_RETRIES - 1:
+            log.append(f"  ERROR: image API request failed after {MAX_RETRIES} attempts: {last_exc}")
+            return False
+        delay = _retry_delay(attempt, last_exc)
+        log.append(f"  Retry {attempt + 1}/{MAX_RETRIES - 1} after transient error; waiting {delay:.1f}s...")
+        await asyncio.sleep(delay)
 
     images = getattr(response.choices[0].message, "images", None)
     if not images:
@@ -159,7 +203,7 @@ def run_nano_banana(
     return True
 
 
-def run_overlay(
+async def run_overlay(
     raw_path: Path, text: str, placement: str, color: str, final_path: Path, log: list[str]
 ) -> bool:
     cmd = [
@@ -170,17 +214,22 @@ def run_overlay(
         "--out", str(final_path),
         "--color", color,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        if result.stdout:
-            log.append(result.stdout.rstrip())
-        if result.stderr:
-            log.append(result.stderr.rstrip())
-    return result.returncode == 0
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        if stdout:
+            log.append(stdout.decode().rstrip())
+        if stderr:
+            log.append(stderr.decode().rstrip())
+    return proc.returncode == 0
 
 
-def render_page(page: dict, story: dict, pages_dir: Path, resolution: str) -> tuple[bool, list[str]]:
-    """Render one page (nano-banana + overlay). Returns (ok, log_lines). Page-independent."""
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str) -> bool:
+    """Render one page (nano-banana + overlay). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     log: list[str] = [f"=== Page {page_num} ==="]
     nn = f"{page_num:02d}"
@@ -189,23 +238,46 @@ def render_page(page: dict, story: dict, pages_dir: Path, resolution: str) -> tu
 
     prompt = build_image_prompt(page, story)
 
-    ok = run_nano_banana(prompt, raw_path, story, resolution, log)
+    ok = await run_nano_banana(client, prompt, raw_path, story, resolution, log)
     if not ok or not raw_path.exists():
         log.append(f"  ERROR: image generation failed for page {page_num}")
-        return False, log
+        print("\n" + "\n".join(log))
+        return False
 
     text = page.get("text", "")
     placement = page.get("text_placement", "bottom")
     color = page.get("text_color_hint", "dark")
 
-    ok = run_overlay(raw_path, text, placement, color, final_path, log)
+    ok = await run_overlay(raw_path, text, placement, color, final_path, log)
     if not ok or not final_path.exists():
         log.append(f"  ERROR: text overlay failed for page {page_num}")
-        return False, log
+        print("\n" + "\n".join(log))
+        return False
 
     log.append(f"  Done: {final_path}")
     log.append(f"MEDIA: {final_path}")
-    return True, log
+    print("\n" + "\n".join(log))
+    return True
+
+
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str) -> int:
+    """Fire every page concurrently. Returns the number of failures."""
+    from openai import AsyncOpenAI
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        print("ERROR: OPENROUTER_API_KEY is not set in the environment.", file=sys.stderr)
+        return len(todo)
+
+    client = AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
+    try:
+        print(f"\nRendering {len(todo)} page(s) concurrently...")
+        results = await asyncio.gather(
+            *(render_page(client, page, story, pages_dir, resolution) for page in todo)
+        )
+    finally:
+        await client.close()
+    return sum(1 for ok in results if not ok)
 
 
 def main() -> None:
@@ -217,8 +289,6 @@ def main() -> None:
                         help="Start from this page number (1-indexed)")
     parser.add_argument("--only", dest="only_page", type=int, default=None,
                         help="Render only this page number")
-    parser.add_argument("--concurrency", type=int, default=4,
-                        help="Number of pages to render in parallel (default: 4, 1 = serial)")
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -254,28 +324,7 @@ def main() -> None:
             continue
         todo.append(page)
 
-    errors = 0
-    workers = max(1, min(args.concurrency, len(todo)))
-
-    if workers <= 1:
-        for page in todo:
-            ok, log = render_page(page, story, pages_dir, args.resolution)
-            print("\n" + "\n".join(log))
-            if not ok:
-                errors += 1
-    elif todo:
-        print(f"\nRendering {len(todo)} page(s) with concurrency {workers}...")
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(render_page, page, story, pages_dir, args.resolution): page
-                for page in todo
-            }
-            for future in as_completed(futures):
-                ok, log = future.result()
-                # Print each page's full log atomically so parallel output stays grouped.
-                print("\n" + "\n".join(log))
-                if not ok:
-                    errors += 1
+    errors = asyncio.run(render_all(todo, story, pages_dir, args.resolution)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:

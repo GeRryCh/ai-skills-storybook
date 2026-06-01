@@ -46,7 +46,7 @@ deps like Pillow automatically), never `python`:
 # Stage 2
 uv run skills/storybook-stylesheet/scripts/make_style_sheet.py --story story.json
 
-# Stage 3 — render all pages (2K default, 4 parallel)
+# Stage 3 — render all pages (2K default; all pages fired concurrently via asyncio)
 uv run skills/storybook-render/scripts/render_book.py --story story.json --resolution 2K
 
 # Render / re-render a single page (proof before a full run)
@@ -57,8 +57,10 @@ uv run skills/storybook-render/scripts/overlay_text.py \
   --image any.png --text "Once upon a time..." --placement bottom --out /tmp/t.png
 ```
 
-`render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
-`--concurrency N` (default 4; pages are independent so parallel is safe).
+`render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`.
+Pages are independent and all fired concurrently via `asyncio` (one async OpenRouter
+request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
+with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
 
 ## Idempotency / re-run semantics (important when editing scripts)
 
