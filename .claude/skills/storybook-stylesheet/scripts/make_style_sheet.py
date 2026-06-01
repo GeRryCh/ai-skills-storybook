@@ -39,34 +39,81 @@ def save_story(story: dict, story_path: Path) -> None:
         json.dump(story, f, indent=2, ensure_ascii=False)
 
 
-def extract_characters(story: dict) -> list[str]:
-    """Collect unique character names mentioned across all image prompts."""
-    # Heuristic: look for words starting with uppercase that appear in prompts
-    import re
-    all_text = " ".join(p["image_prompt"] for p in story["pages"])
-    candidates = re.findall(r'\b([A-Z][a-z]{2,})\b', all_text)
-    # Filter out common style words
-    skip = {"Leave", "Square", "Soft", "Full", "Children", "The", "A"}
-    seen: set[str] = set()
-    chars: list[str] = []
-    for c in candidates:
-        if c not in skip and c not in seen:
-            seen.add(c)
-            chars.append(c)
-    return chars[:6]  # cap at 6 character names
+def get_characters(story: dict) -> list[dict]:
+    """Return the explicit cast from story['characters'].
+
+    No prose scraping: an earlier regex heuristic minted phantom characters
+    (e.g. a fish 'Deep' from 'deep twilight sky', a second girl 'She' from
+    'She holds a rabbit') and poisoned every page. The cast must be authored
+    explicitly in story.json as [{name, appearance, ref_image?}].
+    """
+    chars = story.get("characters")
+    if isinstance(chars, list) and chars:
+        return chars
+    return []
 
 
-def build_prompt(story: dict, characters: list[str]) -> str:
+def build_prompt(story: dict, characters: list[dict]) -> str:
     style = story.get("style", "children's picture book illustration")
-    char_list = ", ".join(characters) if characters else "the main characters"
+    if characters:
+        cast_lines = []
+        for c in characters:
+            name = (c.get("name") or "").strip()
+            appearance = (c.get("appearance") or "").strip()
+            if name and appearance:
+                cast_lines.append(f"{name} ({appearance})")
+            elif name:
+                cast_lines.append(name)
+        cast = "; ".join(cast_lines)
+        char_clause = (
+            f"Show each of these characters and ONLY these characters, "
+            f"one per column: {cast}. Do not invent any extra characters. "
+        )
+    else:
+        char_clause = "Show the main characters of the story. "
     return (
         f"Character reference sheet for a children's picture book. "
-        f"Show {char_list} side by side: full-body view and close-up face, "
-        f"multiple angles, consistent character design. "
+        f"{char_clause}"
+        f"For each character show a full-body view and a close-up of the face, "
+        f"multiple angles, consistent character design across the row. "
+        f"Use any reference photo ONLY as guidance for that character's face, "
+        f"hair, and clothing — redraw it fully in the illustration style. Never "
+        f"composite, paste, trace, or show the reference photo itself anywhere in "
+        f"the output. No photographic elements. "
         f"Art style: {style}. "
-        f"Neutral light background, no text, no speech bubbles. "
+        f"Background must be a single flat, plain, neutral light colour — empty, "
+        f"no scenery, no objects, no people other than the listed characters. "
+        f"No text, no labels, no speech bubbles. "
         f"Clear consistent visual design so every character is recognisable across many pages."
     )
+
+
+def collect_ref_images(story: dict, characters: list[dict]) -> list[str]:
+    """Per-character ref_image first, then the global character_refs pool.
+
+    Dedup, keep order, cap at 3 (nano-banana input-image limit).
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for c in characters:
+        ref = (c.get("ref_image") or "").strip()
+        if ref and ref not in seen:
+            seen.add(ref)
+            ordered.append(ref)
+    for ref in story.get("character_refs", []):
+        if ref and ref not in seen:
+            seen.add(ref)
+            ordered.append(ref)
+
+    valid: list[str] = []
+    for ref in ordered:
+        if Path(ref).exists():
+            valid.append(ref)
+            if len(valid) >= 3:
+                break
+        else:
+            print(f"Warning: character ref not found, skipping: {ref}", file=sys.stderr)
+    return valid
 
 
 def main() -> None:
@@ -94,9 +141,16 @@ def main() -> None:
         print("Ensure nano-banana-pro-openrouter skill is installed in the same skills directory.", file=sys.stderr)
         sys.exit(1)
 
-    characters = extract_characters(story)
+    characters = get_characters(story)
+    if not characters:
+        print(
+            "Warning: story.json has no 'characters' array. Falling back to a "
+            "generic prompt. Add an explicit characters list for reliable, "
+            "phantom-free style sheets.",
+            file=sys.stderr,
+        )
     prompt = build_prompt(story, characters)
-    print(f"Characters detected: {characters}")
+    print(f"Cast: {[c.get('name') for c in characters]}")
     print(f"Prompt: {prompt}")
 
     cmd = [
@@ -106,13 +160,9 @@ def main() -> None:
         "--resolution", "2K",
     ]
 
-    # Add user-supplied character reference images (nano-banana caps at 3)
-    for ref in story.get("character_refs", [])[:3]:
-        ref_path = Path(ref)
-        if ref_path.exists():
-            cmd += ["--input-image", str(ref_path)]
-        else:
-            print(f"Warning: character ref not found, skipping: {ref}", file=sys.stderr)
+    # Reference images: per-character first, then global pool (nano-banana caps at 3)
+    for ref in collect_ref_images(story, characters):
+        cmd += ["--input-image", ref]
 
     print(f"\nRunning: {' '.join(cmd)}\n")
     result = subprocess.run(cmd, capture_output=False)

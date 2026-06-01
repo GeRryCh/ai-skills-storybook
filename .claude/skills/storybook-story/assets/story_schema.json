@@ -2,15 +2,30 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "StoryManifest",
   "type": "object",
-  "required": ["title", "age_band", "style", "character_refs", "pages"],
+  "required": ["title", "age_band", "style", "characters", "character_refs", "pages"],
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string", "description": "Book title" },
     "age_band": { "type": "string", "enum": ["3-5", "5-8"] },
     "style": { "type": "string", "description": "Illustration style, e.g. 'soft watercolor, pastel palette'" },
+    "characters": {
+      "type": "array",
+      "description": "Explicit cast. ONE entry per REAL character in the story. Drives the style sheet — the style sheet shows exactly these characters and no others. Never rely on auto-extraction from prose.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "appearance"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "description": "Character name exactly as written in image_prompts" },
+          "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, clothing, colours, distinguishing features. More specific = more consistent across pages." },
+          "ref_image": { "type": "string", "description": "Optional absolute path to a reference photo for THIS character (the style sheet should match this face/hair/clothing closely)." }
+        }
+      }
+    },
     "character_refs": {
       "type": "array",
-      "description": "Absolute paths to user-supplied character reference images",
+      "description": "Absolute paths to user-supplied character reference images (global pool; per-character refs go in characters[].ref_image)",
       "items": { "type": "string" }
     },
     "style_sheet_path": {

@@ -20,7 +20,7 @@ import argparse
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 SKILL_DIR = Path(__file__).parent.parent
 FONTS = {
@@ -38,8 +38,10 @@ V_PAD = 24
 MIN_FONT_PX = 28
 MAX_FONT_PX = 72
 # Background box alpha (0=transparent, 255=opaque)
-BOX_ALPHA = 210
+BOX_ALPHA = 140
 BOX_RADIUS = 18
+# Feather radius (px) for the soft fade between panel and image. 0 = hard edge.
+FEATHER_PX = 32
 
 
 def _load_font(font_key: str, size: int) -> ImageFont.FreeTypeFont:
@@ -93,6 +95,8 @@ def overlay(
     out_path: str | Path,
     font: str = "reader",
     color: str = "dark",
+    box_alpha: int = BOX_ALPHA,
+    feather: int = FEATHER_PX,
 ) -> Path:
     """
     Composite text onto an image in the top or bottom zone.
@@ -125,11 +129,9 @@ def overlay(
     max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
     h_pad = int(w * H_PAD_FRACTION)
 
-    overlay_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay_layer)
-
-    lines = _word_wrap(text, pil_font, max_text_w, draw)
-    line_bbox = draw.textbbox((0, 0), "Ag", font=pil_font)
+    measure = ImageDraw.Draw(img)
+    lines = _word_wrap(text, pil_font, max_text_w, measure)
+    line_bbox = measure.textbbox((0, 0), "Ag", font=pil_font)
     line_h = line_bbox[3] - line_bbox[1] + 8
     text_block_h = len(lines) * line_h
     box_h = text_block_h + 2 * V_PAD
@@ -147,18 +149,34 @@ def overlay(
     box_x1 = w - h_pad + 8
     box_y1 = box_y0 + box_h
 
-    box_fill = (255, 255, 255, BOX_ALPHA)
-    _rounded_rect(draw, (box_x0, box_y0, box_x1, box_y1), BOX_RADIUS, box_fill)
+    # Build the panel on its own alpha mask, then blur the mask so the panel
+    # fades softly into the image instead of ending at a hard edge. The blur is
+    # applied only to the panel mask — the text is composited separately and
+    # stays crisp.
+    mask = Image.new("L", (w, h), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle(
+        [box_x0, box_y0, box_x1, box_y1], radius=BOX_RADIUS, fill=box_alpha
+    )
+    if feather > 0:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather))
 
+    panel = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    panel.putalpha(mask)
+    img = Image.alpha_composite(img, panel)
+
+    # Sharp text layer on top of the blended panel.
+    text_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    text_draw = ImageDraw.Draw(text_layer)
     text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
     text_y = box_y0 + V_PAD
     for line in lines:
-        draw.text((h_pad, text_y), line, font=pil_font, fill=text_color)
+        text_draw.text((h_pad, text_y), line, font=pil_font, fill=text_color)
         text_y += line_h
         if text_y > box_y1 - V_PAD:
             break
 
-    composed = Image.alpha_composite(img, overlay_layer)
+    composed = Image.alpha_composite(img, text_layer)
     composed.convert("RGB").save(out_path)
     return out_path
 
@@ -171,9 +189,16 @@ def main() -> None:
     parser.add_argument("--out", required=True, help="Output image path")
     parser.add_argument("--font", choices=["reader", "display"], default="reader")
     parser.add_argument("--color", choices=["dark", "light"], default="dark")
+    parser.add_argument("--box-alpha", type=int, default=BOX_ALPHA,
+                        help=f"Panel opacity 0-255 (default {BOX_ALPHA}; lower = more transparent)")
+    parser.add_argument("--feather", type=int, default=FEATHER_PX,
+                        help=f"Edge blur radius in px (default {FEATHER_PX}; 0 = hard edge)")
     args = parser.parse_args()
 
-    result = overlay(args.image, args.text, args.placement, args.out, args.font, args.color)
+    result = overlay(
+        args.image, args.text, args.placement, args.out, args.font, args.color,
+        box_alpha=args.box_alpha, feather=args.feather,
+    )
     print(f"Saved: {result}")
 
 
