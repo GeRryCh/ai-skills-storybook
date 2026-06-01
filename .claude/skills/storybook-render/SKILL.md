@@ -85,8 +85,8 @@ uv run {skillDir}/scripts/overlay_text.py \
   --out /tmp/test-overlay.png
 ```
 
-**Text-panel blending:** the text sits on a soft, feathered white panel that blends into the illustration (no hard edge). Tune with:
-- `--box-alpha N` — panel opacity 0–255 (default `140`; lower = more transparent, higher = more legible over busy art)
-- `--feather N` — edge blur radius in px (default `32`; `0` = hard edge)
+**Text-panel blending:** the text sits on a soft, feathered white panel that blends into the illustration (no hard edge). The panel keeps a 4%-of-image-height margin from the image edge so the feather fades naturally instead of clipping at the frame. Tune with:
+- `--box-alpha N` — panel opacity 0–255 (default `205`; lower = more transparent, higher = more legible over busy art)
+- `--feather N` — edge blur radius in px (default `14`; `0` = hard edge)
 
 These default sensibly in `render_book.py`; only pass them when overriding for a specific image.

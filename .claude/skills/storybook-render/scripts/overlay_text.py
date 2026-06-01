@@ -32,16 +32,23 @@ FONTS = {
 TEXT_ZONE_FRACTION = 0.25
 # Horizontal padding as fraction of image width
 H_PAD_FRACTION = 0.05
-# Vertical padding inside the text box (pixels)
-V_PAD = 24
+# Vertical padding inside the text box (pixels). Bottom is larger to visually
+# balance the feather blur that adds perceived space at the top edge.
+V_PAD_TOP = 40
+V_PAD_BOTTOM = 56
+# Horizontal inner padding: gap between text and box left/right edges (pixels)
+H_INNER_PAD = 40
 # Min/max font sizes in pixels
 MIN_FONT_PX = 28
 MAX_FONT_PX = 72
 # Background box alpha (0=transparent, 255=opaque)
-BOX_ALPHA = 140
-BOX_RADIUS = 18
+BOX_ALPHA = 205
+BOX_RADIUS = 36
 # Feather radius (px) for the soft fade between panel and image. 0 = hard edge.
-FEATHER_PX = 32
+FEATHER_PX = 14
+# Margin between text box and image edge as fraction of image height.
+# Gives the feather room to fade instead of clipping at the frame.
+EDGE_MARGIN_FRACTION = 0.04
 
 
 def _load_font(font_key: str, size: int) -> ImageFont.FreeTypeFont:
@@ -77,7 +84,7 @@ def _pick_font_size(img_w: int, img_h: int, word_count: int, font_key: str) -> i
         draw = ImageDraw.Draw(dummy_img)
         lines = _word_wrap("X " * word_count, font, max_w, draw)
         line_h = draw.textbbox((0, 0), "Ag", font=font)[3] + 8
-        total_h = len(lines) * line_h + 2 * V_PAD
+        total_h = len(lines) * line_h + V_PAD_TOP + V_PAD_BOTTOM
         if total_h <= zone_h:
             return size
     return MIN_FONT_PX
@@ -134,19 +141,20 @@ def overlay(
     line_bbox = measure.textbbox((0, 0), "Ag", font=pil_font)
     line_h = line_bbox[3] - line_bbox[1] + 8
     text_block_h = len(lines) * line_h
-    box_h = text_block_h + 2 * V_PAD
+    box_h = text_block_h + V_PAD_TOP + V_PAD_BOTTOM
 
     zone_h = int(h * TEXT_ZONE_FRACTION)
     # Clamp box height to zone
     box_h = min(box_h, zone_h - 8)
 
+    edge_margin = int(h * EDGE_MARGIN_FRACTION)
     if placement == "top":
-        box_y0 = 8
+        box_y0 = edge_margin
     else:
-        box_y0 = h - box_h - 8
+        box_y0 = h - box_h - edge_margin
 
-    box_x0 = h_pad - 8
-    box_x1 = w - h_pad + 8
+    box_x0 = h_pad - H_INNER_PAD
+    box_x1 = w - h_pad + H_INNER_PAD
     box_y1 = box_y0 + box_h
 
     # Build the panel on its own alpha mask, then blur the mask so the panel
@@ -169,11 +177,11 @@ def overlay(
     text_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     text_draw = ImageDraw.Draw(text_layer)
     text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
-    text_y = box_y0 + V_PAD
+    text_y = box_y0 + V_PAD_TOP
     for line in lines:
         text_draw.text((h_pad, text_y), line, font=pil_font, fill=text_color)
         text_y += line_h
-        if text_y > box_y1 - V_PAD:
+        if text_y > box_y1 - V_PAD_BOTTOM:
             break
 
     composed = Image.alpha_composite(img, text_layer)
