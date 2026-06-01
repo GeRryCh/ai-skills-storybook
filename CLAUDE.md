@@ -83,8 +83,10 @@ API input limit): per-character `ref_image` first, then the global `character_re
 Pillow composites text on a feathered, semi-transparent rounded white panel that blends into
 the art (no hard edge). A `bottom` panel anchors flush to the image bottom (full-bleed); a
 `top` panel keeps a 4%-height margin. Font size auto-shrinks (72px → 22px floor) to fit the
-25% safe zone; if a long page won't fit at the floor, the panel grows toward the canvas edge
-instead of clipping the last line. Per-page `text_align` (`left`/`center`, default `left`,
+comfortable 25% zone; the panel may grow past it but is hard-capped at 1/3 of page height. If
+text won't fit 1/3 even at the 22px floor, the font shrinks below it (down to a 12px hard min)
+so it fits rather than clipping. See `MAX_BOX_FRACTION` / `ABS_MIN_FONT_PX` and the two-phase
+`_pick_font_size`. Per-page `text_align` (`left`/`center`, default `left`,
 passed as `--align`) centers cover titles. Two
 bundled OFL fonts back two **roles**: `reader` (Andika, body) and `display` (PatrickHand,
 titles), selected per page via the `font` field in `story.json` (default `reader`);

@@ -29,8 +29,12 @@ FONTS = {
     "display": SKILL_DIR / "assets" / "fonts" / "PatrickHand-Regular.ttf",
 }
 
-# Text block occupies this fraction of image height
+# Text block's preferred height (drives font auto-fit) and its hard ceiling. The
+# panel may grow past the preferred zone for long pages, but never beyond the
+# ceiling (1/3 of the page); if text won't fit the ceiling even at MIN_FONT_PX,
+# the font shrinks below MIN to fit rather than overflowing the cap.
 TEXT_ZONE_FRACTION = 0.25
+MAX_BOX_FRACTION = 1.0 / 3.0
 # Horizontal padding as fraction of image width
 H_PAD_FRACTION = 0.05
 # Vertical padding inside the text box (pixels). Bottom is larger to visually
@@ -39,11 +43,13 @@ V_PAD_TOP = 40
 V_PAD_BOTTOM = 56
 # Horizontal inner padding: gap between text and box left/right edges (pixels)
 H_INNER_PAD = 40
-# Min/max font sizes in pixels. MIN is a legibility floor; the longest pages
-# shrink toward it, and if text still overflows the zone the panel grows rather
-# than clipping (see overlay()).
+# Font sizes in pixels. MAX is the starting size. MIN is the preferred legibility
+# floor for normal pages (those that fit the comfortable TEXT_ZONE_FRACTION). When
+# a page is so long it can't fit the MAX_BOX_FRACTION ceiling even at MIN, the font
+# shrinks below MIN down to ABS_MIN (the hard floor); below that we accept clipping.
 MIN_FONT_PX = 22
 MAX_FONT_PX = 72
+ABS_MIN_FONT_PX = 12
 # Background box alpha (0=transparent, 255=opaque)
 BOX_ALPHA = 205
 BOX_RADIUS = 36
@@ -127,20 +133,29 @@ def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Im
 
 
 def _pick_font_size(img_w: int, img_h: int, word_count: int, font_ref: str) -> int:
-    zone_h = img_h * TEXT_ZONE_FRACTION
     max_w = int(img_w * (1 - 2 * H_PAD_FRACTION))
-    # Start large and shrink until text fits in zone. Measure with the *resolved*
-    # font so sizing matches what is actually rendered.
-    for size in range(MAX_FONT_PX, MIN_FONT_PX - 1, -2):
+    zone_h = img_h * TEXT_ZONE_FRACTION       # comfortable preferred height
+    cap_h = img_h * MAX_BOX_FRACTION           # hard ceiling (1/3 page)
+
+    def _fits(size: int, limit: float) -> bool:
+        # Measure with the *resolved* font so sizing matches what is rendered.
         font = _load_font(font_ref, size)
         dummy_img = Image.new("RGBA", (img_w, img_h))
         draw = ImageDraw.Draw(dummy_img)
         lines = _word_wrap("X " * word_count, font, max_w, draw)
         line_h = draw.textbbox((0, 0), "Ag", font=font)[3] + 8
         total_h = len(lines) * line_h + V_PAD_TOP + V_PAD_BOTTOM
-        if total_h <= zone_h:
+        return total_h <= limit
+
+    # Phase 1: prefer fitting the comfortable zone at a legible size (>= MIN).
+    for size in range(MAX_FONT_PX, MIN_FONT_PX - 1, -2):
+        if _fits(size, zone_h):
             return size
-    return MIN_FONT_PX
+    # Phase 2: very long page — shrink below MIN to fit the hard 1/3 ceiling.
+    for size in range(MIN_FONT_PX, ABS_MIN_FONT_PX - 1, -2):
+        if _fits(size, cap_h):
+            return size
+    return ABS_MIN_FONT_PX
 
 
 def _rounded_rect(draw: ImageDraw.ImageDraw, xy: tuple, radius: int, fill: tuple) -> None:
@@ -206,7 +221,10 @@ def overlay(
     # long page can't fit even at MIN_FONT_PX, let the panel grow rather than clip
     # the last line — capped to the canvas minus edge margins so it always fits.
     edge_margin = int(h * EDGE_MARGIN_FRACTION)
-    max_box_h = h - 2 * edge_margin
+    # Hard ceiling: the panel never exceeds 1/3 of the page. _pick_font_size already
+    # shrinks the font (below MIN if needed) so text fits within this, so the cap is
+    # a safety bound, not a clip point, for any realistic amount of text.
+    max_box_h = int(h * MAX_BOX_FRACTION)
     box_h = min(box_h, max_box_h)
 
     box_x0 = h_pad - H_INNER_PAD
