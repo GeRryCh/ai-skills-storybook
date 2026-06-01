@@ -2,3 +2,4 @@ pages/
 story.json
 .claude/settings.local.json
 __pycache__
+*.png
