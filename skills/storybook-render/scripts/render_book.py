@@ -35,6 +35,7 @@ import json
 import mimetypes
 import os
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -70,18 +71,37 @@ STYLE_ANCHOR = (
     "Consistent character design, {style}."
 )
 
+# Used in --text-mode native: tells the model to render text into the illustration.
+NATIVE_TEXT_DIRECTIVE = (
+    "Render this exact story text as part of the illustration, hand-lettered in a "
+    "clean, child-friendly picture-book style, naturally integrated into the "
+    "{placement} of the scene. Reproduce every word, comma, quotation mark, and "
+    'dash exactly as written — no changes, no omissions: "{text}"'
+)
+
 
 def load_story(path: Path) -> dict:
     with open(path) as f:
         return json.load(f)
 
 
-def build_image_prompt(page: dict, story: dict) -> str:
+def build_image_prompt(page: dict, story: dict, text_mode: str = "overlay") -> str:
     placement = page.get("text_placement", "bottom")
     style = story.get("style", "children's picture book illustration")
+    anchor = STYLE_ANCHOR.format(style=style)
+
+    if text_mode == "native":
+        # Strip any baked-in safe-zone sentence (". Leave the <...>.") from the prompt so the
+        # model gets a clean slate — then append NATIVE_TEXT_DIRECTIVE with the verbatim text.
+        raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", page["image_prompt"])
+        base = raw_prompt.rstrip(". ")
+        text = page.get("text", "")
+        native = NATIVE_TEXT_DIRECTIVE.format(placement=placement, text=text)
+        return f"{base}. {anchor}. {native}"
+
+    # overlay (default): unchanged behaviour.
     base = page["image_prompt"].rstrip(". ")
     safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(placement=placement)
-    anchor = STYLE_ANCHOR.format(style=style)
     return f"{base}. {safe_zone}. {anchor}"
 
 
@@ -237,15 +257,16 @@ async def run_overlay(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str) -> bool:
-    """Render one page (nano-banana + overlay). Prints its own log atomically. Page-independent."""
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "overlay") -> bool:
+    """Render one page (nano-banana + optional overlay). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
-    log: list[str] = [f"=== Page {page_num} ==="]
+    log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
-    final_path = pages_dir / f"page-{nn}.png"
+    suffix = "-native" if text_mode == "native" else ""
+    final_path = pages_dir / f"page-{nn}{suffix}.png"
     raw_path = pages_dir / f"raw-page-{nn}.png"
 
-    prompt = build_image_prompt(page, story)
+    prompt = build_image_prompt(page, story, text_mode)
 
     ok = await run_nano_banana(client, prompt, raw_path, story, resolution, log)
     if not ok or not raw_path.exists():
@@ -274,7 +295,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "overlay") -> int:
     """Fire every page concurrently. Returns the number of failures."""
     from openai import AsyncOpenAI
 
@@ -285,9 +306,9 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
 
     client = AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
     try:
-        print(f"\nRendering {len(todo)} page(s) concurrently...")
+        print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
         results = await asyncio.gather(
-            *(render_page(client, page, story, pages_dir, resolution) for page in todo)
+            *(render_page(client, page, story, pages_dir, resolution, text_mode) for page in todo)
         )
     finally:
         await client.close()
@@ -304,6 +325,17 @@ def main() -> None:
                         help="Start from this page number (1-indexed)")
     parser.add_argument("--only", dest="only_page", type=int, default=None,
                         help="Render only this page number")
+    parser.add_argument(
+        "--text-mode",
+        dest="text_mode",
+        choices=["overlay", "native"],
+        default="overlay",
+        help=(
+            "overlay (default): generate image with text-safe zone, then Pillow-composite text. "
+            "native: ask the model to render story text directly into the illustration "
+            "(exploration mode — output goes to page-NN-native.png)."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -328,6 +360,7 @@ def main() -> None:
         print()
 
     # Select pages to render, skipping filtered-out and already-existing ones.
+    suffix = "-native" if args.text_mode == "native" else ""
     todo: list[dict] = []
     for page in pages:
         page_num = page["page_num"]
@@ -335,14 +368,14 @@ def main() -> None:
             continue
         if page_num < args.from_page:
             continue
-        final_path = pages_dir / f"page-{page_num:02d}.png"
+        final_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
         if final_path.exists():
             print(f"Page {page_num}: already exists, skipping. ({final_path})")
             print(f"MEDIA: {final_path}")
             continue
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, args.text_mode)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:
