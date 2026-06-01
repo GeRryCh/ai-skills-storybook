@@ -170,6 +170,10 @@ async def run_nano_banana(
                 log.append(f"  ERROR: image API request failed ({e.status_code}): {e}")
                 return False
             last_exc = e
+        except json.JSONDecodeError as e:
+            # OpenRouter returned a non-JSON body (e.g. rate-limit HTML) despite a
+            # application/json Content-Type header. Treat as transient and retry.
+            last_exc = e
         except Exception as e:
             log.append(f"  ERROR: image API request failed: {e}")
             return False
