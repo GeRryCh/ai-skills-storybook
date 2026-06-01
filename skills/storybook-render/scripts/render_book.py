@@ -43,7 +43,7 @@ OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
 
 # OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
 MAX_INPUT_IMAGES = 3
 
 # Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all

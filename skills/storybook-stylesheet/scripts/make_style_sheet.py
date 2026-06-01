@@ -29,7 +29,7 @@ from pathlib import Path
 
 # OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
 MAX_INPUT_IMAGES = 3
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "

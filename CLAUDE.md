@@ -30,7 +30,7 @@ directory (default: the user's cwd, e.g. this worktree root):
 
 The two paid scripts call the **OpenRouter image API directly** (via the `openai`
 Python SDK, declared as a PEP-723 inline dependency). They build an OpenAI client with
-`base_url=https://openrouter.ai/api/v1`, model `google/gemini-3-pro-image-preview`, send
+`base_url=https://openrouter.ai/api/v1`, model `google/gemini-3.1-flash-image-preview`, send
 the prompt plus up to 3 base64 data-URL input images, and decode the returned image.
 Requires `uv` on PATH and `OPENROUTER_API_KEY` in the environment. No sibling skill is
 needed (an earlier version shelled out to `nano-banana-pro-openrouter`; that logic is now
