@@ -284,7 +284,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Render all pages of a storybook.")
     parser.add_argument("--story", required=True, help="Path to story.json")
     parser.add_argument("--out-dir", help="Output directory (default: same dir as story.json)")
-    parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default="2K")
+    parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default="1K")
     parser.add_argument("--from", dest="from_page", type=int, default=1,
                         help="Start from this page number (1-indexed)")
     parser.add_argument("--only", dest="only_page", type=int, default=None,

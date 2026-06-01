@@ -46,8 +46,8 @@ deps like Pillow automatically), never `python`:
 # Stage 2
 uv run skills/storybook-stylesheet/scripts/make_style_sheet.py --story story.json
 
-# Stage 3 — render all pages (2K default; all pages fired concurrently via asyncio)
-uv run skills/storybook-render/scripts/render_book.py --story story.json --resolution 2K
+# Stage 3 — render all pages (1K default; all pages fired concurrently via asyncio)
+uv run skills/storybook-render/scripts/render_book.py --story story.json
 
 # Render / re-render a single page (proof before a full run)
 uv run skills/storybook-render/scripts/render_book.py --story story.json --only 3
