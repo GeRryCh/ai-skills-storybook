@@ -72,11 +72,18 @@ STYLE_ANCHOR = (
 )
 
 # Used in --text-mode native: tells the model to render text into the illustration.
+# One fixed, detailed letterform descriptor reused verbatim on every page so the
+# lettering style stays consistent book-wide (each page is a separate stateless call
+# with no seed). {font_ref} names a target font family when story.fonts configures one;
+# the descriptor adjectives must stay coherent with that family (rounded sans here).
 NATIVE_TEXT_DIRECTIVE = (
-    "Render this exact story text as part of the illustration, hand-lettered in a "
-    "clean, child-friendly picture-book style, naturally integrated into the "
-    "{placement} of the scene. Reproduce every word, comma, quotation mark, and "
-    'dash exactly as written — no changes, no omissions: "{text}"'
+    "Render this exact story text as part of the illustration, integrated naturally "
+    "into the {placement} of the scene. Letter it in a clean, rounded, child-friendly "
+    "style{font_ref}: even weight, steady baseline, generous letter spacing, warm dark ink, "
+    "crisp and highly legible against the soft low-detail background — and keep this exact "
+    "lettering style identical on every page of the book. Preserve the text's natural "
+    "reading direction. Reproduce every word, comma, quotation mark, and dash exactly as "
+    'written — no changes, no omissions, no extra text: "{text}"'
 )
 
 
@@ -96,7 +103,12 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "overlay") -> s
         raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", page["image_prompt"])
         base = raw_prompt.rstrip(". ")
         text = page.get("text", "")
-        native = NATIVE_TEXT_DIRECTIVE.format(placement=placement, text=text)
+        # Reuse the same role -> family map the overlay path uses; name the family as a
+        # lettering reference so the baked-in text matches the book's configured font.
+        font_role = page.get("font", "reader")
+        family = (story.get("fonts") or {}).get(font_role)
+        font_ref = f", styled after the {family} typeface" if family else ""
+        native = NATIVE_TEXT_DIRECTIVE.format(placement=placement, text=text, font_ref=font_ref)
         return f"{base}. {anchor}. {native}"
 
     # overlay (default): unchanged behaviour.
