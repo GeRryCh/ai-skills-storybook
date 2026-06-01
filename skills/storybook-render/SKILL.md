@@ -23,8 +23,7 @@ metadata:
 
 - `{out_dir}/story.json` exists (from **storybook-story**).
 - `{out_dir}/style-sheet.png` exists and `story.json` has `style_sheet_path` set (from **storybook-stylesheet**). The script warns and produces weaker consistency if it is missing.
-- `OPENROUTER_API_KEY` is set; `uv` is installed.
-- The sibling skill `nano-banana-pro-openrouter` is installed (the script calls it).
+- `OPENROUTER_API_KEY` is set; `uv` is installed. The script calls the OpenRouter image API directly (no sibling skill needed).
 
 If the style sheet is missing, run **storybook-stylesheet** first.
 
@@ -54,10 +53,10 @@ To re-render a page after editing its `image_prompt`, delete `pages/page-NN.png`
 
 ## Cost & failure notes
 
-- Each page = one nano-banana image call. 8 pages = 8 calls.
+- Each page = one OpenRouter image call. 8 pages = 8 calls.
 - **Strongly suggest** a 2-page proof run first: `--only 2` then `--only 3`.
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
-- For API errors, see nano-banana-pro-openrouter's troubleshooting table (OPENROUTER_API_KEY, uv, credits).
+- API errors: check `OPENROUTER_API_KEY` is set, `uv` installed, and OpenRouter account has credits.
 - Each image uses 2K resolution by default (~2048px). Suitable for print at ~8"×8" and any screen size.
 
 ---

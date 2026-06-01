@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = []
+# dependencies = [
+#     "openai",
+# ]
 # ///
 """
 Generate a character/style reference sheet for a storybook.
 
-Reads story.json, calls nano-banana-pro-openrouter to produce a single PNG
-showing all named characters in the book's art style, then writes the path
-back into story.json as style_sheet_path.
+Reads story.json, calls the OpenRouter image API (Gemini image model) to produce
+a single PNG showing all named characters in the book's art style, then writes the
+path back into story.json as style_sheet_path.
+
+Requires OPENROUTER_API_KEY in the environment.
 
 Usage:
   uv run make_style_sheet.py --story /path/to/story.json [--out-dir /path/to/outdir]
@@ -16,16 +20,23 @@ Usage:
 
 from __future__ import annotations
 import argparse
+import base64
 import json
-import subprocess
+import mimetypes
+import os
 import sys
 from pathlib import Path
 
-NANO_BANANA = (
-    Path(__file__).parent.parent.parent
-    / "nano-banana-pro-openrouter"
-    / "scripts"
-    / "generate_image.py"
+# OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+MAX_INPUT_IMAGES = 3
+IMAGE_SYSTEM_PROMPT = (
+    "You are a visionary image-creation artist. Transform the request into a "
+    "vivid, concrete, model-ready illustration. Pay attention to composition, "
+    "lighting, color, and visual balance. Preserve the provided reference images' "
+    "character design and art style. Output only the generated image without "
+    "additional commentary."
 )
 
 
@@ -116,6 +127,70 @@ def collect_ref_images(story: dict, characters: list[dict]) -> list[str]:
     return valid
 
 
+def encode_image_to_data_url(path: Path) -> str:
+    mime, _ = mimetypes.guess_type(str(path))
+    if not mime:
+        mime = "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def generate_image(prompt: str, input_images: list[str], out_path: Path, resolution: str) -> bool:
+    """Generate a single image via OpenRouter and write it to out_path."""
+    from openai import OpenAI
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        print("ERROR: OPENROUTER_API_KEY is not set in the environment.", file=sys.stderr)
+        return False
+
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for img in input_images:
+        content.append(
+            {"type": "image_url", "image_url": {"url": encode_image_to_data_url(Path(img))}}
+        )
+
+    messages = [
+        {"role": "system", "content": IMAGE_SYSTEM_PROMPT},
+        {"role": "user", "content": content},
+    ]
+
+    try:
+        client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
+        response = client.chat.completions.create(
+            model=IMAGE_MODEL,
+            messages=messages,
+            extra_body={
+                "modalities": ["image", "text"],
+                "image_config": {"image_size": resolution},
+            },
+        )
+    except Exception as e:
+        print(f"ERROR: image API request failed: {e}", file=sys.stderr)
+        return False
+
+    images = getattr(response.choices[0].message, "images", None)
+    if not images:
+        print("ERROR: no images returned by the API.", file=sys.stderr)
+        return False
+
+    image_url = None
+    first = images[0]
+    if isinstance(first, dict):
+        image_url = first.get("image_url", {}).get("url") or first.get("url")
+    if not image_url or not image_url.startswith("data:") or ";base64," not in image_url:
+        print("ERROR: image payload missing base64 data URL.", file=sys.stderr)
+        return False
+
+    _, encoded = image_url.split(",", 1)
+    try:
+        out_path.write_bytes(base64.b64decode(encoded))
+    except Exception as e:
+        print(f"ERROR: failed to decode/write image: {e}", file=sys.stderr)
+        return False
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate character style sheet.")
     parser.add_argument("--story", required=True, help="Path to story.json")
@@ -136,11 +211,6 @@ def main() -> None:
         save_story(story, story_path)
         return
 
-    if not NANO_BANANA.exists():
-        print(f"ERROR: nano-banana script not found at {NANO_BANANA}", file=sys.stderr)
-        print("Ensure nano-banana-pro-openrouter skill is installed in the same skills directory.", file=sys.stderr)
-        sys.exit(1)
-
     characters = get_characters(story)
     if not characters:
         print(
@@ -153,26 +223,13 @@ def main() -> None:
     print(f"Cast: {[c.get('name') for c in characters]}")
     print(f"Prompt: {prompt}")
 
-    cmd = [
-        "uv", "run", str(NANO_BANANA),
-        "--prompt", prompt,
-        "--filename", str(style_sheet_path),
-        "--resolution", "2K",
-    ]
+    # Reference images: per-character first, then global pool (caps at 3)
+    input_images = collect_ref_images(story, characters)
+    print(f"\nGenerating style sheet -> {style_sheet_path}\n")
 
-    # Reference images: per-character first, then global pool (nano-banana caps at 3)
-    for ref in collect_ref_images(story, characters):
-        cmd += ["--input-image", ref]
-
-    print(f"\nRunning: {' '.join(cmd)}\n")
-    result = subprocess.run(cmd, capture_output=False)
-
-    if result.returncode != 0:
-        print(f"ERROR: nano-banana exited with code {result.returncode}", file=sys.stderr)
-        sys.exit(result.returncode)
-
-    if not style_sheet_path.exists():
-        print("ERROR: style sheet PNG not produced. Check nano-banana output above.", file=sys.stderr)
+    ok = generate_image(prompt, input_images, style_sheet_path, "2K")
+    if not ok or not style_sheet_path.exists():
+        print("ERROR: style sheet PNG not produced.", file=sys.stderr)
         sys.exit(1)
 
     story["style_sheet_path"] = str(style_sheet_path)

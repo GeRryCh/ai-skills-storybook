@@ -22,8 +22,7 @@ metadata:
 ## Preconditions
 
 - `{out_dir}/story.json` exists and contains a non-empty `characters` array (authored in Stage 1 by **storybook-story**).
-- `OPENROUTER_API_KEY` is set; `uv` is installed.
-- The sibling skill `nano-banana-pro-openrouter` is installed (the script calls it).
+- `OPENROUTER_API_KEY` is set; `uv` is installed. The script calls the OpenRouter image API directly (no sibling skill needed).
 
 If `story.json` is missing, run **storybook-story** first. If the `characters` array is missing, add it to `story.json` before running (the sheet is built from that list, never guessed from prose).
 
@@ -35,7 +34,7 @@ If `story.json` is missing, run **storybook-story** first. If the `characters` a
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-This calls nano-banana once to produce `style-sheet.png` showing **exactly** the characters in `story.json`'s `characters` array — no auto-guessing, no phantom characters. Reference images are used as input: per-character `ref_image` first, then the global `character_refs` pool, capped at 3. The script writes `style_sheet_path` back into `story.json`.
+This makes one OpenRouter image call to produce `style-sheet.png` showing **exactly** the characters in `story.json`'s `characters` array — no auto-guessing, no phantom characters. Reference images are used as input: per-character `ref_image` first, then the global `character_refs` pool, capped at 3. The script writes `style_sheet_path` back into `story.json`.
 
 If the user supplied no character refs, the script still runs (prompt-only generation).
 

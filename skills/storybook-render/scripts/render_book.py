@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = []
+# dependencies = [
+#     "openai",
+# ]
 # ///
 """
 Render all pages of a children's storybook.
 
 For each page in story.json:
-  1. Calls nano-banana to generate the illustration (with style sheet + character refs).
+  1. Generates the illustration via OpenRouter (Gemini image model), passing the
+     style sheet + character refs as input images for consistency.
   2. Runs overlay_text.py to composite the story text.
   3. Prints MEDIA: <path> for each final page.
 
 Skips pages whose final file already exists (safe to re-run after partial failure).
+
+Requires OPENROUTER_API_KEY in the environment.
 
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
@@ -20,21 +25,29 @@ Usage:
 
 from __future__ import annotations
 import argparse
-import importlib.util
+import base64
 import json
+import mimetypes
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
-NANO_BANANA = (
-    SCRIPTS_DIR.parent.parent
-    / "nano-banana-pro-openrouter"
-    / "scripts"
-    / "generate_image.py"
-)
 OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
+
+# OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+MAX_INPUT_IMAGES = 3
+IMAGE_SYSTEM_PROMPT = (
+    "You are a visionary image-creation artist. Transform the request into a "
+    "vivid, concrete, model-ready illustration. Pay attention to composition, "
+    "lighting, color, and visual balance. Preserve the provided reference images' "
+    "character design and art style. Output only the generated image without "
+    "additional commentary."
+)
 
 TEXT_SAFE_ZONE_DIRECTIVE = (
     "Leave the {placement} quarter of the image as a soft, "
@@ -61,6 +74,28 @@ def build_image_prompt(page: dict, story: dict) -> str:
     return f"{base}. {safe_zone}. {anchor}"
 
 
+def encode_image_to_data_url(path: Path) -> str:
+    mime, _ = mimetypes.guess_type(str(path))
+    if not mime:
+        mime = "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def collect_input_images(story: dict) -> list[str]:
+    """Style sheet first, then character refs, capped at MAX_INPUT_IMAGES."""
+    input_images: list[str] = []
+    style_sheet = story.get("style_sheet_path")
+    if style_sheet and Path(style_sheet).exists():
+        input_images.append(style_sheet)
+    for ref in story.get("character_refs", []):
+        if len(input_images) >= MAX_INPUT_IMAGES:
+            break
+        if Path(ref).exists():
+            input_images.append(ref)
+    return input_images
+
+
 def run_nano_banana(
     prompt: str,
     raw_path: Path,
@@ -68,39 +103,60 @@ def run_nano_banana(
     resolution: str,
     log: list[str],
 ) -> bool:
-    if not NANO_BANANA.exists():
-        log.append(f"ERROR: nano-banana not found at {NANO_BANANA}")
+    """Generate one illustration via OpenRouter and write it to raw_path."""
+    from openai import OpenAI
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        log.append("ERROR: OPENROUTER_API_KEY is not set in the environment.")
         return False
 
-    cmd = [
-        "uv", "run", str(NANO_BANANA),
-        "--prompt", prompt,
-        "--filename", str(raw_path),
-        "--resolution", resolution,
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for img in collect_input_images(story):
+        content.append(
+            {"type": "image_url", "image_url": {"url": encode_image_to_data_url(Path(img))}}
+        )
+
+    messages = [
+        {"role": "system", "content": IMAGE_SYSTEM_PROMPT},
+        {"role": "user", "content": content},
     ]
 
-    # Input images: style sheet first, then up to 2 character refs (max 3 total)
-    style_sheet = story.get("style_sheet_path")
-    refs = story.get("character_refs", [])
-
-    input_images: list[str] = []
-    if style_sheet and Path(style_sheet).exists():
-        input_images.append(style_sheet)
-    for ref in refs:
-        if Path(ref).exists() and len(input_images) < 3:
-            input_images.append(ref)
-
-    for img in input_images:
-        cmd += ["--input-image", img]
-
     log.append(f"  Generating: {raw_path.name}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        if result.stdout:
-            log.append(result.stdout.rstrip())
-        if result.stderr:
-            log.append(result.stderr.rstrip())
-    return result.returncode == 0
+    try:
+        client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
+        response = client.chat.completions.create(
+            model=IMAGE_MODEL,
+            messages=messages,
+            extra_body={
+                "modalities": ["image", "text"],
+                "image_config": {"image_size": resolution},
+            },
+        )
+    except Exception as e:
+        log.append(f"  ERROR: image API request failed: {e}")
+        return False
+
+    images = getattr(response.choices[0].message, "images", None)
+    if not images:
+        log.append("  ERROR: no images returned by the API.")
+        return False
+
+    image_url = None
+    first = images[0]
+    if isinstance(first, dict):
+        image_url = first.get("image_url", {}).get("url") or first.get("url")
+    if not image_url or not image_url.startswith("data:") or ";base64," not in image_url:
+        log.append("  ERROR: image payload missing base64 data URL.")
+        return False
+
+    _, encoded = image_url.split(",", 1)
+    try:
+        raw_path.write_bytes(base64.b64decode(encoded))
+    except Exception as e:
+        log.append(f"  ERROR: failed to decode/write image: {e}")
+        return False
+    return True
 
 
 def run_overlay(
