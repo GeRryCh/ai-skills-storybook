@@ -7,7 +7,7 @@
 #
 # To regenerate just one piece, delete the relevant output and re-run:
 #   rm tests/fixtures/pip-storm/refs/pip-ref.png && uv run tests/gen_ref.py
-#   rm tests/fixtures/pip-storm/style-sheet.png && (cd … && uv run …/make_style_sheet.py …)
+#   rm tests/fixtures/pip-storm/style-sheet-pip.png && (cd … && uv run …/make_style_sheet.py …)
 #   rm tests/fixtures/pip-storm/pages/page-0N.png && (cd … && uv run …/render_book.py … --only N)
 #
 # IMPORTANT: After regeneration, normalize story.json paths to relative values
@@ -22,8 +22,9 @@ RENDER_SCRIPT="$REPO_ROOT/skills/storybook-render/scripts/render_book.py"
 echo "=== Step 1: reference character image ==="
 uv run "$REPO_ROOT/tests/gen_ref.py"
 
-echo "=== Step 2: style sheet (stage 2) ==="
+echo "=== Step 2: per-character style sheets (stage 2) ==="
 # Run from fixture dir so relative ref paths in story.json resolve correctly.
+# Produces style-sheet-pip.png; writes absolute style_sheet path onto each character.
 (cd "$FIXTURE_DIR" && uv run "$STYLESHEET_SCRIPT" --story story.json)
 
 echo "=== Step 3: overlay pages (stage 3, text_mode=overlay) ==="
@@ -34,14 +35,14 @@ echo "=== Step 4: native pages (stage 3, text_mode=native) ==="
 
 echo ""
 echo "=== Step 5: normalize story.json paths before committing ==="
-echo "make_style_sheet.py rewrites style_sheet_path to an absolute path."
-echo "Edit story.json manually (or run the sed below) to restore relative paths:"
+echo "make_style_sheet.py rewrites characters[].style_sheet to an absolute path."
+echo "Edit story.json manually (or run the python snippet below) to restore relative paths:"
 echo ""
 echo "  python3 -c \""
 echo "import json, pathlib"
 echo "p = pathlib.Path('$FIXTURE_DIR/story.json')"
 echo "s = json.loads(p.read_text())"
-echo "s['style_sheet_path'] = 'style-sheet.png'"
+echo "s['characters'][0]['style_sheet'] = 'style-sheet-pip.png'"
 echo "s['characters'][0]['ref_image'] = 'refs/pip-ref.png'"
 echo "s['character_refs'] = ['refs/pip-ref.png']"
 echo "p.write_text(json.dumps(s, indent=2, ensure_ascii=False) + '\n')"
