@@ -19,18 +19,15 @@
         "properties": {
           "name": { "type": "string", "description": "Character name exactly as written in image_prompts" },
           "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, clothing, colours, distinguishing features. More specific = more consistent across pages." },
-          "ref_image": { "type": "string", "description": "Optional absolute path to a reference photo for THIS character (the style sheet should match this face/hair/clothing closely)." }
+          "ref_image": { "type": "string", "description": "Optional absolute path to a reference photo for THIS character (the style sheet should match this face/hair/clothing closely)." },
+          "style_sheet": { "type": "string", "description": "Path to this character's generated style sheet PNG (filled in by make_style_sheet.py). Used by render_book.py to select per-page reference images." }
         }
       }
     },
     "character_refs": {
       "type": "array",
-      "description": "Absolute paths to user-supplied character reference images (global pool; per-character refs go in characters[].ref_image)",
+      "description": "Absolute paths to user-supplied character reference images (global pool; per-character refs go in characters[].ref_image). Used by make_style_sheet.py when generating each character's style sheet.",
       "items": { "type": "string" }
-    },
-    "style_sheet_path": {
-      "type": "string",
-      "description": "Path to generated style sheet PNG (filled in by make_style_sheet.py)"
     },
     "text_mode": {
       "type": "string",
@@ -57,10 +54,15 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["page_num", "text", "image_prompt", "text_placement"],
+        "required": ["page_num", "text", "image_prompt", "text_placement", "characters"],
         "additionalProperties": false,
         "properties": {
           "page_num": { "type": "integer", "minimum": 1 },
+          "characters": {
+            "type": "array",
+            "description": "Names of the characters appearing on this page. MUST match characters[].name exactly. Drives which per-character style sheets are sent as references when rendering this page. Use an empty array [] for wordless or character-free pages.",
+            "items": { "type": "string" }
+          },
           "text": {
             "type": "string",
             "description": "Story text for this page/spread. Empty string for cover or wordless pages."

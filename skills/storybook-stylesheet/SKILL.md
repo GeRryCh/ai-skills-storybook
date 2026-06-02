@@ -1,14 +1,14 @@
 ---
 name: storybook-stylesheet
 description: >
-  Stage 2 of 3 in the storybook pipeline — generate the character style sheet.
+  Stage 2 of 3 in the storybook pipeline — generate per-character style sheets.
   Use when an approved story.json already exists (from storybook-story) and the user
-  wants to build, regenerate, or fix the cast reference sheet — e.g. "make the style
-  sheet", "regenerate the character sheet", "the characters look inconsistent / wrong",
-  "redo the style sheet". Produces style-sheet.png, the single reference image that
-  anchors character consistency across every page. Requires an existing story.json with
-  a 'characters' array. Costs one image API call. If no story.json exists yet, run
-  storybook-story first.
+  wants to build, regenerate, or fix the character reference sheets — e.g. "make the
+  style sheet", "regenerate the character sheets", "the characters look inconsistent /
+  wrong", "redo the style sheet". Produces one style-sheet-{name}.png per character,
+  which render_book.py selects per page for consistency. Requires an existing story.json
+  with a 'characters' array. Costs one image API call per character. If no story.json
+  exists yet, run storybook-story first.
 metadata:
   requires:
     bins:
@@ -17,14 +17,14 @@ metadata:
       - OPENROUTER_API_KEY
 ---
 
-# Storybook — Stage 2: Character Style Sheet
+# Storybook — Stage 2: Character Style Sheets
 
 ## Preconditions
 
 - `{out_dir}/story.json` exists and contains a non-empty `characters` array (authored in Stage 1 by **storybook-story**).
 - `OPENROUTER_API_KEY` is set; `uv` is installed. The script calls the OpenRouter image API directly (no sibling skill needed).
 
-If `story.json` is missing, run **storybook-story** first. If the `characters` array is missing, add it to `story.json` before running (the sheet is built from that list, never guessed from prose).
+If `story.json` is missing, run **storybook-story** first. If the `characters` array is missing, add it to `story.json` before running (sheets are built from that list, never guessed from prose).
 
 ---
 
@@ -34,24 +34,40 @@ If `story.json` is missing, run **storybook-story** first. If the `characters` a
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-This makes one OpenRouter image call to produce `style-sheet.png` showing **exactly** the characters in `story.json`'s `characters` array — no auto-guessing, no phantom characters. Reference images are used as input: per-character `ref_image` first, then the global `character_refs` pool, capped at 3. The script writes `style_sheet_path` back into `story.json`.
+This makes **one OpenRouter image call per character** to produce individual PNGs
+(`style-sheet-{name}.png`) — one sheet per character, no combined cast sheet. Each sheet
+shows that character alone at multiple angles. Reference images are used as input: that
+character's `ref_image` first, then the global `character_refs` pool, capped at 3. The
+script writes each character's `style_sheet` path back into the `characters` array in
+`story.json`.
 
 If the user supplied no character refs, the script still runs (prompt-only generation).
 
-**The script skips generation if `style-sheet.png` already exists.** To force a fresh sheet (e.g. after editing `characters`), delete `style-sheet.png` first.
+**The script is idempotent per character.** If `style-sheet-{name}.png` already exists
+it is skipped. To force a regenerate for one character, delete that character's file
+and re-run:
+
+```bash
+rm style-sheet-pip.png   # replace 'pip' with the character's slug
+uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
+```
 
 ---
 
 ## Approval gate
 
-After generation, show the sheet to the user (`MEDIA:` the path) and ask them to confirm every character looks right **before** rendering pages. The sheet anchors every page — a wrong sheet poisons the whole book.
+After generation, the script prints `MEDIA:` lines for every sheet. Show **all** sheets
+to the user and ask them to confirm every character looks right **before** rendering pages.
+Each sheet anchors that character on every page it appears — a wrong sheet poisons those
+pages.
 
-If it is wrong:
-1. Fix the `characters` array in `story.json` (sharpen `appearance`, add/remove a character, set a `ref_image`).
-2. `rm style-sheet.png`
+If a sheet is wrong:
+1. Fix that character's entry in the `characters` array in `story.json` (sharpen
+   `appearance`, set/update `ref_image`).
+2. Delete only that character's sheet file (e.g. `rm style-sheet-pip.png`).
 3. Re-run the command above.
 
-Do not proceed to Stage 3 until the user approves the sheet.
+Do not proceed to Stage 3 until the user approves all sheets.
 
 ---
 
@@ -60,6 +76,7 @@ Do not proceed to Stage 3 until the user approves the sheet.
 Once approved:
 
 ```
-style-sheet.png approved → ready for Stage 3.
-Next: storybook-render generates each page using this sheet as the consistency anchor.
+All character sheets approved → ready for Stage 3.
+Next: storybook-render generates each page, sending only the sheets for the characters
+      listed in that page's 'characters' field.
 ```

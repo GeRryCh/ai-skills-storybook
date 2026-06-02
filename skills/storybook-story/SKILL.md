@@ -20,9 +20,9 @@ metadata:
 
 This is the first of three skills. Together they make a fully illustrated picture book:
 
-1. **storybook-story** (this skill, free) — draft `story.json`: per-page text + image prompts + explicit character cast. User edits and approves the text before any money is spent.
-2. **storybook-stylesheet** (paid) — generate `style-sheet.png`: one reference image of the whole cast, the consistency anchor for every page.
-3. **storybook-render** (paid) — generate each page illustration and overlay the text.
+1. **storybook-story** (this skill, free) — draft `story.json`: per-page text + image prompts + explicit character cast (global + per-page). User edits and approves the text before any money is spent.
+2. **storybook-stylesheet** (paid) — generate `style-sheet-{name}.png`: one reference image per character, the consistency anchors for every page.
+3. **storybook-render** (paid) — generate each page illustration using only the character sheets for the characters listed on that page, then overlay text.
 
 The three skills hand off a single file: `story.json` in the output directory.
 
@@ -72,6 +72,21 @@ Never rely on auto-extraction: the cast is never guessed from prose.
 - **Page 1**: cover. `text` = title only. `image_prompt` = full cover scene.
 - **Pages 2 to N-1**: story body. Spread word counts guided by age (see STYLE_PRIMER).
 - **Page N**: closing spread. One short sentence or just title/end.
+
+### Per-page `characters` field (required)
+
+Every page MUST have a `characters` array listing the names of all characters that appear
+on that page. Names must match `characters[].name` exactly. Use `[]` for wordless or
+character-free pages (title cards, scenery-only spreads).
+
+Example:
+```json
+{ "page_num": 3, "characters": ["Pip", "Mira"], "text": "...", ... }
+```
+
+This drives Stage 3: `render_book.py` sends only those characters' style sheets as
+reference images when generating that page — the model never sees character sheets for
+characters not on the page.
 
 ### image_prompt rules
 

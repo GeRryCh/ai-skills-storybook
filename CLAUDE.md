@@ -15,16 +15,19 @@ Three skills run in order and hand off a **single file, `story.json`**, in an ou
 directory (default: the user's cwd, e.g. this worktree root):
 
 1. **storybook-story** (free, no API) — writes `story.json`: per-page `text`, `image_prompt`,
-   and an explicit `characters` cast. **Has a hard approval gate** — it must stop and wait
-   for the user to edit/approve before any paid stage runs.
-2. **storybook-stylesheet** (paid, 1 image call) — generates `style-sheet.png` from the
-   `characters` array, writes `style_sheet_path` back into `story.json`. **Approval gate**:
-   show the sheet, get confirmation before rendering — a wrong sheet poisons every page.
+   per-page `characters` cast list, and a global `characters` array. **Has a hard approval
+   gate** — it must stop and wait for the user to edit/approve before any paid stage runs.
+2. **storybook-stylesheet** (paid, 1 image call per character) — generates one
+   `style-sheet-{name}.png` per character from the `characters` array, writes each
+   character's `style_sheet` path back into `story.json`. **Approval gate**: show all
+   sheets, get confirmation before rendering — a wrong sheet poisons every page that
+   character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
-   using the style sheet + character refs as the consistency anchor, then overlays text.
-   Output: `pages/page-NN.png` (overlay) or `pages/page-NN-native.png` (native).
-   After a full render, automatically assembles all pages into `{title}.pdf`
-   (or `{title}-native.pdf`) via `merge_pdf.py` at no extra API cost.
+   using only the style sheets for the characters listed in that page's `characters` field
+   (per-page selection, cap 3), then overlays text. Output: `pages/page-NN.png` (overlay)
+   or `pages/page-NN-native.png` (native). After a full render, automatically assembles
+   all pages into `{title}.pdf` (or `{title}-native.pdf`) via `merge_pdf.py` at no extra
+   API cost.
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
@@ -76,19 +79,25 @@ next to `story.json`. Pass `--no-pdf` to suppress (e.g. for `--from` partial run
 
 ## Idempotency / re-run semantics (important when editing scripts)
 
-Both paid scripts **skip work whose output already exists**: `make_style_sheet.py` skips if
-`style-sheet.png` exists; `render_book.py` skips any `page-NN.png` that exists. To force a
+Both paid scripts **skip work whose output already exists**: `make_style_sheet.py` skips any
+`style-sheet-{name}.png` that already exists (per-character, so re-running only generates
+the missing ones); `render_book.py` skips any `page-NN.png` that exists. To force a
 regenerate you must `rm` the target file (and the matching `raw-page-NN.png` for a page)
 first. Preserve this behaviour — it makes partial-failure re-runs cheap.
 
 ## Key design decision: explicit cast, never prose-scraped
 
 The `characters` array in `story.json` is authored explicitly and is the **only** source for
-the style sheet. An earlier regex that scraped characters from prose minted phantom
+the style sheets. An earlier regex that scraped characters from prose minted phantom
 characters (a fish "Deep" from "deep twilight sky", a girl "She" from "She holds a rabbit")
 and poisoned every page. Do not reintroduce auto-extraction. See the docstring on
 `get_characters()` in `make_style_sheet.py`. Reference images are capped at 3 (the image
 API input limit): per-character `ref_image` first, then the global `character_refs` pool.
+
+Each page also carries an explicit `characters` list (`pages[].characters`) naming which
+cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
+this to send only the relevant per-character style sheets — the model never sees sheets
+for characters not on the page. Cap is 3 per page; dropped character names are logged.
 
 ## Text overlay (`overlay_text.py`)
 
@@ -118,5 +127,5 @@ low-detail safe zone for this overlay.
 - This is a **git worktree** (`w1`); siblings `w2`, etc. share one bare repo. Skills live at
   top-level `skills/` and are served to Claude via a `.claude/skills` symlink at the parent
   level (commit `b73df4a`).
-- `.gitignore` excludes generated artifacts: `pages/`, `story.json`, `*.png`. The `*.png` and
-  `eva.png` / `style-sheet.png` in the tree are local sample data, not tracked.
+- `.gitignore` excludes generated artifacts: `pages/`, `story.json`, `*.png`. The `*.png` files
+  in the tree (e.g. `eva.png`, `style-sheet-*.png`) are local sample data, not tracked.

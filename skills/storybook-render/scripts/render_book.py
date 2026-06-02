@@ -73,7 +73,7 @@ TEXT_SAFE_ZONE_DIRECTIVE = (
     "Do not place any narrative text in the image."
 )
 STYLE_ANCHOR = (
-    "Art style must match the provided character reference sheet exactly. "
+    "Art style must match the provided character reference sheet(s) exactly. "
     "Consistent character design, {style}."
 )
 
@@ -154,17 +154,55 @@ def encode_image_to_data_url(path: Path) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
-def collect_input_images(story: dict) -> list[str]:
-    """Style sheet first, then character refs, capped at MAX_INPUT_IMAGES."""
+def collect_input_images(
+    story: dict, page: dict, log: list[str] | None = None
+) -> list[str]:
+    """Per-page character style sheets, capped at MAX_INPUT_IMAGES.
+
+    Selects the style sheet for each character listed in page['characters']
+    (names must match story['characters'][].name exactly). Characters beyond the
+    cap are skipped and named in a log line so nothing is silently dropped.
+    """
+    def warn(msg: str) -> None:
+        if log is not None:
+            log.append(f"  Warning: {msg}")
+        else:
+            print(f"Warning: {msg}", file=sys.stderr)
+
+    char_index: dict[str, dict] = {
+        c.get("name", ""): c for c in story.get("characters", [])
+    }
+    page_cast: list[str] = page.get("characters", [])
     input_images: list[str] = []
-    style_sheet = story.get("style_sheet_path")
-    if style_sheet and Path(style_sheet).exists():
-        input_images.append(style_sheet)
-    for ref in story.get("character_refs", []):
+    dropped: list[str] = []
+
+    for name in page_cast:
+        char = char_index.get(name)
+        if char is None:
+            warn(f"page references unknown character {name!r}; skipping.")
+            continue
+        sheet = char.get("style_sheet", "")
+        if not sheet:
+            warn(
+                f"character {name!r} has no style_sheet; skipping. "
+                "Run make_style_sheet.py first."
+            )
+            continue
+        if not Path(sheet).exists():
+            warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
+            continue
         if len(input_images) >= MAX_INPUT_IMAGES:
-            break
-        if Path(ref).exists():
-            input_images.append(ref)
+            dropped.append(name)
+            continue
+        input_images.append(sheet)
+
+    if dropped:
+        msg = f"cap ({MAX_INPUT_IMAGES}) reached; dropped character sheet(s): {', '.join(dropped)}"
+        if log is not None:
+            log.append(f"  Note: {msg}")
+        else:
+            print(f"Note: {msg}")
+
     return input_images
 
 
@@ -193,6 +231,7 @@ async def run_nano_banana(
     prompt: str,
     raw_path: Path,
     story: dict,
+    page: dict,
     resolution: str,
     log: list[str],
 ) -> bool:
@@ -200,7 +239,7 @@ async def run_nano_banana(
     from openai import APIConnectionError, APIStatusError, RateLimitError
 
     content: list[dict] = [{"type": "text", "text": prompt}]
-    for img in collect_input_images(story):
+    for img in collect_input_images(story, page, log):
         content.append(
             {"type": "image_url", "image_url": {"url": encode_image_to_data_url(Path(img))}}
         )
@@ -311,14 +350,14 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     if text_mode == "native":
         # In native mode the model bakes text into the illustration — write directly
         # to final_path; no separate raw file needed.
-        ok = await run_nano_banana(client, prompt, final_path, story, resolution, log)
+        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log)
         if not ok or not final_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
             return False
     else:
         raw_path = pages_dir / f"raw-page-{nn}.png"
-        ok = await run_nano_banana(client, prompt, raw_path, story, resolution, log)
+        ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log)
         if not ok or not raw_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
@@ -414,9 +453,10 @@ def main() -> None:
         print("ERROR: No pages found in story.json", file=sys.stderr)
         sys.exit(1)
 
-    # Warn if no style sheet
-    if not story.get("style_sheet_path"):
-        print("Warning: style_sheet_path not set in story.json.")
+    # Warn if no per-character style sheets have been generated yet
+    chars = story.get("characters", [])
+    if chars and not any(c.get("style_sheet") for c in chars):
+        print("Warning: no character style_sheet paths found in story.json.")
         print("Run make_style_sheet.py first for better character consistency.")
         print()
 
