@@ -127,4 +127,4 @@ These default sensibly in `render_book.py`; only pass them when overriding for a
 
 **Sizing:** font size auto-fits — it shrinks from 72px toward a 22px floor so the text fills the comfortable ~¼ safe zone. The panel may grow past that zone for long pages but is hard-capped at ⅓ of the page height; if text won't fit ⅓ even at the 22px floor, the font shrinks below the floor (down to a 12px hard minimum) so it still fits rather than clipping.
 
-Per-page `story.json` text fields: `text_placement` (top/bottom), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display).
+Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display).

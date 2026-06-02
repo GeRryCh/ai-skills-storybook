@@ -2,6 +2,7 @@
   "title": "Pip and the Big Storm",
   "age_band": "3-5",
   "style": "soft watercolor, gentle pastel palette, children's picture book illustration",
+  "text_mode": "native",
   "characters": [
     {
       "name": "Pip",
@@ -17,8 +18,8 @@
       "page_num": 1,
       "characters": ["Pip"],
       "text": "Pip and the Big Storm",
-      "image_prompt": "Cover of a children's picture book. A small brave hedgehog named Pip stands at the edge of a meadow looking up at dark storm clouds gathering on the horizon. Soft watercolor, gentle pastel palette. Square composition. Leave the bottom quarter of the image as a soft, low-detail, lightly-toned area suitable for overlaying text.",
-      "text_placement": "bottom",
+      "image_prompt": "Cover of a children's picture book. A small brave hedgehog named Pip stands at the edge of a meadow looking up at dark storm clouds gathering on the horizon. Soft watercolor, gentle pastel palette. Square composition.",
+      "text_placement": "floating",
       "text_color_hint": "dark",
       "text_align": "center",
       "font": "display"
@@ -27,8 +28,8 @@
       "page_num": 2,
       "characters": ["Pip"],
       "text": "Pip loved sunny days in the meadow. But today, the sky turned grey.",
-      "image_prompt": "A small brave hedgehog named Pip playing happily among wildflowers in a meadow. Warm golden light. Children's picture book illustration, soft watercolor, gentle pastel palette. Square composition. Leave the bottom quarter of the image as a soft, low-detail, pale-sky area suitable for overlaying text.",
-      "text_placement": "bottom",
+      "image_prompt": "A small brave hedgehog named Pip playing happily among wildflowers in a meadow. Warm golden light. Children's picture book illustration, soft watercolor, gentle pastel palette. Square composition.",
+      "text_placement": "floating",
       "text_color_hint": "dark",
       "font": "reader"
     },
@@ -36,16 +37,16 @@
       "page_num": 3,
       "characters": ["Pip"],
       "text": "Thunder rumbled. Rain began to fall. Pip had to find shelter—fast!",
-      "image_prompt": "A small brave hedgehog named Pip running through rain, big raindrops falling, dark purple clouds above, the meadow blurred and stormy. Children's picture book illustration, soft watercolor, cool blues and purples. Square composition. Leave the bottom quarter of the image as a soft, muted-tone area suitable for overlaying text.",
-      "text_placement": "bottom",
+      "image_prompt": "A small brave hedgehog named Pip running through rain, big raindrops falling, dark purple clouds above, the meadow blurred and stormy. Children's picture book illustration, soft watercolor, cool blues and purples. Square composition.",
+      "text_placement": "floating",
       "text_color_hint": "dark"
     },
     {
       "page_num": 4,
       "characters": ["Pip"],
       "text": "Under an old oak tree Pip found a cosy spot. Safe and warm, Pip smiled.",
-      "image_prompt": "A small brave hedgehog named Pip curled up snugly under the roots of a large old oak tree, watching rain fall outside, a warm amber glow around Pip. Children's picture book illustration, soft watercolor, warm amber and brown tones. Square composition. Leave the bottom quarter of the image as a soft, warm, low-detail area suitable for overlaying text.",
-      "text_placement": "bottom",
+      "image_prompt": "A small brave hedgehog named Pip curled up snugly under the roots of a large old oak tree, watching rain fall outside, a warm amber glow around Pip. Children's picture book illustration, soft watercolor, warm amber and brown tones. Square composition.",
+      "text_placement": "floating",
       "text_color_hint": "dark"
     }
   ]

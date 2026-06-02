@@ -93,8 +93,8 @@ def merge_pdf(
 
     story = _load_story(story_path)
 
-    # Resolve text_mode: arg > story.json field > "overlay".
-    resolved_mode = text_mode or story.get("text_mode", "overlay")
+    # Resolve text_mode: arg > story.json field > "native".
+    resolved_mode = text_mode or story.get("text_mode", "native")
     suffix = "-native" if resolved_mode == "native" else ""
 
     # Output directory mirrors render_book.py:395 logic.
@@ -163,7 +163,7 @@ def main() -> None:
             "Which rendered files to collect. "
             "overlay: pages/page-NN.png (default). "
             "native: pages/page-NN-native.png. "
-            "If omitted, uses story.json's top-level 'text_mode' (default overlay)."
+            "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )
     parser.add_argument(

@@ -93,9 +93,8 @@ characters not on the page.
 Every `image_prompt` MUST:
 - Name every character that appears on that page (use the exact names from the `characters` array).
 - State the art style.
-- Include the text-safe-zone directive (the render script appends it, but write it anyway for clarity):
-  > "Leave the [top|bottom] quarter of the image as a soft, low-detail, lightly-toned area suitable for overlaying text."
-- NOT contain the actual story text — that is overlaid by Pillow in Stage 3.
+- NOT contain the actual story text — the script renders it (baked into the illustration in native mode, Pillow-overlaid in overlay mode).
+- NOT contain text-position or safe-zone language — the script appends those transparently from `text_placement`.
 
 ---
 
@@ -103,10 +102,13 @@ Every `image_prompt` MUST:
 
 ### Optional top-level config
 
+- **`text_mode`** — `"native"` (default) or `"overlay"`. Native bakes the story text directly into each illustration; overlay Pillow-composites it post-generation. Omit to use the default.
 - **`fonts`** — book-wide role → font-family map (see STYLE_PRIMER typography rules). Omit to use bundled Andika/PatrickHand.
 - **`resolution`** — `"1K"` / `"2K"` / `"4K"` image quality for page rendering. Default `"2K"`. Set this at the approval gate (it is a cost/quality decision for the user, not something to auto-pick). `"1K"` for fast/cheap drafts; `"4K"` for large-format print. The render CLI `--resolution` flag overrides if passed explicitly.
 
 Do **not** auto-set `resolution` — leave it out unless the user asks for a specific quality.
+
+Per-page `text_placement` defaults to `"floating"` (native mode). Override to `"top"` or `"bottom"` to pin text to a fixed band.
 
 ---
 

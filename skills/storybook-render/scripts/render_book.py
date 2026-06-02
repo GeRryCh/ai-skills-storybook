@@ -119,8 +119,8 @@ def load_story(path: Path) -> dict:
         return json.load(f)
 
 
-def build_image_prompt(page: dict, story: dict, text_mode: str = "overlay") -> str:
-    placement = page.get("text_placement", "bottom")
+def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> str:
+    placement = page.get("text_placement", "floating")
     style = story.get("style", "children's picture book illustration")
     anchor = STYLE_ANCHOR.format(style=style)
 
@@ -337,7 +337,7 @@ async def run_overlay(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "overlay") -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native") -> bool:
     """Render one page (nano-banana + optional overlay). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
@@ -364,7 +364,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
             return False
 
         text = page.get("text", "")
-        placement = _overlay_placement(page.get("text_placement", "bottom"))
+        placement = _overlay_placement(page.get("text_placement", "floating"))
         color = page.get("text_color_hint", "dark")
         font = page.get("font", "reader")
         # Book-wide role -> family-name map; the resolved name (if any) overrides the
@@ -384,7 +384,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "overlay") -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native") -> int:
     """Fire every page concurrently. Returns the number of failures."""
     from openai import AsyncOpenAI
 
@@ -424,7 +424,7 @@ def main() -> None:
             "overlay: generate image with text-safe zone, then Pillow-composite text. "
             "native: ask the model to render story text directly into the illustration "
             "(output goes to page-NN-native.png). "
-            "If omitted, uses story.json's top-level 'text_mode' (default overlay)."
+            "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )
     parser.add_argument(
@@ -441,8 +441,8 @@ def main() -> None:
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
-    # text_mode precedence: CLI flag (if given) > story.json top-level > "overlay".
-    text_mode = args.text_mode or story.get("text_mode", "overlay")
+    # text_mode precedence: CLI flag (if given) > story.json top-level > "native".
+    text_mode = args.text_mode or story.get("text_mode", "native")
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     pages_dir = out_dir / "pages"

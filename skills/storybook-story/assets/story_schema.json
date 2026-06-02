@@ -32,8 +32,8 @@
     "text_mode": {
       "type": "string",
       "enum": ["overlay", "native"],
-      "description": "How page text is rendered. 'overlay' (default): generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. 'native': ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). render_book.py's --text-mode flag overrides this per run.",
-      "default": "overlay"
+      "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. render_book.py's --text-mode flag overrides this per run.",
+      "default": "native"
     },
     "fonts": {
       "type": "object",
@@ -69,12 +69,13 @@
           },
           "image_prompt": {
             "type": "string",
-            "description": "Full image generation prompt. Must name characters, mention style, and include text-safe-zone directive."
+            "description": "Full image generation prompt. Must name characters and mention style. Content only — do not include text-position or safe-zone directives; the render script appends those transparently from text_placement."
           },
           "text_placement": {
             "type": "string",
             "enum": ["top", "bottom", "floating"],
-            "description": "Where text lands on the image. 'top'/'bottom' pin it to a band. 'floating' is native mode only — the image model picks the most pleasing placement itself; the overlay (Pillow) path can't float and treats 'floating' as 'bottom'."
+            "description": "Where text lands on the image. 'floating' (default, native mode only): the image model picks the most visually pleasing placement; the overlay path degrades this to 'bottom'. 'top'/'bottom': pin text to a fixed band.",
+            "default": "floating"
           },
           "text_color_hint": {
             "type": "string",

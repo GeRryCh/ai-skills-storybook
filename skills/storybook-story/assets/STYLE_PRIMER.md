@@ -13,17 +13,15 @@ Default 8 spreads. Spread 1 = cover (text: title + author only, image_prompt: fu
 
 Three patterns — pick per spread, stay consistent within the book:
 
-- **bottom** (default): text block occupies the bottom 20–25 % of the image. Illustration fills the rest. Best for landscape/action scenes.
-- **top**: text at top 20–25 %. Use for scenes where the ground line is important (character standing, walking).
-- **facing** (reserved for future layout modes): image left page, text right page. Not currently supported by the scripts.
+- **floating** (default, native mode): the image model places the text wherever it best suits the composition — in open sky, along an edge or corner, away from faces. Most expressive and visually appealing. Native mode only; the overlay path degrades this to `bottom`.
+- **bottom**: text band occupies the bottom 20–25 % of the image. Best for landscape/action scenes.
+- **top**: text band at the top 20–25 %. Use for scenes where the ground line is important (character standing, walking).
 
-## Text-safe zone rule
+## Image prompt: content only
 
-Every `image_prompt` **must** include this directive (scripts append it automatically, but write it in your prompts too):
+Write `image_prompt` for scene content only — characters, setting, mood, art style. **Do not** include text-position or safe-zone language (such as "Leave the … quarter for overlaying text") — the render script appends that transparently from the page's `text_placement` field.
 
-> "Leave the [top|bottom] quarter of the image as a soft, low-detail, lightly-toned area suitable for overlaying text."
-
-Do **not** bake the narrative story text into the illustration. Text is overlaid by Pillow post-generation. Only diegetic text (signs, book titles visible in the scene) may be part of the illustration.
+**Do not** put the narrative story `text` into `image_prompt`. The script handles text rendering — baked into the illustration in native mode, or Pillow-composited post-generation in overlay mode. Only diegetic text (signs, labels, book titles visible in the scene) may be part of the illustration.
 
 ## Typography rules (enforced by overlay_text.py)
 
