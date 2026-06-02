@@ -12,6 +12,7 @@
   "character_refs": ["/path/to/hedgehog-photo.jpg"],
   "style_sheet_path": null,
   "fonts": { "reader": "Andika", "display": "Patrick Hand" },
+  "resolution": "2K",
   "pages": [
     {
       "page_num": 1,

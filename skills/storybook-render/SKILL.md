@@ -33,14 +33,13 @@ If the style sheet is missing, run **storybook-stylesheet** first.
 
 ```bash
 uv run {skillDir}/scripts/render_book.py \
-  --story {out_dir}/story.json \
-  --resolution 1K
+  --story {out_dir}/story.json
 ```
 
 **Useful flags:**
 - `--from N` — resume from page N (skips earlier pages, also skips any already-existing files)
 - `--only N` — render a single page (good for testing one page before a full run, or re-doing one page)
-- `--resolution 1K|2K|4K` — 1K (default) is faster/cheaper and sufficient for screen + small print; bump to 2K/4K for large-format print
+- `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
 
 All pages are fired concurrently via `asyncio` — one async OpenRouter request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
@@ -58,7 +57,7 @@ To re-render a page after editing its `image_prompt`, delete `pages/page-NN.png`
 - **Strongly suggest** a 2-page proof run first: `--only 2` then `--only 3`.
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
 - API errors: check `OPENROUTER_API_KEY` is set, `uv` installed, and OpenRouter account has credits.
-- Each image uses 1K resolution by default (~1024px). Sufficient for any screen and small print; pass `--resolution 2K|4K` for large-format print.
+- Resolution defaults to 2K (from `story.json`'s `resolution` field, or the 2K built-in fallback). Override ad-hoc with `--resolution 1K|2K|4K`.
 
 ---
 

@@ -41,6 +41,11 @@
         "display": { "type": "string", "description": "Title/cover font family. Default: Patrick Hand (bundled)." }
       }
     },
+    "resolution": {
+      "type": "string",
+      "enum": ["1K", "2K", "4K"],
+      "description": "Optional book-wide image resolution for page rendering. 2K (default) is good for screen and print up to ~8×8 in; 1K is faster/cheaper for drafts; 4K for large-format print. The render CLI --resolution flag overrides this value when passed explicitly."
+    },
     "pages": {
       "type": "array",
       "minItems": 1,

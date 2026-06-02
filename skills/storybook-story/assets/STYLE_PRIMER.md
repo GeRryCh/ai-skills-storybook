@@ -40,5 +40,5 @@ Do **not** bake the narrative story text into the illustration. Text is overlaid
 - Name characters consistently in every `image_prompt` (exact same name every page).
 - Mention the style in every prompt: e.g. "soft watercolor, gentle pastel palette, children's picture book".
 - Keep backgrounds simple so text overlay zone has low detail.
-- 2K resolution is the default — good for print at ~8"×8" and screen.
+- Resolution default is 2K — good for print at ~8"×8" and screen. Set the optional top-level `resolution` field in `story.json` (`"1K"`, `"2K"`, or `"4K"`) to lock quality for the book; the render CLI `--resolution` flag overrides it. Use `1K` for fast/cheap drafts, `4K` for large-format print.
 - Aspect ratio: square (1:1) works well for picture books; scripts do not force a ratio, but prompts may suggest "square composition".

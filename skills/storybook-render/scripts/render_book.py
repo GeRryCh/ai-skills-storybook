@@ -294,7 +294,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Render all pages of a storybook.")
     parser.add_argument("--story", required=True, help="Path to story.json")
     parser.add_argument("--out-dir", help="Output directory (default: same dir as story.json)")
-    parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default="1K")
+    parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default=None,
+                        help="Override the resolution from story.json (default: story.json 'resolution' field, or 2K if not set)")
     parser.add_argument("--from", dest="from_page", type=int, default=1,
                         help="Start from this page number (1-indexed)")
     parser.add_argument("--only", dest="only_page", type=int, default=None,
@@ -303,6 +304,9 @@ def main() -> None:
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
+
+    # CLI flag > story.json field > built-in default (2K).
+    resolution = args.resolution or story.get("resolution") or "2K"
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     pages_dir = out_dir / "pages"
@@ -334,7 +338,7 @@ def main() -> None:
             continue
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, args.resolution)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:

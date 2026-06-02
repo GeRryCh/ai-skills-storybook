@@ -86,6 +86,15 @@ Every `image_prompt` MUST:
 
 ## Handoff
 
+### Optional top-level config
+
+- **`fonts`** — book-wide role → font-family map (see STYLE_PRIMER typography rules). Omit to use bundled Andika/PatrickHand.
+- **`resolution`** — `"1K"` / `"2K"` / `"4K"` image quality for page rendering. Default `"2K"`. Set this at the approval gate (it is a cost/quality decision for the user, not something to auto-pick). `"1K"` for fast/cheap drafts; `"4K"` for large-format print. The render CLI `--resolution` flag overrides if passed explicitly.
+
+Do **not** auto-set `resolution` — leave it out unless the user asks for a specific quality.
+
+---
+
 After writing `story.json`, tell the user:
 
 ```
