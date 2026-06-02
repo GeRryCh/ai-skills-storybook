@@ -22,9 +22,13 @@ Skips pages whose final file already exists (safe to re-run after partial failur
 
 Requires OPENROUTER_API_KEY in the environment.
 
+After all pages render successfully a PDF is assembled automatically via
+merge_pdf.py (skipped when --only is used or when --no-pdf is passed).
+
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
                         [--from N] [--only N] [--resolution 1K|2K|4K]
+                        [--text-mode overlay|native] [--no-pdf]
 """
 
 from __future__ import annotations
@@ -36,11 +40,13 @@ import mimetypes
 import os
 import random
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
 OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
+MERGE_SCRIPT = SCRIPTS_DIR / "merge_pdf.py"
 
 # OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -382,6 +388,13 @@ def main() -> None:
             "If omitted, uses story.json's top-level 'text_mode' (default overlay)."
         ),
     )
+    parser.add_argument(
+        "--no-pdf",
+        dest="no_pdf",
+        action="store_true",
+        default=False,
+        help="Skip the automatic PDF merge step after rendering (useful for --from partial runs).",
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -428,6 +441,22 @@ def main() -> None:
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:
         sys.exit(1)
+
+    # Auto-merge rendered pages into a single PDF.
+    # Gate: all pages succeeded (errors == 0), not a single-page proof run (--only),
+    # and the user has not opted out (--no-pdf). The errors==0 gate also covers the
+    # all-skipped case (empty todo → errors=0) so a re-run of a finished book refreshes
+    # the PDF.
+    if not args.no_pdf and args.only_page is None:
+        merge_cmd = [
+            "uv", "run", str(MERGE_SCRIPT),
+            "--story", str(story_path),
+            "--out-dir", str(out_dir),
+            "--text-mode", text_mode,
+        ]
+        result = subprocess.run(merge_cmd, capture_output=False)
+        if result.returncode != 0:
+            print("Warning: PDF merge step failed (pages are still intact).", file=sys.stderr)
 
 
 if __name__ == "__main__":
