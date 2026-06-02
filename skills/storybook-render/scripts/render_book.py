@@ -77,14 +77,35 @@ STYLE_ANCHOR = (
 # with no seed). {font_ref} names a target font family when story.fonts configures one;
 # the descriptor adjectives must stay coherent with that family (rounded sans here).
 NATIVE_TEXT_DIRECTIVE = (
-    "Render this exact story text as part of the illustration, integrated naturally "
-    "into the {placement} of the scene. Letter it in a clean, rounded, child-friendly "
+    "Render this exact story text as part of the illustration, {placement_clause}. "
+    "Letter it in a clean, rounded, child-friendly "
     "style{font_ref}: even weight, steady baseline, generous letter spacing, warm dark ink, "
     "crisp and highly legible against the soft low-detail background — and keep this exact "
     "lettering style identical on every page of the book. Preserve the text's natural "
     "reading direction. Reproduce every word, comma, quotation mark, and dash exactly as "
     'written — no changes, no omissions, no extra text: "{text}"'
 )
+
+
+# Placement clause spliced into NATIVE_TEXT_DIRECTIVE. "floating" hands the model creative
+# control over where the text lands; top/bottom pin it to a band.
+FLOATING_PLACEMENT_CLAUSE = (
+    "integrated naturally into the scene wherever it best suits the composition — you choose "
+    "the most visually pleasing, creative placement for a children's storybook (open sky, a "
+    "calm patch of background, along an edge or corner), kept clear of faces and the main "
+    "subject and fully legible"
+)
+
+
+def _placement_clause(placement: str) -> str:
+    if placement == "floating":
+        return FLOATING_PLACEMENT_CLAUSE
+    return f"integrated naturally into the {placement} of the scene"
+
+
+def _overlay_placement(placement: str) -> str:
+    """Overlay (Pillow) composites at a fixed band; it can't float. Degrade to bottom."""
+    return "bottom" if placement == "floating" else placement
 
 
 def load_story(path: Path) -> dict:
@@ -108,12 +129,14 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "overlay") -> s
         font_role = page.get("font", "reader")
         family = (story.get("fonts") or {}).get(font_role)
         font_ref = f", styled after the {family} typeface" if family else ""
-        native = NATIVE_TEXT_DIRECTIVE.format(placement=placement, text=text, font_ref=font_ref)
+        native = NATIVE_TEXT_DIRECTIVE.format(
+            placement_clause=_placement_clause(placement), text=text, font_ref=font_ref
+        )
         return f"{base}. {anchor}. {native}"
 
-    # overlay (default): unchanged behaviour.
+    # overlay (default): unchanged behaviour. "floating" is native-only -> bottom here.
     base = page["image_prompt"].rstrip(". ")
-    safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(placement=placement)
+    safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(placement=_overlay_placement(placement))
     return f"{base}. {safe_zone}. {anchor}"
 
 
@@ -296,7 +319,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
             return False
 
         text = page.get("text", "")
-        placement = page.get("text_placement", "bottom")
+        placement = _overlay_placement(page.get("text_placement", "bottom"))
         color = page.get("text_color_hint", "dark")
         font = page.get("font", "reader")
         # Book-wide role -> family-name map; the resolved name (if any) overrides the

@@ -71,8 +71,8 @@
           },
           "text_placement": {
             "type": "string",
-            "enum": ["top", "bottom"],
-            "description": "Where text overlay lands on the image"
+            "enum": ["top", "bottom", "floating"],
+            "description": "Where text lands on the image. 'top'/'bottom' pin it to a band. 'floating' is native mode only — the image model picks the most pleasing placement itself; the overlay (Pillow) path can't float and treats 'floating' as 'bottom'."
           },
           "text_color_hint": {
             "type": "string",
