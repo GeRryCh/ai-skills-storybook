@@ -122,6 +122,33 @@ never crash the render. Tunables are module constants near the top (`BOX_ALPHA`,
 script never bakes story text into the generated image — every `image_prompt` reserves a
 low-detail safe zone for this overlay.
 
+## Smoke-testing changes (do this on task completion)
+
+When a task is complete, smoke-test the change against the **pip-storm fixture** in
+`tests/` before declaring done. The fixture ships committed artifacts (a reference image,
+a style sheet, and pre-rendered overlay + native pages under
+`tests/fixtures/pip-storm/`) so the no-API paths can be exercised for free:
+
+```bash
+# No API cost — exercise text overlay against a committed fixture page
+uv run skills/storybook-render/scripts/overlay_text.py \
+  --image tests/fixtures/pip-storm/pages/page-01.png \
+  --text "Once upon a time..." --placement bottom --out /tmp/smoke.png
+
+# No API cost — re-merge the committed fixture pages into a PDF
+uv run skills/storybook-render/scripts/merge_pdf.py \
+  --story tests/fixtures/pip-storm/story.json
+uv run skills/storybook-render/scripts/merge_pdf.py \
+  --story tests/fixtures/pip-storm/story.json --text-mode native
+```
+
+Prefer these zero-cost checks; they cover overlay, PDF merge, font resolution, and
+per-page selection logic without an image API call. Only fall back to the paid
+`tests/regen.sh` (~10 image calls, needs `OPENROUTER_API_KEY`) when a change actually
+touches the OpenRouter call paths and must be verified end-to-end. When editing a paid
+script, re-run a single proof first (`render_book.py --only N` /
+`make_style_sheet.py` on one character) before any full regen.
+
 ## Repo layout notes
 
 - This is a **git worktree** (`w1`); siblings `w2`, etc. share one bare repo. Skills live at
