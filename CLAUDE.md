@@ -22,7 +22,9 @@ directory (default: the user's cwd, e.g. this worktree root):
    show the sheet, get confirmation before rendering — a wrong sheet poisons every page.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using the style sheet + character refs as the consistency anchor, then overlays text.
-   Output: `pages/page-NN.png`.
+   Output: `pages/page-NN.png` (overlay) or `pages/page-NN-native.png` (native).
+   After a full render, automatically assembles all pages into `{title}.pdf`
+   (or `{title}-native.pdf`) via `merge_pdf.py` at no extra API cost.
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
@@ -55,12 +57,22 @@ uv run skills/storybook-render/scripts/render_book.py --story story.json --only 
 # Text overlay only, no image API cost (verify Pillow + fonts)
 uv run skills/storybook-render/scripts/overlay_text.py \
   --image any.png --text "Once upon a time..." --placement bottom --out /tmp/t.png
+
+# Merge already-rendered pages into a PDF (no API cost)
+uv run skills/storybook-render/scripts/merge_pdf.py --story story.json
+# native mode PDF:
+uv run skills/storybook-render/scripts/merge_pdf.py --story story.json --text-mode native
 ```
 
-`render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`.
+`render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
+`--text-mode overlay|native`, `--no-pdf` (skip auto PDF merge).
 Pages are independent and all fired concurrently via `asyncio` (one async OpenRouter
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
+
+After a full render (`--only` not set), `render_book.py` automatically invokes
+`merge_pdf.py` and writes `{title}.pdf` (overlay) or `{title}-native.pdf` (native)
+next to `story.json`. Pass `--no-pdf` to suppress (e.g. for `--from` partial runs).
 
 ## Idempotency / re-run semantics (important when editing scripts)
 
