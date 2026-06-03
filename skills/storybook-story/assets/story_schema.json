@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "StoryManifest",
   "type": "object",
-  "required": ["title", "age_band", "style", "characters", "character_refs", "pages"],
+  "required": ["title", "age_band", "style", "characters", "pages"],
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string", "description": "Book title" },
@@ -19,15 +19,10 @@
         "properties": {
           "name": { "type": "string", "description": "Character name exactly as written in image_prompts" },
           "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, clothing, colours, distinguishing features. More specific = more consistent across pages." },
-          "ref_image": { "type": "string", "description": "Optional absolute path to a reference photo for THIS character (the style sheet should match this face/hair/clothing closely)." },
+          "ref_image": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Optional reference photo(s) for THIS character: a single absolute path, or an array of paths (e.g. multiple angles of the same person). Mapped to this character only — there is no shared global pool. The style sheet should match these face/hair/clothing closely. Capped at 3 (the image API input limit)." },
           "style_sheet": { "type": "string", "description": "Path to this character's generated style sheet PNG (filled in by make_style_sheet.py). Used by render_book.py to select per-page reference images." }
         }
       }
-    },
-    "character_refs": {
-      "type": "array",
-      "description": "Absolute paths to user-supplied character reference images (global pool; per-character refs go in characters[].ref_image). Used by make_style_sheet.py when generating each character's style sheet.",
-      "items": { "type": "string" }
     },
     "text_mode": {
       "type": "string",

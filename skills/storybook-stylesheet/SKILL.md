@@ -36,8 +36,10 @@ uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 
 This makes **one OpenRouter image call per character** to produce individual PNGs
 (`style-sheet-{name}.png`) — one sheet per character, no combined cast sheet. Each sheet
-shows that character alone at multiple angles. Reference images are used as input: that
-character's `ref_image` first, then the global `character_refs` pool, capped at 3. The
+shows that character alone at multiple angles. Reference images are used as input: only
+that character's own `ref_image` (a single path or an array of paths), capped at 3 (the
+image API input limit). There is no shared global pool — refs are mapped per character in
+Stage 1, so one character's photo never bleeds into another's sheet. The
 script writes each character's `style_sheet` path back into the `characters` array in
 `story.json`.
 

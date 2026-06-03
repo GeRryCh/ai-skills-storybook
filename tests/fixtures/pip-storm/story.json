@@ -6,12 +6,9 @@
     {
       "name": "Pip",
       "appearance": "small brave hedgehog, round body, soft brown spines, big curious dark eyes, tiny pink nose, wears a tiny red scarf",
-      "ref_image": "refs/pip-ref.png",
+      "ref_image": ["refs/pip-ref.png"],
       "style_sheet": "style-sheet-pip.png"
     }
-  ],
-  "character_refs": [
-    "refs/pip-ref.png"
   ],
   "fonts": {
     "reader": "Andika",

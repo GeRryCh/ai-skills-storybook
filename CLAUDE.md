@@ -91,8 +91,10 @@ The `characters` array in `story.json` is authored explicitly and is the **only*
 the style sheets. An earlier regex that scraped characters from prose minted phantom
 characters (a fish "Deep" from "deep twilight sky", a girl "She" from "She holds a rabbit")
 and poisoned every page. Do not reintroduce auto-extraction. See the docstring on
-`get_characters()` in `make_style_sheet.py`. Reference images are capped at 3 (the image
-API input limit): per-character `ref_image` first, then the global `character_refs` pool.
+`get_characters()` in `make_style_sheet.py`. Reference images come only from that
+character's own `ref_image` (a single path or an array of paths), capped at 3 (the image
+API input limit). There is no shared global pool — the cast-to-photo mapping is fixed in
+Stage 1, so one character's photo never bleeds into another's sheet.
 
 Each page also carries an explicit `characters` list (`pages[].characters`) naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses

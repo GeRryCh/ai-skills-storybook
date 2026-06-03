@@ -60,10 +60,15 @@ this list and nothing else — it shows exactly these characters and no others.
 - ONE entry per **real** character. Do not add scene words, places, or pronouns.
 - Each entry: `name` (exactly as written in `image_prompt`s), `appearance`
   (concrete: species, age, hair, clothing, colours, distinguishing features —
-  more specific = more consistent), and optional `ref_image` (absolute path to
-  a photo for that one character).
-- If the user supplied a character photo, set it as that character's `ref_image`
-  AND keep it in `character_refs`.
+  more specific = more consistent), and optional `ref_image` (photo path(s) for
+  that one character).
+- If the user supplied character photos, map each photo to its character here by
+  setting that character's `ref_image`. Use a single path for one photo, or an
+  array of paths for several (e.g. multiple angles of the same person). This
+  Stage-1 mapping is the ONLY source of reference photos — Stage 2 builds each
+  style sheet from that character's `ref_image` and nothing else. There is no
+  shared global pool, so one character's photo never bleeds into another's sheet.
+  Capped at 3 photos per character (the image API input limit).
 
 Never rely on auto-extraction: the cast is never guessed from prose.
 

@@ -60,7 +60,8 @@ def get_characters(story: dict) -> list[dict]:
     No prose scraping: an earlier regex heuristic minted phantom characters
     (e.g. a fish 'Deep' from 'deep twilight sky', a second girl 'She' from
     'She holds a rabbit') and poisoned every page. The cast must be authored
-    explicitly in story.json as [{name, appearance, ref_image?}].
+    explicitly in story.json as [{name, appearance, ref_image?}], where
+    ref_image is one path or a list of paths mapped to that character.
     """
     chars = story.get("characters")
     if isinstance(chars, list) and chars:
@@ -108,31 +109,47 @@ def build_char_prompt(story: dict, character: dict) -> str:
     )
 
 
-def collect_ref_images_for_char(story: dict, character: dict) -> list[str]:
-    """This character's ref_image first, then global character_refs pool.
+def collect_ref_images_for_char(character: dict) -> list[str]:
+    """This character's own reference photos, in order, capped at MAX_INPUT_IMAGES.
 
-    Dedup, keep order, cap at MAX_INPUT_IMAGES.
+    `ref_image` accepts a single path (string) or a list of paths. Only photos
+    mapped to THIS character are used — there is no shared global pool, so one
+    character's reference photo never bleeds into another character's sheet.
+    The cast-to-photo mapping is fixed in Stage 1 (storybook-story).
+
+    Normalize -> dedup (keep order) -> drop missing files -> cap, logging any
+    refs dropped to the cap (mirrors render_book.py's per-page selection log).
     """
+    raw = character.get("ref_image")
+    if isinstance(raw, str):
+        refs = [raw]
+    elif isinstance(raw, list):
+        refs = raw
+    else:
+        refs = []
+
     ordered: list[str] = []
     seen: set[str] = set()
-    ref = (character.get("ref_image") or "").strip()
-    if ref and ref not in seen:
-        seen.add(ref)
-        ordered.append(ref)
-    for r in story.get("character_refs", []):
+    for r in refs:
+        r = (r or "").strip() if isinstance(r, str) else ""
         if r and r not in seen:
             seen.add(r)
             ordered.append(r)
 
-    valid: list[str] = []
+    existing = [r for r in ordered if Path(r).exists()]
     for r in ordered:
-        if Path(r).exists():
-            valid.append(r)
-            if len(valid) >= MAX_INPUT_IMAGES:
-                break
-        else:
+        if not Path(r).exists():
             print(f"Warning: character ref not found, skipping: {r}", file=sys.stderr)
-    return valid
+
+    if len(existing) > MAX_INPUT_IMAGES:
+        dropped = existing[MAX_INPUT_IMAGES:]
+        name = (character.get("name") or "character").strip()
+        print(
+            f"Warning: {name!r} has {len(existing)} refs; capping at "
+            f"{MAX_INPUT_IMAGES} (API limit). Dropping: {', '.join(dropped)}",
+            file=sys.stderr,
+        )
+    return existing[:MAX_INPUT_IMAGES]
 
 
 def encode_image_to_data_url(path: Path) -> str:
@@ -235,7 +252,7 @@ def main() -> None:
             continue
 
         prompt = build_char_prompt(story, char)
-        input_images = collect_ref_images_for_char(story, char)
+        input_images = collect_ref_images_for_char(char)
         print(f"\nGenerating sheet for {name!r} -> {target}")
         print(f"Prompt: {prompt}")
 
