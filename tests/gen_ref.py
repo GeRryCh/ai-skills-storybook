@@ -2,20 +2,20 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "openai",
+#     "google-genai",
 # ]
 # ///
 """
 Generate the Pip reference character image for the pip-storm fixture.
 
-Reuses generate_image() from make_style_sheet.py to keep the OpenRouter call
+Reuses generate_image() from make_style_sheet.py to keep the Gemini API call
 in one place. Run from the repo root or any directory.
 
 Usage:
   uv run tests/gen_ref.py
 
 Writes: tests/fixtures/pip-storm/refs/pip-ref.png
-Requires: OPENROUTER_API_KEY in the environment.
+Requires: GEMINI_API_KEY in the environment.
 """
 
 from __future__ import annotations

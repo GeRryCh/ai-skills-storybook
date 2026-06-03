@@ -14,7 +14,7 @@ metadata:
     bins:
       - uv
     env:
-      - OPENROUTER_API_KEY
+      - GEMINI_API_KEY
 ---
 
 # Storybook — Stage 3: Render Pages
@@ -23,7 +23,7 @@ metadata:
 
 - `{out_dir}/story.json` exists (from **storybook-story**).
 - `{out_dir}/style-sheet.png` exists and `story.json` has `style_sheet_path` set (from **storybook-stylesheet**). The script warns and produces weaker consistency if it is missing.
-- `OPENROUTER_API_KEY` is set; `uv` is installed. The script calls the OpenRouter image API directly (no sibling skill needed).
+- `GEMINI_API_KEY` is set; `uv` is installed. The script calls the Gemini image API directly (no sibling skill needed).
 
 If the style sheet is missing, run **storybook-stylesheet** first.
 
@@ -42,7 +42,7 @@ uv run {skillDir}/scripts/render_book.py \
 - `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
 - `--no-pdf` — skip the automatic PDF merge after a full render (useful for partial `--from` runs where more pages are coming).
 
-All pages are fired concurrently via `asyncio` — one async OpenRouter request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
+All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
 Output:
 - `{out_dir}/pages/page-01.png` … `page-NN.png` (overlay mode)
@@ -79,10 +79,10 @@ Missing pages emit a warning and are skipped; the PDF is still built from the re
 
 ## Cost & failure notes
 
-- Each page = one OpenRouter image call. 8 pages = 8 calls.
+- Each page = one Gemini image call. 8 pages = 8 calls.
 - **Strongly suggest** a 2-page proof run first: `--only 2` then `--only 3`.
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
-- API errors: check `OPENROUTER_API_KEY` is set, `uv` installed, and OpenRouter account has credits.
+- API errors: check `GEMINI_API_KEY` is set, `uv` installed, and Gemini account has credits.
 - Resolution defaults to 2K (from `story.json`'s `resolution` field, or the 2K built-in fallback). Override ad-hoc with `--resolution 1K|2K|4K`.
 
 ---

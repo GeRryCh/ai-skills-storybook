@@ -14,7 +14,7 @@ metadata:
     bins:
       - uv
     env:
-      - OPENROUTER_API_KEY
+      - GEMINI_API_KEY
 ---
 
 # Storybook — Stage 2: Character Style Sheets
@@ -22,7 +22,7 @@ metadata:
 ## Preconditions
 
 - `{out_dir}/story.json` exists and contains a non-empty `characters` array (authored in Stage 1 by **storybook-story**).
-- `OPENROUTER_API_KEY` is set; `uv` is installed. The script calls the OpenRouter image API directly (no sibling skill needed).
+- `GEMINI_API_KEY` is set; `uv` is installed. The script calls the Gemini image API directly (no sibling skill needed).
 
 If `story.json` is missing, run **storybook-story** first. If the `characters` array is missing, add it to `story.json` before running (sheets are built from that list, never guessed from prose).
 
@@ -34,7 +34,7 @@ If `story.json` is missing, run **storybook-story** first. If the `characters` a
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-This makes **one OpenRouter image call per character** to produce individual PNGs
+This makes **one Gemini image call per character** to produce individual PNGs
 (`style-sheet-{name}.png`) — one sheet per character, no combined cast sheet. Each sheet
 shows that character alone at multiple angles. Reference images are used as input: only
 that character's own `ref_image` (a single path or an array of paths), capped at 3 (the

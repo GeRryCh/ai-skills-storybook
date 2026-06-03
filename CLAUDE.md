@@ -33,11 +33,12 @@ directory (default: the user's cwd, e.g. this worktree root):
 
 ## Critical external dependency
 
-The two paid scripts call the **OpenRouter image API directly** (via the `openai`
-Python SDK, declared as a PEP-723 inline dependency). They build an OpenAI client with
-`base_url=https://openrouter.ai/api/v1`, model `google/gemini-3.1-flash-image-preview`, send
-the prompt plus up to 3 base64 data-URL input images, and decode the returned image.
-Requires `uv` on PATH and `OPENROUTER_API_KEY` in the environment. No sibling skill is
+The two paid scripts call the **Gemini image API directly** (via the `google-genai`
+Python SDK, declared as a PEP-723 inline dependency). They build a `genai.Client` with
+`api_key` from the environment, model `gemini-3.1-flash-image`, send the prompt plus up to 3
+input images as `types.Part.from_bytes`, and extract the returned image from
+`part.inline_data.data`.
+Requires `uv` on PATH and `GEMINI_API_KEY` in the environment. No sibling skill is
 needed (an earlier version shelled out to `nano-banana-pro-openrouter`; that logic is now
 inlined in each script — `run_nano_banana()` in `render_book.py` and `generate_image()` in
 `make_style_sheet.py`).
@@ -69,7 +70,7 @@ uv run skills/storybook-render/scripts/merge_pdf.py --story story.json --text-mo
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
 `--text-mode overlay|native`, `--no-pdf` (skip auto PDF merge).
-Pages are independent and all fired concurrently via `asyncio` (one async OpenRouter
+Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
 
@@ -151,8 +152,8 @@ uv run skills/storybook-render/scripts/merge_pdf.py \
 
 Prefer these zero-cost checks; they cover overlay, PDF merge, font resolution, and
 per-page selection logic without an image API call. Only fall back to the paid
-`tests/regen.sh` (~10 image calls, needs `OPENROUTER_API_KEY`) when a change actually
-touches the OpenRouter call paths and must be verified end-to-end. When editing a paid
+`tests/regen.sh` (~10 image calls, needs `GEMINI_API_KEY`) when a change actually
+touches the Gemini API call paths and must be verified end-to-end. When editing a paid
 script, re-run a single proof first (`render_book.py --only N` /
 `make_style_sheet.py` on one character) before any full regen.
 

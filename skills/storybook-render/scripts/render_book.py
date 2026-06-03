@@ -2,25 +2,25 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "openai",
+#     "google-genai",
 # ]
 # ///
 """
 Render all pages of a children's storybook.
 
 For each page in story.json:
-  1. Generates the illustration via OpenRouter (Gemini image model), passing the
-     style sheet + character refs as input images for consistency.
+  1. Generates the illustration via the Gemini API (gemini-3.1-flash-image), passing
+     the style sheet + character refs as input images for consistency.
   2. Runs overlay_text.py to composite the story text.
   3. Prints MEDIA: <path> for each final page.
 
 Pages are fully independent, so they are all fired concurrently via asyncio
-(one async OpenRouter request per page, no thread pool, no local concurrency cap).
+(one async Gemini request per page, no thread pool, no local concurrency cap).
 Transient 429/5xx responses are retried with exponential backoff + jitter.
 
 Skips pages whose final file already exists (safe to re-run after partial failure).
 
-Requires OPENROUTER_API_KEY in the environment.
+Requires GEMINI_API_KEY in the environment.
 
 After all pages render successfully a PDF is assembled automatically via
 merge_pdf.py (skipped when --only is used or when --no-pdf is passed).
@@ -34,7 +34,6 @@ Usage:
 from __future__ import annotations
 import argparse
 import asyncio
-import base64
 import json
 import mimetypes
 import os
@@ -48,9 +47,8 @@ SCRIPTS_DIR = Path(__file__).parent
 OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
 MERGE_SCRIPT = SCRIPTS_DIR / "merge_pdf.py"
 
-# OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
+# Gemini image-generation config.
+IMAGE_MODEL = "gemini-3.1-flash-image"
 MAX_INPUT_IMAGES = 3
 
 # Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all
@@ -149,14 +147,6 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
     base = page["image_prompt"].rstrip(". ")
     safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(placement=_overlay_placement(placement))
     return f"{base}. {safe_zone}. {anchor}"
-
-
-def encode_image_to_data_url(path: Path) -> str:
-    mime, _ = mimetypes.guess_type(str(path))
-    if not mime:
-        mime = "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
-    return f"data:{mime};base64,{encoded}"
 
 
 def _ref_photos(char: dict) -> list[str]:
@@ -275,44 +265,39 @@ async def run_nano_banana(
     resolution: str,
     log: list[str],
 ) -> bool:
-    """Generate one illustration via OpenRouter and write it to raw_path."""
-    from openai import APIConnectionError, APIStatusError, RateLimitError
+    """Generate one illustration via the Gemini API and write it to raw_path."""
+    from google.genai import errors, types
 
-    content: list[dict] = [{"type": "text", "text": prompt}]
-    for img in collect_input_images(story, page, log):
-        content.append(
-            {"type": "image_url", "image_url": {"url": encode_image_to_data_url(Path(img))}}
-        )
+    # Build contents: text prompt + one Part.from_bytes per input image.
+    contents: list = [prompt]
+    for img_path in collect_input_images(story, page, log):
+        p = Path(img_path)
+        mime, _ = mimetypes.guess_type(str(p))
+        if not mime:
+            mime = "image/png"
+        contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
 
-    messages = [
-        {"role": "system", "content": IMAGE_SYSTEM_PROMPT},
-        {"role": "user", "content": content},
-    ]
+    config = types.GenerateContentConfig(
+        system_instruction=IMAGE_SYSTEM_PROMPT,
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=types.ImageConfig(image_size=resolution),
+    )
 
     log.append(f"  Generating: {raw_path.name}")
     response = None
     for attempt in range(MAX_RETRIES):
         last_exc: Exception
         try:
-            response = await client.chat.completions.create(
+            response = await client.aio.models.generate_content(
                 model=IMAGE_MODEL,
-                messages=messages,
-                extra_body={
-                    "modalities": ["image", "text"],
-                    "image_config": {"image_size": resolution},
-                },
+                contents=contents,
+                config=config,
             )
             break
-        except (RateLimitError, APIConnectionError) as e:
-            last_exc = e
-        except APIStatusError as e:
-            if e.status_code < 500:
-                log.append(f"  ERROR: image API request failed ({e.status_code}): {e}")
+        except errors.APIError as e:
+            if e.code != 429 and e.code < 500:
+                log.append(f"  ERROR: image API request failed ({e.code}): {e}")
                 return False
-            last_exc = e
-        except json.JSONDecodeError as e:
-            # OpenRouter returned a non-JSON body (e.g. rate-limit HTML) despite a
-            # application/json Content-Type header. Treat as transient and retry.
             last_exc = e
         except Exception as e:
             log.append(f"  ERROR: image API request failed: {e}")
@@ -325,24 +310,20 @@ async def run_nano_banana(
         log.append(f"  Retry {attempt + 1}/{MAX_RETRIES - 1} after transient error; waiting {delay:.1f}s...")
         await asyncio.sleep(delay)
 
-    images = getattr(response.choices[0].message, "images", None)
-    if not images:
+    # Extract image bytes from the response parts.
+    image_data: bytes | None = None
+    for part in response.candidates[0].content.parts:
+        if part.inline_data is not None:
+            image_data = part.inline_data.data
+            break
+    if not image_data:
         log.append("  ERROR: no images returned by the API.")
         return False
 
-    image_url = None
-    first = images[0]
-    if isinstance(first, dict):
-        image_url = first.get("image_url", {}).get("url") or first.get("url")
-    if not image_url or not image_url.startswith("data:") or ";base64," not in image_url:
-        log.append("  ERROR: image payload missing base64 data URL.")
-        return False
-
-    _, encoded = image_url.split(",", 1)
     try:
-        raw_path.write_bytes(base64.b64decode(encoded))
+        raw_path.write_bytes(image_data)
     except Exception as e:
-        log.append(f"  ERROR: failed to decode/write image: {e}")
+        log.append(f"  ERROR: failed to write image: {e}")
         return False
     return True
 
@@ -426,21 +407,18 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
 
 async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native") -> int:
     """Fire every page concurrently. Returns the number of failures."""
-    from openai import AsyncOpenAI
+    from google import genai
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("ERROR: OPENROUTER_API_KEY is not set in the environment.", file=sys.stderr)
+        print("ERROR: GEMINI_API_KEY is not set in the environment.", file=sys.stderr)
         return len(todo)
 
-    client = AsyncOpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
-    try:
-        print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
-        results = await asyncio.gather(
-            *(render_page(client, page, story, pages_dir, resolution, text_mode) for page in todo)
-        )
-    finally:
-        await client.close()
+    client = genai.Client(api_key=api_key)
+    print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
+    results = await asyncio.gather(
+        *(render_page(client, page, story, pages_dir, resolution, text_mode) for page in todo)
+    )
     return sum(1 for ok in results if not ok)
 
 

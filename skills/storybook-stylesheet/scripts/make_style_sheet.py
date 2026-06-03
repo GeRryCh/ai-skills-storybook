@@ -2,20 +2,20 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "openai",
+#     "google-genai",
 # ]
 # ///
 """
 Generate per-character style sheets for a storybook.
 
-Reads story.json, calls the OpenRouter image API once per character to produce
+Reads story.json, calls the Gemini image API once per character to produce
 individual PNGs (style-sheet-{slug}.png), then writes each character's style_sheet
 path back into story.json.
 
 Idempotent: skips characters whose style-sheet-{slug}.png already exists. To force
 a regenerate for one character, delete that character's file and re-run.
 
-Requires OPENROUTER_API_KEY in the environment.
+Requires GEMINI_API_KEY in the environment.
 
 Usage:
   uv run make_style_sheet.py --story /path/to/story.json [--out-dir /path/to/outdir]
@@ -23,7 +23,6 @@ Usage:
 
 from __future__ import annotations
 import argparse
-import base64
 import json
 import mimetypes
 import os
@@ -31,9 +30,8 @@ import re
 import sys
 from pathlib import Path
 
-# OpenRouter image-generation config (mirrors the nano-banana-pro-openrouter skill).
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
+# Gemini image-generation config.
+IMAGE_MODEL = "gemini-3.1-flash-image"
 MAX_INPUT_IMAGES = 3
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
@@ -153,66 +151,56 @@ def collect_ref_images_for_char(character: dict) -> list[str]:
     return existing[:MAX_INPUT_IMAGES]
 
 
-def encode_image_to_data_url(path: Path) -> str:
-    mime, _ = mimetypes.guess_type(str(path))
-    if not mime:
-        mime = "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
-    return f"data:{mime};base64,{encoded}"
-
-
 def generate_image(prompt: str, input_images: list[str], out_path: Path, resolution: str) -> bool:
-    """Generate a single image via OpenRouter and write it to out_path."""
-    from openai import OpenAI
+    """Generate a single image via the Gemini API and write it to out_path."""
+    from google import genai
+    from google.genai import types
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("ERROR: OPENROUTER_API_KEY is not set in the environment.", file=sys.stderr)
+        print("ERROR: GEMINI_API_KEY is not set in the environment.", file=sys.stderr)
         return False
 
-    content: list[dict] = [{"type": "text", "text": prompt}]
+    # Build contents: text prompt + one Part.from_bytes per input image.
+    contents: list = [prompt]
     for img in input_images:
-        content.append(
-            {"type": "image_url", "image_url": {"url": encode_image_to_data_url(Path(img))}}
-        )
+        p = Path(img)
+        mime, _ = mimetypes.guess_type(str(p))
+        if not mime:
+            mime = "image/png"
+        contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
 
-    messages = [
-        {"role": "system", "content": IMAGE_SYSTEM_PROMPT},
-        {"role": "user", "content": content},
-    ]
+    config = types.GenerateContentConfig(
+        system_instruction=IMAGE_SYSTEM_PROMPT,
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=types.ImageConfig(image_size=resolution),
+    )
 
     try:
-        client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
-        response = client.chat.completions.create(
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
             model=IMAGE_MODEL,
-            messages=messages,
-            extra_body={
-                "modalities": ["image", "text"],
-                "image_config": {"image_size": resolution},
-            },
+            contents=contents,
+            config=config,
         )
     except Exception as e:
         print(f"ERROR: image API request failed: {e}", file=sys.stderr)
         return False
 
-    images = getattr(response.choices[0].message, "images", None)
-    if not images:
+    # Extract image bytes from the response parts.
+    image_data: bytes | None = None
+    for part in response.candidates[0].content.parts:
+        if part.inline_data is not None:
+            image_data = part.inline_data.data
+            break
+    if not image_data:
         print("ERROR: no images returned by the API.", file=sys.stderr)
         return False
 
-    image_url = None
-    first = images[0]
-    if isinstance(first, dict):
-        image_url = first.get("image_url", {}).get("url") or first.get("url")
-    if not image_url or not image_url.startswith("data:") or ";base64," not in image_url:
-        print("ERROR: image payload missing base64 data URL.", file=sys.stderr)
-        return False
-
-    _, encoded = image_url.split(",", 1)
     try:
-        out_path.write_bytes(base64.b64decode(encoded))
+        out_path.write_bytes(image_data)
     except Exception as e:
-        print(f"ERROR: failed to decode/write image: {e}", file=sys.stderr)
+        print(f"ERROR: failed to write image: {e}", file=sys.stderr)
         return False
     return True
 
