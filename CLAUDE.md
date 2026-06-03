@@ -99,7 +99,12 @@ Stage 1, so one character's photo never bleeds into another's sheet.
 Each page also carries an explicit `characters` list (`pages[].characters`) naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
 this to send only the relevant per-character style sheets — the model never sees sheets
-for characters not on the page. Cap is 3 per page; dropped character names are logged.
+for characters not on the page. The **first** name in `pages[].characters` is the page
+**hero**: it additionally contributes its first original `ref_image` photo, so the render
+anchors the hero's facial likeness on the real photo, not only on the (lossy) style sheet.
+**Convention: author the hero/child first in each page's cast list.** Priority into the
+3-image cap is hero sheet → hero photo → remaining characters' sheets in order; anything
+past the cap (e.g. a third character's sheet) is logged, never silently dropped.
 
 ## Text overlay (`overlay_text.py`)
 

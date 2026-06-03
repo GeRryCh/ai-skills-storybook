@@ -84,6 +84,12 @@ Every page MUST have a `characters` array listing the names of all characters th
 on that page. Names must match `characters[].name` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
+**Order matters: put the page hero first.** The first name is treated as the hero, and Stage
+3 additionally feeds that character's original reference photo into the render to lock its
+facial likeness. List the protagonist (e.g. the child the book is about) first on every page
+they appear; with a 3-image cap, a fourth reference (a third character's sheet) may be dropped
+to make room for the hero's photo.
+
 Example:
 ```json
 { "page_num": 3, "characters": ["Pip", "Mira"], "text": "...", ... }

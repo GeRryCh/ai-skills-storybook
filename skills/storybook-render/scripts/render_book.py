@@ -63,7 +63,9 @@ IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
     "vivid, concrete, model-ready illustration. Pay attention to composition, "
     "lighting, color, and visual balance. Preserve the provided reference images' "
-    "character design and art style. Output only the generated image without "
+    "character design and art style. When a reference photograph is provided "
+    "alongside a style sheet, draw the character's facial likeness from the photo "
+    "and the art style from the sheet. Output only the generated image without "
     "additional commentary."
 )
 
@@ -73,7 +75,10 @@ TEXT_SAFE_ZONE_DIRECTIVE = (
     "Do not place any narrative text in the image."
 )
 STYLE_ANCHOR = (
-    "Art style must match the provided character reference sheet(s) exactly. "
+    "Art style and character design must match the provided character reference "
+    "sheet(s) exactly. If a reference photograph is also provided, match that "
+    "character's facial likeness and identity to the photo, but render fully in the "
+    "illustration style of the sheet(s) — never reproduce photographic detail. "
     "Consistent character design, {style}."
 )
 
@@ -154,14 +159,46 @@ def encode_image_to_data_url(path: Path) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
+def _ref_photos(char: dict) -> list[str]:
+    """This character's own original reference photo paths, in order, existing only.
+
+    Mirrors collect_ref_images_for_char() in make_style_sheet.py (the two skills share
+    no module): normalize a string-or-list `ref_image` -> dedup keeping order -> drop
+    missing files. No cap here; the caller's MAX_INPUT_IMAGES budget governs.
+    """
+    raw = char.get("ref_image")
+    if isinstance(raw, str):
+        refs = [raw]
+    elif isinstance(raw, list):
+        refs = raw
+    else:
+        refs = []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for r in refs:
+        r = r.strip() if isinstance(r, str) else ""
+        if r and r not in seen:
+            seen.add(r)
+            ordered.append(r)
+    return [r for r in ordered if Path(r).exists()]
+
+
 def collect_input_images(
     story: dict, page: dict, log: list[str] | None = None
 ) -> list[str]:
-    """Per-page character style sheets, capped at MAX_INPUT_IMAGES.
+    """Per-page reference images for the render, capped at MAX_INPUT_IMAGES.
 
-    Selects the style sheet for each character listed in page['characters']
-    (names must match story['characters'][].name exactly). Characters beyond the
-    cap are skipped and named in a log line so nothing is silently dropped.
+    Each character listed in page['characters'] contributes its style sheet (names must
+    match story['characters'][].name exactly). The HERO — the first name in
+    page['characters'] — additionally contributes its first original reference photo, so
+    the render anchors the hero's facial likeness on the real photo rather than only the
+    derived (lossy) style sheet. CONVENTION: author the hero/child first in each page's
+    cast list; the cap of 3 means a third character's sheet may be dropped to make room
+    for the hero's photo.
+
+    Priority order into the budget: hero sheet, hero photo, then the remaining characters'
+    sheets in cast order. Anything beyond the cap is named in a log line so nothing is
+    silently dropped.
     """
     def warn(msg: str) -> None:
         if log is not None:
@@ -173,10 +210,10 @@ def collect_input_images(
         c.get("name", ""): c for c in story.get("characters", [])
     }
     page_cast: list[str] = page.get("characters", [])
-    input_images: list[str] = []
-    dropped: list[str] = []
 
-    for name in page_cast:
+    # Prioritized (label, path) candidates; trimmed to the cap below.
+    candidates: list[tuple[str, str]] = []
+    for i, name in enumerate(page_cast):
         char = char_index.get(name)
         if char is None:
             warn(f"page references unknown character {name!r}; skipping.")
@@ -187,17 +224,20 @@ def collect_input_images(
                 f"character {name!r} has no style_sheet; skipping. "
                 "Run make_style_sheet.py first."
             )
-            continue
-        if not Path(sheet).exists():
+        elif not Path(sheet).exists():
             warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
-            continue
-        if len(input_images) >= MAX_INPUT_IMAGES:
-            dropped.append(name)
-            continue
-        input_images.append(sheet)
+        else:
+            candidates.append((f"{name} sheet", sheet))
+        # Hero (first cast member) also contributes its real photo for face fidelity.
+        if i == 0:
+            photos = _ref_photos(char)
+            if photos:
+                candidates.append((f"{name} photo", photos[0]))
 
+    input_images = [path for _, path in candidates[:MAX_INPUT_IMAGES]]
+    dropped = [label for label, _ in candidates[MAX_INPUT_IMAGES:]]
     if dropped:
-        msg = f"cap ({MAX_INPUT_IMAGES}) reached; dropped character sheet(s): {', '.join(dropped)}"
+        msg = f"cap ({MAX_INPUT_IMAGES}) reached; dropped: {', '.join(dropped)}"
         if log is not None:
             log.append(f"  Note: {msg}")
         else:
