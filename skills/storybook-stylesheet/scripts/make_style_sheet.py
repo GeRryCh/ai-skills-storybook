@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 # Gemini image-generation config.
-IMAGE_MODEL = "gemini-3.1-flash-image"
+IMAGE_MODEL = "gemini-3-pro-image"
 MAX_INPUT_IMAGES = 3
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "

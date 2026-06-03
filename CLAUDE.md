@@ -35,7 +35,8 @@ directory (default: the user's cwd, e.g. this worktree root):
 
 The two paid scripts call the **Gemini image API directly** (via the `google-genai`
 Python SDK, declared as a PEP-723 inline dependency). They build a `genai.Client` with
-`api_key` from the environment, model `gemini-3.1-flash-image`, send the prompt plus up to 3
+`api_key` from the environment, model `gemini-3-pro-image` (style sheets) or `gemini-3.1-flash-image`
+(page renders), send the prompt plus up to 3
 input images as `types.Part.from_bytes`, and extract the returned image from
 `part.inline_data.data`.
 Requires `uv` on PATH and `GEMINI_API_KEY` in the environment. No sibling skill is
