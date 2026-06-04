@@ -209,10 +209,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate per-character style sheets.")
     parser.add_argument("--story", required=True, help="Path to story.json")
     parser.add_argument("--out-dir", help="Output directory (default: same dir as story.json)")
+    parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default=None,
+                        help="Override the resolution from story.json (default: story.json 'resolution' field, or 2K if not set)")
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
+
+    # CLI flag > story.json field > built-in default (2K).
+    resolution = args.resolution or story.get("resolution") or "2K"
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -245,7 +250,7 @@ def main() -> None:
         print(f"\nGenerating sheet for {name!r} -> {target}")
         print(f"Prompt: {prompt}")
 
-        ok = generate_image(prompt, input_images, target, "2K")
+        ok = generate_image(prompt, input_images, target, resolution)
         if not ok or not target.exists():
             print(f"ERROR: style sheet PNG not produced for {name!r}.", file=sys.stderr)
             any_failed = True
