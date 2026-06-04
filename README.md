@@ -1,5 +1,9 @@
 # AI Storybook
 
+> **Gemini Storybook, with the controls.** Approve the script before each step,
+> lock each character's look, anchor faces to real photos, and tune text and
+> layout per page.
+
 Three Claude Code skills that turn a story idea (optionally with character photos) into a fully illustrated children's picture book.
 
 ## The pipeline
