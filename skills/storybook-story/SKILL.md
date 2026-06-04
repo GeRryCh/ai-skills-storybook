@@ -116,8 +116,11 @@ Every `image_prompt` MUST:
 - **`text_mode`** — `"native"` (default) or `"overlay"`. Native bakes the story text directly into each illustration; overlay Pillow-composites it post-generation. Omit to use the default.
 - **`fonts`** — book-wide role → font-family map (see STYLE_PRIMER typography rules). Omit to use bundled Andika/PatrickHand.
 - **`resolution`** — `"1K"` / `"2K"` / `"4K"` image quality for page rendering. Default `"2K"`. Set this at the approval gate (it is a cost/quality decision for the user, not something to auto-pick). `"1K"` for fast/cheap drafts; `"4K"` for large-format print. The render CLI `--resolution` flag overrides if passed explicitly.
+- **`aspect_ratio`** — book-wide framing for both style sheets and page renders. Choices: `"1:1"` `"2:3"` `"3:2"` `"3:4"` `"4:3"` `"4:5"` `"5:4"` `"9:16"` `"16:9"` `"21:9"`. When omitted the model picks framing on each call (non-deterministic). Set only when the user wants consistent, fixed framing across the whole book. The render/stylesheet CLI `--aspect-ratio` flag overrides if passed explicitly.
 
 Do **not** auto-set `resolution` — leave it out unless the user asks for a specific quality.
+
+Do **not** auto-set `aspect_ratio` — leave it out unless the user wants fixed framing. Omitting it preserves today's behavior (model chooses per call) and avoids silently changing framing on existing books.
 
 Per-page `text_placement` defaults to `"floating"` (native mode). Override to `"top"` or `"bottom"` to pin text to a fixed band.
 

@@ -19,6 +19,7 @@ Requires GEMINI_API_KEY in the environment.
 
 Usage:
   uv run make_style_sheet.py --story /path/to/story.json [--out-dir /path/to/outdir]
+                              [--resolution 1K|2K|4K] [--aspect-ratio RATIO]
 """
 
 from __future__ import annotations
@@ -151,7 +152,13 @@ def collect_ref_images_for_char(character: dict) -> list[str]:
     return existing[:MAX_INPUT_IMAGES]
 
 
-def generate_image(prompt: str, input_images: list[str], out_path: Path, resolution: str) -> bool:
+def generate_image(
+    prompt: str,
+    input_images: list[str],
+    out_path: Path,
+    resolution: str,
+    aspect_ratio: str | None = None,
+) -> bool:
     """Generate a single image via the Gemini API and write it to out_path."""
     from google import genai
     from google.genai import types
@@ -173,7 +180,7 @@ def generate_image(prompt: str, input_images: list[str], out_path: Path, resolut
     config = types.GenerateContentConfig(
         system_instruction=IMAGE_SYSTEM_PROMPT,
         response_modalities=["TEXT", "IMAGE"],
-        image_config=types.ImageConfig(image_size=resolution),
+        image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
     )
 
     try:
@@ -211,6 +218,16 @@ def main() -> None:
     parser.add_argument("--out-dir", help="Output directory (default: same dir as story.json)")
     parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default=None,
                         help="Override the resolution from story.json (default: story.json 'resolution' field, or 2K if not set)")
+    parser.add_argument(
+        "--aspect-ratio",
+        choices=["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+        default=None,
+        dest="aspect_ratio",
+        help=(
+            "Override the aspect ratio from story.json "
+            "(default: story.json 'aspect_ratio' field, or unset — model chooses)."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -218,6 +235,8 @@ def main() -> None:
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
+    # CLI flag > story.json field > unset (model chooses framing).
+    aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or None
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +269,7 @@ def main() -> None:
         print(f"\nGenerating sheet for {name!r} -> {target}")
         print(f"Prompt: {prompt}")
 
-        ok = generate_image(prompt, input_images, target, resolution)
+        ok = generate_image(prompt, input_images, target, resolution, aspect_ratio)
         if not ok or not target.exists():
             print(f"ERROR: style sheet PNG not produced for {name!r}.", file=sys.stderr)
             any_failed = True

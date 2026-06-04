@@ -70,6 +70,7 @@ uv run skills/storybook-render/scripts/merge_pdf.py --story story.json --text-mo
 ```
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
+`--aspect-ratio RATIO` (override from story.json; unset → model chooses),
 `--text-mode overlay|native`, `--no-pdf` (skip auto PDF merge).
 Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried

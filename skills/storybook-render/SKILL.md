@@ -40,6 +40,7 @@ uv run {skillDir}/scripts/render_book.py \
 - `--from N` — resume from page N (skips earlier pages, also skips any already-existing files)
 - `--only N` — render a single page (good for testing one page before a full run, or re-doing one page). Does **not** trigger the auto PDF merge (it's a proof operation).
 - `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
+- `--aspect-ratio RATIO` — override the aspect ratio from `story.json` for this run (choices: `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`). Aspect ratio is normally configured via the top-level `aspect_ratio` field in `story.json`; when neither is set the model chooses framing per call.
 - `--no-pdf` — skip the automatic PDF merge after a full render (useful for partial `--from` runs where more pages are coming).
 
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
@@ -84,6 +85,7 @@ Missing pages emit a warning and are skipped; the PDF is still built from the re
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
 - API errors: check `GEMINI_API_KEY` is set, `uv` installed, and Gemini account has credits.
 - Resolution defaults to 2K (from `story.json`'s `resolution` field, or the 2K built-in fallback). Override ad-hoc with `--resolution 1K|2K|4K`.
+- Aspect ratio defaults to unset (model chooses per call) unless `story.json`'s `aspect_ratio` field is set. Override ad-hoc with `--aspect-ratio`.
 
 ---
 

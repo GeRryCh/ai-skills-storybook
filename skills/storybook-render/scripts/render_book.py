@@ -28,7 +28,7 @@ merge_pdf.py (skipped when --only is used or when --no-pdf is passed).
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
                         [--from N] [--only N] [--resolution 1K|2K|4K]
-                        [--text-mode overlay|native] [--no-pdf]
+                        [--aspect-ratio RATIO] [--text-mode overlay|native] [--no-pdf]
 """
 
 from __future__ import annotations
@@ -264,6 +264,7 @@ async def run_nano_banana(
     page: dict,
     resolution: str,
     log: list[str],
+    aspect_ratio: str | None = None,
 ) -> bool:
     """Generate one illustration via the Gemini API and write it to raw_path."""
     from google.genai import errors, types
@@ -280,7 +281,7 @@ async def run_nano_banana(
     config = types.GenerateContentConfig(
         system_instruction=IMAGE_SYSTEM_PROMPT,
         response_modalities=["TEXT", "IMAGE"],
-        image_config=types.ImageConfig(image_size=resolution),
+        image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
     )
 
     log.append(f"  Generating: {raw_path.name}")
@@ -358,7 +359,7 @@ async def run_overlay(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native") -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None) -> bool:
     """Render one page (nano-banana + optional overlay). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
@@ -371,14 +372,14 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     if text_mode == "native":
         # In native mode the model bakes text into the illustration — write directly
         # to final_path; no separate raw file needed.
-        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log)
+        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log, aspect_ratio)
         if not ok or not final_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
             return False
     else:
         raw_path = pages_dir / f"raw-page-{nn}.png"
-        ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log)
+        ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio)
         if not ok or not raw_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
@@ -405,7 +406,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native") -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None) -> int:
     """Fire every page concurrently. Returns the number of failures."""
     from google import genai
 
@@ -417,7 +418,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     client = genai.Client(api_key=api_key)
     print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
     results = await asyncio.gather(
-        *(render_page(client, page, story, pages_dir, resolution, text_mode) for page in todo)
+        *(render_page(client, page, story, pages_dir, resolution, text_mode, aspect_ratio) for page in todo)
     )
     return sum(1 for ok in results if not ok)
 
@@ -428,6 +429,16 @@ def main() -> None:
     parser.add_argument("--out-dir", help="Output directory (default: same dir as story.json)")
     parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default=None,
                         help="Override the resolution from story.json (default: story.json 'resolution' field, or 2K if not set)")
+    parser.add_argument(
+        "--aspect-ratio",
+        choices=["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+        default=None,
+        dest="aspect_ratio",
+        help=(
+            "Override the aspect ratio from story.json "
+            "(default: story.json 'aspect_ratio' field, or unset — model chooses)."
+        ),
+    )
     parser.add_argument("--from", dest="from_page", type=int, default=1,
                         help="Start from this page number (1-indexed)")
     parser.add_argument("--only", dest="only_page", type=int, default=None,
@@ -459,6 +470,8 @@ def main() -> None:
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
+    # CLI flag > story.json field > unset (model chooses framing).
+    aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or None
     # text_mode precedence: CLI flag (if given) > story.json top-level > "native".
     text_mode = args.text_mode or story.get("text_mode", "native")
 
@@ -494,7 +507,7 @@ def main() -> None:
             continue
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:

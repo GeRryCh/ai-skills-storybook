@@ -39,4 +39,4 @@ Write `image_prompt` for scene content only — characters, setting, mood, art s
 - Mention the style in every prompt: e.g. "soft watercolor, gentle pastel palette, children's picture book".
 - Keep backgrounds simple so text overlay zone has low detail.
 - Resolution default is 2K — good for print at ~8"×8" and screen. Set the optional top-level `resolution` field in `story.json` (`"1K"`, `"2K"`, or `"4K"`) to lock quality for the book; the render CLI `--resolution` flag overrides it. Use `1K` for fast/cheap drafts, `4K` for large-format print.
-- Aspect ratio: square (1:1) works well for picture books; scripts do not force a ratio, but prompts may suggest "square composition".
+- Aspect ratio: square (`1:1`) works well for picture books; portrait (`3:4`, `4:5`) for tall layouts; landscape (`4:3`, `16:9`) for wide spreads. Set the optional top-level `aspect_ratio` field in `story.json` to lock framing book-wide; the render/stylesheet CLI `--aspect-ratio` flag overrides it. When omitted the model picks framing per call.
