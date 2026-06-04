@@ -165,3 +165,6 @@ script, re-run a single proof first (`render_book.py --only N` /
   level (commit `b73df4a`).
 - `.gitignore` excludes generated artifacts: `pages/`, `story.json`, `*.png`. The `*.png` files
   in the tree (e.g. `eva.png`, `style-sheet-*.png`) are local sample data, not tracked.
+- `README.md` is the human-facing intro and is **maintained manually by the user**. Do
+  **not** update it as part of routine changes — leave it alone unless the user explicitly
+  asks. `CLAUDE.md` is the living agent reference; keep that current instead.
