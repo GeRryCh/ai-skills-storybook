@@ -6,6 +6,13 @@
 
 Three Claude Code skills that turn a story idea (optionally with character photos) into a fully illustrated children's picture book.
 
+> ⚠️ **Constant development — breaking changes are the norm.** This project evolves
+> aggressively and makes no backward-compatibility promises. The `story.json` contract,
+> script flags, and schema requirements change whenever a better design wins (e.g.
+> `style_guide` is now mandatory and older `story.json` files won't render until they
+> add it). Error messages always include what to fix. If you have an old book, expect
+> to touch up its `story.json` before re-rendering.
+
 ## The pipeline
 
 Each skill hands off a single file — `story.json` — to the next stage.
