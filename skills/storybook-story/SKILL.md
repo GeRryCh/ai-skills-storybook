@@ -59,9 +59,13 @@ this list and nothing else — it shows exactly these characters and no others.
 
 - ONE entry per **real** character. Do not add scene words, places, or pronouns.
 - Each entry: `name` (exactly as written in `image_prompt`s), `appearance`
-  (concrete: species, age, hair, clothing, colours, distinguishing features —
-  more specific = more consistent), and optional `ref_image` (photo path(s) for
-  that one character).
+  (concrete: species, age, hair, **one specific outfit**, colours, distinguishing
+  features — more specific = more consistent), and optional `ref_image` (photo
+  path(s) for that one character).
+- **Include exactly one outfit in `appearance`.** The outfit written there is locked
+  into the style sheet at Stage 2 and the character wears it unchanged on every page.
+  If the user did not specify clothing, invent one simple distinctive outfit and name
+  it. Photos anchor face and hair likeness only — Stage 2 ignores clothing in photos.
 - If the user supplied character photos, map each photo to its character here by
   setting that character's `ref_image`. Use a single path for one photo, or an
   array of paths for several (e.g. multiple angles of the same person). This

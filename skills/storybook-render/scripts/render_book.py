@@ -60,11 +60,11 @@ BACKOFF_MAX_SECONDS = 60.0
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
     "vivid, concrete, model-ready illustration. Pay attention to composition, "
-    "lighting, color, and visual balance. Preserve the provided reference images' "
-    "character design and art style. When a reference photograph is provided "
-    "alongside a style sheet, draw the character's facial likeness from the photo "
-    "and the art style from the sheet. Output only the generated image without "
-    "additional commentary."
+    "lighting, color, and visual balance. When a reference photograph is provided "
+    "alongside a character style sheet, draw the character's facial likeness from "
+    "the photo and the art style from the sheet. Clothing, outfit, and character "
+    "design always come from the style sheet, never from the photograph. "
+    "Output only the generated image without additional commentary."
 )
 
 TEXT_SAFE_ZONE_DIRECTIVE = (
@@ -77,6 +77,8 @@ STYLE_ANCHOR = (
     "sheet(s) exactly. If a reference photograph is also provided, match that "
     "character's facial likeness and identity to the photo, but render fully in the "
     "illustration style of the sheet(s) — never reproduce photographic detail. "
+    "Each character wears exactly the outfit shown on their reference sheet; "
+    "never take clothing or outfit from a photograph. "
     "Consistent character design, {style}. "
     "Preserve this exact palette, lighting, line treatment, and rendering style "
     "unchanged across every page of the book."

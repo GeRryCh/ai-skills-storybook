@@ -42,6 +42,12 @@ Stage 1, so one character's photo never bleeds into another's sheet. The
 script writes each character's `style_sheet` path back into the `characters` array in
 `story.json`.
 
+**Outfit lock.** Each sheet renders the character in exactly one canonical outfit —
+taken from the character's `appearance` description, never from the reference photos
+(which may show multiple outfits). If `appearance` names no clothing, the model
+invents one simple outfit. This outfit propagates to every page: Stage 3 sends the
+sheet as the clothing reference, ignoring photo outfit variation.
+
 If the user supplied no character refs, the script still runs (prompt-only generation).
 
 **The script is idempotent per character.** If `style-sheet-{name}.png` already exists

@@ -117,6 +117,13 @@ anchors the hero's facial likeness on the real photo, not only on the (lossy) st
 4-image cap (flash) is hero sheet → hero photo → remaining characters' sheets in order;
 anything past the cap is logged, never silently dropped.
 
+**Outfit lock (single canonical outfit per character).** `characters[].appearance` must
+name exactly one outfit; the style-sheet prompt takes clothing from there, never from
+`ref_image` photos (which may show the character in multiple outfits). Stage 3 takes
+clothing from the sheet, not the hero photo. This locks one outfit per character across
+the whole book. To change a character's outfit, edit `appearance`, delete the existing
+style-sheet PNG, and re-run `make_style_sheet.py`.
+
 ## Text overlay (`overlay_text.py`)
 
 Pillow composites text on a feathered, semi-transparent rounded white panel that blends into

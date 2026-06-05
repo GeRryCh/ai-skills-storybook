@@ -34,8 +34,8 @@
         "additionalProperties": false,
         "properties": {
           "name": { "type": "string", "description": "Character name exactly as written in image_prompts" },
-          "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, clothing, colours, distinguishing features. More specific = more consistent across pages." },
-          "ref_image": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Optional reference photo(s) for THIS character: a single absolute path, or an array of paths (e.g. multiple angles of the same person). Mapped to this character only — there is no shared global pool. The style sheet should match these face/hair/clothing closely. Capped at 5 (Gemini 3 Pro Image character-lane limit used by make_style_sheet.py)." },
+          "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, ONE specific outfit/clothing, colours, distinguishing features. The outfit named here becomes the character's canonical outfit locked into the style sheet and worn unchanged on every page — name exactly one outfit. More specific = more consistent across pages." },
+          "ref_image": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Optional reference photo(s) for THIS character: a single absolute path, or an array of paths (e.g. multiple angles of the same person). Mapped to this character only — there is no shared global pool. Used for face and hair likeness only; clothing/outfit always comes from 'appearance', not from these photos. Capped at 5 (Gemini 3 Pro Image character-lane limit used by make_style_sheet.py)." },
           "style_sheet": { "type": "string", "description": "Path to this character's generated style sheet PNG (filled in by make_style_sheet.py). Used by render_book.py to select per-page reference images." }
         }
       }
