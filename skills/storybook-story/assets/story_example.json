@@ -2,6 +2,13 @@
   "title": "Pip and the Big Storm",
   "age_band": "3-5",
   "style": "soft watercolor, gentle pastel palette, children's picture book illustration",
+  "style_guide": {
+    "medium": "soft watercolor with thin pen-and-ink outline",
+    "palette": ["warm cream #F5E9D4", "sage green #8FAF85", "dusty coral #E8917A", "soft sky blue #B8D8E8"],
+    "line": "thin sepia ink, even weight, rounded corners, no crosshatching",
+    "lighting": "golden-hour side-light, soft warm shadows, no harsh edges",
+    "mood": "cozy, gentle, storybook calm, slightly naive brushwork"
+  },
   "text_mode": "native",
   "characters": [
     {

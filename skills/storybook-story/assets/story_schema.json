@@ -2,12 +2,28 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "StoryManifest",
   "type": "object",
-  "required": ["title", "age_band", "style", "characters", "pages"],
+  "required": ["title", "age_band", "style", "style_guide", "characters", "pages"],
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string", "description": "Book title" },
     "age_band": { "type": "string", "enum": ["3-5", "5-8"] },
-    "style": { "type": "string", "description": "Illustration style, e.g. 'soft watercolor, pastel palette'" },
+    "style": { "type": "string", "description": "Short human-readable illustration style label, e.g. 'soft watercolor, pastel palette'. Used in prose (image_prompts mention it) and as a quick summary; the paid scripts inject 'style_guide' (required) into every API call, not this field." },
+    "style_guide": {
+      "type": "object",
+      "description": "REQUIRED structured style guide. The render and stylesheet scripts assemble a single deterministic style block from these fields (in fixed order: medium → palette → line → lighting → mood) and inject it byte-identically into every API call. This locks book-wide visual consistency — each page is a separate stateless API call, and having the exact same verbatim block in every prompt is the documented consistency mechanism (per Google's Book_illustration workflow). Both paid scripts refuse to run when this object is missing or empty. At least one field must be set.",
+      "additionalProperties": false,
+      "properties": {
+        "medium": { "type": "string", "description": "Rendering medium and technique, e.g. 'soft watercolor with pen-and-ink outline'." },
+        "palette": {
+          "type": "array",
+          "description": "3–5 named or hex color swatches that define the book's palette, e.g. ['warm cream #F5E9D4', 'sage green #8FAF85', 'dusty coral #E8917A']. These are injected verbatim — the more specific, the better the cross-page consistency.",
+          "items": { "type": "string" }
+        },
+        "line": { "type": "string", "description": "Line-work description, e.g. 'thin sepia ink, even weight, rounded corners'." },
+        "lighting": { "type": "string", "description": "Lighting direction, quality, and color temperature, e.g. 'golden-hour side-light, soft warm shadows, no harsh edges'." },
+        "mood": { "type": "string", "description": "Overall mood and rendering vocabulary, e.g. 'cozy, gentle, storybook calm, slightly naive brushwork'." }
+      }
+    },
     "characters": {
       "type": "array",
       "description": "Explicit cast. ONE entry per REAL character in the story. Drives the style sheet — the style sheet shows exactly these characters and no others. Never rely on auto-extraction from prose.",
@@ -19,7 +35,7 @@
         "properties": {
           "name": { "type": "string", "description": "Character name exactly as written in image_prompts" },
           "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, clothing, colours, distinguishing features. More specific = more consistent across pages." },
-          "ref_image": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Optional reference photo(s) for THIS character: a single absolute path, or an array of paths (e.g. multiple angles of the same person). Mapped to this character only — there is no shared global pool. The style sheet should match these face/hair/clothing closely. Capped at 3 (the image API input limit)." },
+          "ref_image": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Optional reference photo(s) for THIS character: a single absolute path, or an array of paths (e.g. multiple angles of the same person). Mapped to this character only — there is no shared global pool. The style sheet should match these face/hair/clothing closely. Capped at 5 (Gemini 3 Pro Image character-lane limit used by make_style_sheet.py)." },
           "style_sheet": { "type": "string", "description": "Path to this character's generated style sheet PNG (filled in by make_style_sheet.py). Used by render_book.py to select per-page reference images." }
         }
       }

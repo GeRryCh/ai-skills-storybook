@@ -49,7 +49,7 @@ MERGE_SCRIPT = SCRIPTS_DIR / "merge_pdf.py"
 
 # Gemini image-generation config.
 IMAGE_MODEL = "gemini-3.1-flash-image"
-MAX_INPUT_IMAGES = 3
+MAX_INPUT_IMAGES = 4  # Gemini 3.1 Flash Image: up to 4 character reference images per call
 
 # Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all
 # at once, so a single 429 must not silently drop a page.
@@ -77,7 +77,9 @@ STYLE_ANCHOR = (
     "sheet(s) exactly. If a reference photograph is also provided, match that "
     "character's facial likeness and identity to the photo, but render fully in the "
     "illustration style of the sheet(s) — never reproduce photographic detail. "
-    "Consistent character design, {style}."
+    "Consistent character design, {style}. "
+    "Preserve this exact palette, lighting, line treatment, and rendering style "
+    "unchanged across every page of the book."
 )
 
 # Used in --text-mode native: tells the model to render text into the illustration.
@@ -122,9 +124,66 @@ def load_story(path: Path) -> dict:
         return json.load(f)
 
 
+# Keep in sync with the copies in make_style_sheet.py
+# (the two skills share no module; both copies must stay identical).
+STYLE_GUIDE_EXAMPLE = """  "style_guide": {
+    "medium": "soft watercolor with thin pen-and-ink outline",
+    "palette": ["warm cream #F5E9D4", "sage green #8FAF85", "dusty coral #E8917A"],
+    "line": "thin sepia ink, even weight, rounded corners",
+    "lighting": "golden-hour side-light, soft warm shadows",
+    "mood": "cozy, gentle, storybook calm"
+  }"""
+
+
+def build_style_block(story: dict) -> str:
+    """Verbatim style descriptor for this book, injected byte-identically into every call.
+
+    Assembles a deterministic block from the required 'style_guide' object's fields in
+    fixed order (medium → palette → line → lighting → mood) so every API call receives
+    exactly the same string by construction — the documented cross-page consistency
+    mechanism (per Google's Book_illustration workflow: one verbatim style string reused
+    on every independent call).
+
+    'style_guide' is required. main() validates it via require_style_guide() before any
+    paid API work; raises ValueError if it is missing, malformed, or assembles empty.
+    """
+    guide = story.get("style_guide")
+    parts: list[str] = []
+    if isinstance(guide, dict):
+        if guide.get("medium"):
+            parts.append(f"Medium: {guide['medium']}")
+        if guide.get("palette"):
+            palette_str = ", ".join(str(s) for s in guide["palette"])
+            parts.append(f"Palette: {palette_str}")
+        if guide.get("line"):
+            parts.append(f"Line: {guide['line']}")
+        if guide.get("lighting"):
+            parts.append(f"Lighting: {guide['lighting']}")
+        if guide.get("mood"):
+            parts.append(f"Mood: {guide['mood']}")
+    if not parts:
+        raise ValueError("story.json is missing a usable top-level 'style_guide' object")
+    return ". ".join(parts)
+
+
+def require_style_guide(story: dict) -> None:
+    """Fail fast — before any paid API work — when 'style_guide' is missing or empty."""
+    try:
+        build_style_block(story)
+    except ValueError:
+        print(
+            "ERROR: story.json must define a top-level 'style_guide' object — it is the\n"
+            "book-wide consistency anchor injected verbatim into every image call.\n"
+            "Add for example:\n\n" + STYLE_GUIDE_EXAMPLE + "\n\n"
+            "See skills/storybook-story/assets/STYLE_PRIMER.md for the field reference.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> str:
     placement = page.get("text_placement", "floating")
-    style = story.get("style", "children's picture book illustration")
+    style = build_style_block(story)
     anchor = STYLE_ANCHOR.format(style=style)
 
     if text_mode == "native":
@@ -176,15 +235,14 @@ def _ref_photos(char: dict) -> list[str]:
 def collect_input_images(
     story: dict, page: dict, log: list[str] | None = None
 ) -> list[str]:
-    """Per-page reference images for the render, capped at MAX_INPUT_IMAGES.
+    """Per-page reference images for the render, capped at MAX_INPUT_IMAGES (4 for flash).
 
     Each character listed in page['characters'] contributes its style sheet (names must
     match story['characters'][].name exactly). The HERO — the first name in
     page['characters'] — additionally contributes its first original reference photo, so
     the render anchors the hero's facial likeness on the real photo rather than only the
     derived (lossy) style sheet. CONVENTION: author the hero/child first in each page's
-    cast list; the cap of 3 means a third character's sheet may be dropped to make room
-    for the hero's photo.
+    cast list.
 
     Priority order into the budget: hero sheet, hero photo, then the remaining characters'
     sheets in cast order. Anything beyond the cap is named in a log line so nothing is
@@ -467,6 +525,7 @@ def main() -> None:
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
+    require_style_guide(story)
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"

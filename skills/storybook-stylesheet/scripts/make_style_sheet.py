@@ -33,7 +33,7 @@ from pathlib import Path
 
 # Gemini image-generation config.
 IMAGE_MODEL = "gemini-3-pro-image"
-MAX_INPUT_IMAGES = 3
+MAX_INPUT_IMAGES = 5  # Gemini 3 Pro Image: up to 5 character reference images per call
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
     "vivid, concrete, model-ready illustration. Pay attention to composition, "
@@ -80,9 +80,66 @@ def char_slug(name: str, used: set[str]) -> str:
     return candidate
 
 
+# Keep in sync with the copies in render_book.py
+# (the two skills share no module; both copies must stay identical).
+STYLE_GUIDE_EXAMPLE = """  "style_guide": {
+    "medium": "soft watercolor with thin pen-and-ink outline",
+    "palette": ["warm cream #F5E9D4", "sage green #8FAF85", "dusty coral #E8917A"],
+    "line": "thin sepia ink, even weight, rounded corners",
+    "lighting": "golden-hour side-light, soft warm shadows",
+    "mood": "cozy, gentle, storybook calm"
+  }"""
+
+
+def build_style_block(story: dict) -> str:
+    """Verbatim style descriptor for this book, injected byte-identically into every call.
+
+    Assembles a deterministic block from the required 'style_guide' object's fields in
+    fixed order (medium → palette → line → lighting → mood) so every API call receives
+    exactly the same string by construction — the documented cross-page consistency
+    mechanism (per Google's Book_illustration workflow: one verbatim style string reused
+    on every independent call).
+
+    'style_guide' is required. main() validates it via require_style_guide() before any
+    paid API work; raises ValueError if it is missing, malformed, or assembles empty.
+    """
+    guide = story.get("style_guide")
+    parts: list[str] = []
+    if isinstance(guide, dict):
+        if guide.get("medium"):
+            parts.append(f"Medium: {guide['medium']}")
+        if guide.get("palette"):
+            palette_str = ", ".join(str(s) for s in guide["palette"])
+            parts.append(f"Palette: {palette_str}")
+        if guide.get("line"):
+            parts.append(f"Line: {guide['line']}")
+        if guide.get("lighting"):
+            parts.append(f"Lighting: {guide['lighting']}")
+        if guide.get("mood"):
+            parts.append(f"Mood: {guide['mood']}")
+    if not parts:
+        raise ValueError("story.json is missing a usable top-level 'style_guide' object")
+    return ". ".join(parts)
+
+
+def require_style_guide(story: dict) -> None:
+    """Fail fast — before any paid API work — when 'style_guide' is missing or empty."""
+    try:
+        build_style_block(story)
+    except ValueError:
+        print(
+            "ERROR: story.json must define a top-level 'style_guide' object — it is the\n"
+            "book-wide consistency anchor injected verbatim into every image call.\n"
+            "Add for example:\n\n" + STYLE_GUIDE_EXAMPLE + "\n\n"
+            "See skills/storybook-story/assets/STYLE_PRIMER.md for the field reference.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def build_char_prompt(story: dict, character: dict) -> str:
     """Prompt for one character's individual style sheet."""
-    style = story.get("style", "children's picture book illustration")
+    style = build_style_block(story)
     name = (character.get("name") or "").strip()
     appearance = (character.get("appearance") or "").strip()
     if name and appearance:
@@ -117,8 +174,9 @@ def collect_ref_images_for_char(character: dict) -> list[str]:
     character's reference photo never bleeds into another character's sheet.
     The cast-to-photo mapping is fixed in Stage 1 (storybook-story).
 
-    Normalize -> dedup (keep order) -> drop missing files -> cap, logging any
-    refs dropped to the cap (mirrors render_book.py's per-page selection log).
+    Normalize -> dedup (keep order) -> drop missing files -> cap at MAX_INPUT_IMAGES (5
+    for pro), logging any refs dropped to the cap (mirrors render_book.py's per-page
+    selection log).
     """
     raw = character.get("ref_image")
     if isinstance(raw, str):
@@ -146,7 +204,7 @@ def collect_ref_images_for_char(character: dict) -> list[str]:
         name = (character.get("name") or "character").strip()
         print(
             f"Warning: {name!r} has {len(existing)} refs; capping at "
-            f"{MAX_INPUT_IMAGES} (API limit). Dropping: {', '.join(dropped)}",
+            f"{MAX_INPUT_IMAGES} (character-lane limit). Dropping: {', '.join(dropped)}",
             file=sys.stderr,
         )
     return existing[:MAX_INPUT_IMAGES]
@@ -232,6 +290,7 @@ def main() -> None:
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
+    require_style_guide(story)
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"

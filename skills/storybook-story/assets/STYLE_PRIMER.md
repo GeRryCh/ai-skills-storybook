@@ -33,6 +33,41 @@ Write `image_prompt` for scene content only — characters, setting, mood, art s
 - Per-page `text_align`: `"left"` (default) or `"center"`. Center the cover/title; leave body pages left-aligned.
 - Optional top-level `fonts` map redefines what each role's font is, e.g. `"fonts": {"reader": "Arial", "display": "Patrick Hand"}`. Family names resolve at render time: bundled asset → system-installed font → bundled role default. No manual install needed for system fonts (Arial, Georgia, …); unknown names fall back to the bundled font. Omit `fonts` to keep the bundled Andika/PatrickHand.
 
+## Style guide (`style_guide`) — book-wide consistency anchor (REQUIRED)
+
+Each page is rendered in a **separate stateless API call**. There is no shared state between
+calls. The only mechanism that makes all pages look like one book is injecting the **exact
+same style descriptor** into every call — this is what Google's own
+[Book_illustration cookbook](https://github.com/google-gemini/cookbook) does.
+
+The **required** top-level `style_guide` object encodes this descriptor as structured
+fields. Both `make_style_sheet.py` and `render_book.py` assemble a single byte-identical
+block from it (fixed field order) and inject it verbatim into every call. **Both paid
+scripts refuse to run when it is missing** — author it for every book. The `style` string
+stays as a short human-readable label used in prose.
+
+```json
+"style_guide": {
+  "medium": "soft watercolor with thin pen-and-ink outline",
+  "palette": ["warm cream #F5E9D4", "sage green #8FAF85", "dusty coral #E8917A"],
+  "line": "thin sepia ink, even weight, rounded corners, no crosshatching",
+  "lighting": "golden-hour side-light, soft warm shadows, no harsh edges",
+  "mood": "cozy, gentle, storybook calm, slightly naive brushwork"
+}
+```
+
+| Field | What to write |
+|---|---|
+| `medium` | Rendering technique: medium + any secondary process, e.g. "gouache with digital color" |
+| `palette` | 3–5 swatches as named colors or hex. **Hex is more precise** — the model anchors on it better. |
+| `line` | Line weight, color, corner style; "none" if fully painterly |
+| `lighting` | Direction, quality, color temperature — keep it identical across every scene |
+| `mood` | Rendering vocabulary and feel; these adjectives carry into every prompt |
+
+**Why specificity matters:** a vague `style` like `"watercolor picture book"` leaves the
+model to reinterpret it every call. A specific `style_guide` with hex palette and lighting
+direction gives the model the same concrete target on every page.
+
 ## Illustration style tips
 
 - Name characters consistently in every `image_prompt` (exact same name every page).

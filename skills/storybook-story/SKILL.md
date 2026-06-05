@@ -68,9 +68,24 @@ this list and nothing else — it shows exactly these characters and no others.
   Stage-1 mapping is the ONLY source of reference photos — Stage 2 builds each
   style sheet from that character's `ref_image` and nothing else. There is no
   shared global pool, so one character's photo never bleeds into another's sheet.
-  Capped at 3 photos per character (the image API input limit).
+  Capped at 5 photos per character (Gemini 3 Pro Image character-lane limit).
 
 Never rely on auto-extraction: the cast is never guessed from prose.
+
+### Style guide — the `style_guide` object (REQUIRED)
+
+You MUST author a top-level `style_guide` object — both paid scripts refuse to run
+without it. Each page is rendered in a separate stateless API call; the only book-wide
+consistency mechanism is injecting the exact same style descriptor into every call. Both
+scripts assemble `style_guide` into one byte-identical block (fixed field order:
+medium → palette → line → lighting → mood) and inject it verbatim into every Gemini call.
+
+- Fields (all strings unless noted): `medium`, `palette` (array, 3–5 swatches — include
+  hex codes for precision, e.g. `"warm cream #F5E9D4"`), `line`, `lighting`, `mood`.
+- At least one field must be non-empty; fill all five for the strongest lock.
+- Keep `style` as the short human-readable label (used in prose/image_prompts); the
+  `style_guide` is what the renderer actually anchors on.
+- See `assets/STYLE_PRIMER.md` for the full field reference and a worked example.
 
 ### Page structure
 
@@ -87,8 +102,9 @@ character-free pages (title cards, scenery-only spreads).
 **Order matters: put the page hero first.** The first name is treated as the hero, and Stage
 3 additionally feeds that character's original reference photo into the render to lock its
 facial likeness. List the protagonist (e.g. the child the book is about) first on every page
-they appear; with a 3-image cap, a fourth reference (a third character's sheet) may be dropped
-to make room for the hero's photo.
+they appear; with a 4-image cap (flash model), a fifth reference may be dropped to make room
+for the hero's photo. Three-character pages can now carry hero sheet + hero photo + both
+supporting sheets without dropping anything.
 
 Example:
 ```json

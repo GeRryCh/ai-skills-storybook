@@ -24,21 +24,29 @@ directory (default: the user's cwd, e.g. this worktree root):
    character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the characters listed in that page's `characters` field
-   (per-page selection, cap 3), then overlays text. Output: `pages/page-NN.png` (overlay)
-   or `pages/page-NN-native.png` (native). After a full render, automatically assembles
-   all pages into `{title}.pdf` (or `{title}-native.pdf`) via `merge_pdf.py` at no extra
-   API cost.
+   (per-page selection, cap 4 for the flash model), then overlays text. Output:
+   `pages/page-NN.png` (overlay) or `pages/page-NN-native.png` (native). After a full
+   render, automatically assembles all pages into `{title}.pdf` (or `{title}-native.pdf`)
+   via `merge_pdf.py` at no extra API cost.
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
+
+A top-level `style_guide` object is **required** in `story.json`: both paid scripts
+assemble it into one byte-identical style block (`build_style_block()`, duplicated in
+both scripts — keep the copies in sync) injected verbatim into every Gemini call. This is
+the book-wide consistency mechanism (each page is a separate stateless call). Both scripts
+**refuse to run** (`require_style_guide()`, exit 2) when it is missing or empty — breaking
+change for pre-existing `story.json` files; add the field to render old books. The `style`
+string remains as a short human label only.
 
 ## Critical external dependency
 
 The two paid scripts call the **Gemini image API directly** (via the `google-genai`
 Python SDK, declared as a PEP-723 inline dependency). They build a `genai.Client` with
-`api_key` from the environment, model `gemini-3-pro-image` (style sheets) or `gemini-3.1-flash-image`
-(page renders), send the prompt plus up to 3
-input images as `types.Part.from_bytes`, and extract the returned image from
-`part.inline_data.data`.
+`api_key` from the environment, model `gemini-3-pro-image` (style sheets, up to 5 character
+reference images per call) or `gemini-3.1-flash-image` (page renders, up to 4 reference
+images per call), send the prompt plus reference images as `types.Part.from_bytes`, and
+extract the returned image from `part.inline_data.data`.
 Requires `uv` on PATH and `GEMINI_API_KEY` in the environment. No sibling skill is
 needed (an earlier version shelled out to `nano-banana-pro-openrouter`; that logic is now
 inlined in each script — `run_nano_banana()` in `render_book.py` and `generate_image()` in
@@ -95,9 +103,9 @@ the style sheets. An earlier regex that scraped characters from prose minted pha
 characters (a fish "Deep" from "deep twilight sky", a girl "She" from "She holds a rabbit")
 and poisoned every page. Do not reintroduce auto-extraction. See the docstring on
 `get_characters()` in `make_style_sheet.py`. Reference images come only from that
-character's own `ref_image` (a single path or an array of paths), capped at 3 (the image
-API input limit). There is no shared global pool — the cast-to-photo mapping is fixed in
-Stage 1, so one character's photo never bleeds into another's sheet.
+character's own `ref_image` (a single path or an array of paths), capped at 5 (Gemini 3
+Pro Image character-lane limit). There is no shared global pool — the cast-to-photo mapping
+is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 
 Each page also carries an explicit `characters` list (`pages[].characters`) naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
@@ -106,8 +114,8 @@ for characters not on the page. The **first** name in `pages[].characters` is th
 **hero**: it additionally contributes its first original `ref_image` photo, so the render
 anchors the hero's facial likeness on the real photo, not only on the (lossy) style sheet.
 **Convention: author the hero/child first in each page's cast list.** Priority into the
-3-image cap is hero sheet → hero photo → remaining characters' sheets in order; anything
-past the cap (e.g. a third character's sheet) is logged, never silently dropped.
+4-image cap (flash) is hero sheet → hero photo → remaining characters' sheets in order;
+anything past the cap is logged, never silently dropped.
 
 ## Text overlay (`overlay_text.py`)
 

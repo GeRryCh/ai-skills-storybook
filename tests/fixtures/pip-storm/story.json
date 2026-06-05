@@ -2,6 +2,13 @@
   "title": "Pip and the Big Storm",
   "age_band": "3-5",
   "style": "soft watercolor, gentle pastel palette, children's picture book illustration",
+  "style_guide": {
+    "medium": "soft watercolor, children's picture book illustration",
+    "palette": ["gentle pastels", "warm meadow greens", "storm blues and purples", "warm amber"],
+    "line": "soft edges, no hard outlines",
+    "lighting": "warm golden light shifting to cool storm light, soft shadows",
+    "mood": "gentle, cozy, reassuring"
+  },
   "characters": [
     {
       "name": "Pip",
