@@ -46,6 +46,11 @@
       "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. render_book.py's --text-mode flag overrides this per run.",
       "default": "native"
     },
+    "language": {
+      "type": "string",
+      "description": "Optional BCP-47 language tag for the book text (e.g. 'en', 'de', 'en-GB'). Used as dc:language metadata in EPUB output. Default: 'en'.",
+      "default": "en"
+    },
     "fonts": {
       "type": "object",
       "description": "Optional book-wide map of text role -> font family name. Defines which font each per-page 'font' role uses. Values are family names (e.g. 'Arial', 'Patrick Hand') resolved at render time: bundled asset in assets/fonts/ -> system-installed font -> bundled role default. Omit to use the bundled Andika (reader) / PatrickHand (display).",
@@ -64,6 +69,13 @@
       "type": "string",
       "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
       "description": "Optional book-wide aspect ratio applied to both style sheets and page renders. When omitted, the model picks framing on each call (non-deterministic). Set this to lock consistent framing across all sheets and pages (e.g. '4:3' for landscape, '3:4' for portrait, '1:1' for square). The stylesheet/render CLI --aspect-ratio flag overrides this value when passed explicitly."
+    },
+    "saved_formats": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["pdf", "epub"] },
+      "uniqueItems": true,
+      "description": "Optional list of book file formats assembled after a full render: 'pdf' (multi-page PDF) and/or 'epub' (fixed-layout EPUB3). When omitted, ALL formats are produced. An empty array skips assembly. The render CLI --saved-formats flag overrides this value when passed explicitly ('none' to skip for one run).",
+      "default": ["pdf", "epub"]
     },
     "pages": {
       "type": "array",

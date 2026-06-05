@@ -4,6 +4,7 @@ story.json
 __pycache__
 *.png
 *.pdf
+*.epub
 
 # test fixtures — track committed sample artifacts inside tests/
 !/tests/

@@ -38,17 +38,18 @@ uv run {skillDir}/scripts/render_book.py \
 
 **Useful flags:**
 - `--from N` — resume from page N (skips earlier pages, also skips any already-existing files)
-- `--only N` — render a single page (good for testing one page before a full run, or re-doing one page). Does **not** trigger the auto PDF merge (it's a proof operation).
+- `--only N` — render a single page (good for testing one page before a full run, or re-doing one page). Does **not** trigger the auto PDF/EPUB merge (it's a proof operation).
 - `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
 - `--aspect-ratio RATIO` — override the aspect ratio from `story.json` for this run (choices: `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`). Aspect ratio is normally configured via the top-level `aspect_ratio` field in `story.json`; when neither is set the model chooses framing per call.
-- `--no-pdf` — skip the automatic PDF merge after a full render (useful for partial `--from` runs where more pages are coming).
+- `--saved-formats pdf epub|none` — override `story.json`'s `saved_formats` for this run: which book file(s) to assemble after a full render. `epub` is a fixed-layout EPUB3 (pre-paginated, full-bleed pages). `none` skips assembly entirely (useful for partial `--from` runs where more pages are coming). `saved_formats` is normally configured in `story.json` (default: all formats when omitted).
 
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
 Output:
 - `{out_dir}/pages/page-01.png` … `page-NN.png` (overlay mode)
 - `{out_dir}/pages/page-01-native.png` … (native mode)
-- `{out_dir}/{title}.pdf` or `{out_dir}/{title}-native.pdf` — assembled after a full run
+- `{out_dir}/{title}.pdf` or `{out_dir}/{title}-native.pdf` — assembled after a full run (per `saved_formats`)
+- `{out_dir}/{title}.epub` or `{out_dir}/{title}-native.epub` — assembled after a full run (per `saved_formats`)
 
 Each final file is printed as `MEDIA: <path>` so the IDE can display it inline.
 
@@ -56,25 +57,38 @@ To re-render a page after editing its `image_prompt`, delete `pages/page-NN.png`
 
 ---
 
-## PDF output
+## PDF & EPUB output
 
-After a full render succeeds, a multi-page PDF is assembled automatically (no extra API
-cost). The PDF sits next to `story.json`, named after the book title:
+After a full render succeeds, book file(s) are assembled automatically (no extra API
+cost) per the `saved_formats` field in `story.json` (default: all formats — both PDF
+and EPUB). Files sit next to `story.json`, named after the book title:
 
-- Overlay mode → `{out_dir}/{title}.pdf`
-- Native mode  → `{out_dir}/{title}-native.pdf`
+- Overlay mode → `{out_dir}/{title}.pdf` and/or `{out_dir}/{title}.epub`
+- Native mode  → `{out_dir}/{title}-native.pdf` and/or `{out_dir}/{title}-native.epub`
 
-To rebuild the PDF from already-rendered pages (no render cost):
+The EPUB is fixed-layout EPUB3 (pre-paginated): one full-bleed page image per spread,
+viewport = image dimensions, page text carried as `<img>` alt attribute. Works for both
+overlay and native text modes.
+
+To rebuild from already-rendered pages (no render cost):
 
 ```bash
+# PDF:
 uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json
 # native mode:
 uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --text-mode native
 # explicit output path:
 uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --out my-book.pdf
+
+# EPUB:
+uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json
+# native mode:
+uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --text-mode native
+# explicit output path:
+uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --out my-book.epub
 ```
 
-Missing pages emit a warning and are skipped; the PDF is still built from the rest.
+Missing pages emit a warning and are skipped; the output file is still built from the rest.
 
 ---
 

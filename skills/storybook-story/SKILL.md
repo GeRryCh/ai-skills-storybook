@@ -134,6 +134,8 @@ Every `image_prompt` MUST:
 ### Optional top-level config
 
 - **`text_mode`** — `"native"` (default) or `"overlay"`. Native bakes the story text directly into each illustration; overlay Pillow-composites it post-generation. Omit to use the default.
+- **`saved_formats`** — array of `"pdf"` and/or `"epub"` specifying which book file(s) the render stage assembles after a full render. Omit to produce all formats (default). Set `[]` to skip assembly. The render CLI `--saved-formats` flag overrides if passed explicitly.
+- **`language`** — BCP-47 language tag for the book text (e.g. `"en"`, `"de"`, `"en-GB"`). Used as `dc:language` metadata in the EPUB. Omit for the `"en"` default; set only when the story is non-English.
 - **`fonts`** — book-wide role → font-family map (see STYLE_PRIMER typography rules). Omit to use bundled Andika/PatrickHand.
 - **`resolution`** — `"1K"` / `"2K"` / `"4K"` image quality for page rendering. Default `"2K"`. Set this at the approval gate (it is a cost/quality decision for the user, not something to auto-pick). `"1K"` for fast/cheap drafts; `"4K"` for large-format print. The render CLI `--resolution` flag overrides if passed explicitly.
 - **`aspect_ratio`** — book-wide framing for both style sheets and page renders. Choices: `"1:1"` `"2:3"` `"3:2"` `"3:4"` `"4:3"` `"4:5"` `"5:4"` `"9:16"` `"16:9"` `"21:9"`. When omitted the model picks framing on each call (non-deterministic). Set only when the user wants consistent, fixed framing across the whole book. The render/stylesheet CLI `--aspect-ratio` flag overrides if passed explicitly.

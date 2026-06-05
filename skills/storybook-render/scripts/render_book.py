@@ -22,13 +22,16 @@ Skips pages whose final file already exists (safe to re-run after partial failur
 
 Requires GEMINI_API_KEY in the environment.
 
-After all pages render successfully a PDF is assembled automatically via
-merge_pdf.py (skipped when --only is used or when --no-pdf is passed).
+After all pages render successfully, book file(s) are assembled automatically
+via merge_pdf.py / merge_epub.py per the story.json `saved_formats` field (or
+the --saved-formats CLI override). Skipped when --only is used or when
+--saved-formats none is passed.
 
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
                         [--from N] [--only N] [--resolution 1K|2K|4K]
-                        [--aspect-ratio RATIO] [--text-mode overlay|native] [--no-pdf]
+                        [--aspect-ratio RATIO] [--text-mode overlay|native]
+                        [--saved-formats pdf epub|none]
 """
 
 from __future__ import annotations
@@ -45,7 +48,10 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
 OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
-MERGE_SCRIPT = SCRIPTS_DIR / "merge_pdf.py"
+MERGE_SCRIPTS = {
+    "pdf": SCRIPTS_DIR / "merge_pdf.py",
+    "epub": SCRIPTS_DIR / "merge_epub.py",
+}
 
 # Gemini image-generation config.
 IMAGE_MODEL = "gemini-3.1-flash-image"
@@ -517,17 +523,35 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--no-pdf",
-        dest="no_pdf",
-        action="store_true",
-        default=False,
-        help="Skip the automatic PDF merge step after rendering (useful for --from partial runs).",
+        "--saved-formats",
+        dest="saved_formats",
+        nargs="+",
+        choices=["pdf", "epub", "none"],
+        default=None,
+        help=(
+            "Override story.json's saved_formats for this run: which book file(s) to "
+            "assemble after a full render (e.g. --saved-formats pdf epub). "
+            "'none' (alone) skips assembly, e.g. for --from partial runs. "
+            "If omitted, uses story.json's top-level 'saved_formats' (default: all formats)."
+        ),
     )
     args = parser.parse_args()
+
+    # Validate --saved-formats: "none" must not be combined with other formats.
+    if args.saved_formats is not None and "none" in args.saved_formats and len(args.saved_formats) > 1:
+        parser.error("'none' cannot be combined with other formats in --saved-formats")
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
     require_style_guide(story)
+
+    # CLI flag > story.json field > built-in default (all formats).
+    if args.saved_formats is not None:
+        saved_formats = [] if "none" in args.saved_formats else list(args.saved_formats)
+    else:
+        saved_formats = story.get("saved_formats", list(MERGE_SCRIPTS))
+    # Canonical registry order + dedupe (unknown strings silently dropped).
+    saved_formats = [f for f in MERGE_SCRIPTS if f in saved_formats]
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
@@ -574,21 +598,25 @@ def main() -> None:
     if errors:
         sys.exit(1)
 
-    # Auto-merge rendered pages into a single PDF.
+    # Auto-assemble rendered pages into book file(s).
     # Gate: all pages succeeded (errors == 0), not a single-page proof run (--only),
-    # and the user has not opted out (--no-pdf). The errors==0 gate also covers the
-    # all-skipped case (empty todo → errors=0) so a re-run of a finished book refreshes
-    # the PDF.
-    if not args.no_pdf and args.only_page is None:
-        merge_cmd = [
-            "uv", "run", str(MERGE_SCRIPT),
-            "--story", str(story_path),
-            "--out-dir", str(out_dir),
-            "--text-mode", text_mode,
-        ]
-        result = subprocess.run(merge_cmd, capture_output=False)
-        if result.returncode != 0:
-            print("Warning: PDF merge step failed (pages are still intact).", file=sys.stderr)
+    # and at least one format is requested. The errors==0 gate also covers the
+    # all-skipped case (empty todo → errors=0) so a re-run of a finished book
+    # refreshes the output files.
+    if saved_formats and args.only_page is None:
+        for fmt in saved_formats:
+            merge_cmd = [
+                "uv", "run", str(MERGE_SCRIPTS[fmt]),
+                "--story", str(story_path),
+                "--out-dir", str(out_dir),
+                "--text-mode", text_mode,
+            ]
+            result = subprocess.run(merge_cmd, capture_output=False)
+            if result.returncode != 0:
+                print(
+                    f"Warning: {fmt.upper()} merge step failed (pages are still intact).",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":

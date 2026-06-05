@@ -26,8 +26,9 @@ directory (default: the user's cwd, e.g. this worktree root):
    using only the style sheets for the characters listed in that page's `characters` field
    (per-page selection, cap 4 for the flash model), then overlays text. Output:
    `pages/page-NN.png` (overlay) or `pages/page-NN-native.png` (native). After a full
-   render, automatically assembles all pages into `{title}.pdf` (or `{title}-native.pdf`)
-   via `merge_pdf.py` at no extra API cost.
+   render, automatically assembles all pages into book file(s) per the `saved_formats`
+   field in `story.json` (default: all formats — both PDF and EPUB). Assembly is done
+   via `merge_pdf.py` and/or `merge_epub.py` at no extra API cost.
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
@@ -75,18 +76,25 @@ uv run skills/storybook-render/scripts/overlay_text.py \
 uv run skills/storybook-render/scripts/merge_pdf.py --story story.json
 # native mode PDF:
 uv run skills/storybook-render/scripts/merge_pdf.py --story story.json --text-mode native
+
+# Merge already-rendered pages into a fixed-layout EPUB3 (no API cost)
+uv run skills/storybook-render/scripts/merge_epub.py --story story.json
+# native mode EPUB:
+uv run skills/storybook-render/scripts/merge_epub.py --story story.json --text-mode native
 ```
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
 `--aspect-ratio RATIO` (override from story.json; unset → model chooses),
-`--text-mode overlay|native`, `--no-pdf` (skip auto PDF merge).
+`--text-mode overlay|native`, `--saved-formats pdf epub|none` (override story.json
+`saved_formats`; default when neither set: all formats).
 Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
 
-After a full render (`--only` not set), `render_book.py` automatically invokes
-`merge_pdf.py` and writes `{title}.pdf` (overlay) or `{title}-native.pdf` (native)
-next to `story.json`. Pass `--no-pdf` to suppress (e.g. for `--from` partial runs).
+After a full render (`--only` not set), `render_book.py` automatically assembles book
+file(s) per `saved_formats` (story.json field → CLI override → default all). Writes
+`{title}.pdf` / `{title}.epub` (overlay) or `{title}-native.*` (native) next to
+`story.json`. Pass `--saved-formats none` to suppress (e.g. for `--from` partial runs).
 
 ## Idempotency / re-run semantics (important when editing scripts)
 
@@ -165,9 +173,15 @@ uv run skills/storybook-render/scripts/merge_pdf.py \
   --story tests/fixtures/pip-storm/story.json
 uv run skills/storybook-render/scripts/merge_pdf.py \
   --story tests/fixtures/pip-storm/story.json --text-mode native
+
+# No API cost — re-merge the committed fixture pages into a fixed-layout EPUB3
+uv run skills/storybook-render/scripts/merge_epub.py \
+  --story tests/fixtures/pip-storm/story.json
+uv run skills/storybook-render/scripts/merge_epub.py \
+  --story tests/fixtures/pip-storm/story.json --text-mode native
 ```
 
-Prefer these zero-cost checks; they cover overlay, PDF merge, font resolution, and
+Prefer these zero-cost checks; they cover overlay, PDF merge, EPUB assembly, font resolution, and
 per-page selection logic without an image API call. Only fall back to the paid
 `tests/regen.sh` (~10 image calls, needs `GEMINI_API_KEY`) when a change actually
 touches the Gemini API call paths and must be verified end-to-end. When editing a paid
