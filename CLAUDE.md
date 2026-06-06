@@ -14,9 +14,11 @@ step and no test suite; the scripts are the product.
 Three skills run in order and hand off a **single file, `story.json`**, in an output
 directory (default: the user's cwd, e.g. this worktree root):
 
-1. **storybook-story** (free, no API) — writes `story.json`: per-page `text`, `image_prompt`,
-   per-page `characters` cast list, and a global `characters` array. **Has a hard approval
-   gate** — it must stop and wait for the user to edit/approve before any paid stage runs.
+1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), crops
+   multi-person photos to one file per person via `scripts/crop_character.py` (Pillow only,
+   no API), then writes `story.json`: per-page `text`, `image_prompt`, per-page `characters`
+   cast list, and a global `characters` array. **Has a hard approval gate** — it must stop
+   and wait for the user to edit/approve before any paid stage runs.
 2. **storybook-stylesheet** (paid, 1 image call per character) — generates one
    `style-sheet-{name}.png` per character from the `characters` array, writes each
    character's `style_sheet` path back into `story.json`. **Approval gate**: show all
@@ -59,6 +61,13 @@ All scripts are PEP-723 inline-dependency scripts — always run with `uv run` (
 deps like Pillow automatically), never `python`:
 
 ```bash
+# Stage 1 — crop one person from a multi-person source photo (free, Pillow only, no API)
+# Run once per character extracted from a group photo; overwrites --out on each run.
+uv run skills/storybook-story/scripts/crop_character.py \
+  --image /path/to/family.jpg \
+  --box 0.05,0.10,0.48,0.95 \
+  --out {out_dir}/ref-mia.png
+
 # Stage 2
 uv run skills/storybook-stylesheet/scripts/make_style_sheet.py --story story.json
 
@@ -115,15 +124,27 @@ character's own `ref_image` (a single path or an array of paths), capped at 5 (G
 Pro Image character-lane limit). There is no shared global pool — the cast-to-photo mapping
 is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 
+**Single-person images only.** Every path in `ref_image` must show only one person — a solo
+photo or a per-person crop. If a source photo contains multiple people, Stage 1 crops it
+to one file per character via `skills/storybook-story/scripts/crop_character.py` (Pillow
+only, free, no API). The original multi-person photo is never listed in any `ref_image`. This
+preserves the existing cap math (5 Stage-2 / 4 flash cap) unchanged — refs stay
+per-character and per-person, so nothing interacts differently with the caps.
+
+Re-run recipe for a bad crop: re-run `crop_character.py` with an adjusted `--box` (it
+overwrites silently — free to iterate) → `rm style-sheet-{slug}.png` → re-run Stage 2.
+Cross-session note: crop provenance is not stored in `story.json` (intentional — same rule
+as `style_sheet`). To redo a crop in a new session you need the original source photo again.
+
 Each page also carries an explicit `characters` list (`pages[].characters`) naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
 this to send only the relevant per-character style sheets — the model never sees sheets
 for characters not on the page. The **first** name in `pages[].characters` is the page
-**hero**: it additionally contributes its first original `ref_image` photo, so the render
-anchors the hero's facial likeness on the real photo, not only on the (lossy) style sheet.
-**Convention: author the hero/child first in each page's cast list.** Priority into the
-4-image cap (flash) is hero sheet → hero photo → remaining characters' sheets in order;
-anything past the cap is logged, never silently dropped.
+**hero**: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
+crop), so the render anchors the hero's facial likeness on the real photo, not only on the
+(lossy) style sheet. **Convention: author the hero/child first in each page's cast list.**
+Priority into the 4-image cap (flash) is hero sheet → hero photo → remaining characters'
+sheets in order; anything past the cap is logged, never silently dropped.
 
 **Outfit lock (single canonical outfit per character).** `characters[].appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
@@ -186,6 +207,23 @@ a style sheet, and pre-rendered overlay + native pages under
 `tests/fixtures/pip-storm/`) so the no-API paths can be exercised for free:
 
 ```bash
+# No API cost — crop the committed fixture ref image (happy path + overwrite loop)
+uv run skills/storybook-story/scripts/crop_character.py \
+  --image tests/fixtures/pip-storm/refs/pip-ref.png \
+  --box 0.2,0.1,0.8,0.9 --out /tmp/smoke-crop.png
+# Adjust box and re-run (must overwrite silently)
+uv run skills/storybook-story/scripts/crop_character.py \
+  --image tests/fixtures/pip-storm/refs/pip-ref.png \
+  --box 0.1,0.05,0.9,0.95 --out /tmp/smoke-crop.png
+# Pixel coords → exit 2 with "fractions, not pixels" message
+uv run skills/storybook-story/scripts/crop_character.py \
+  --image tests/fixtures/pip-storm/refs/pip-ref.png \
+  --box 120,40,800,900 --out /tmp/smoke-bad.png
+# Degenerate box (left ≥ right) → exit 2
+uv run skills/storybook-story/scripts/crop_character.py \
+  --image tests/fixtures/pip-storm/refs/pip-ref.png \
+  --box 0.8,0.1,0.2,0.9 --out /tmp/smoke-bad.png
+
 # No API cost — exercise text overlay against a committed fixture page
 uv run skills/storybook-render/scripts/overlay_text.py \
   --image tests/fixtures/pip-storm/pages/page-01.png \

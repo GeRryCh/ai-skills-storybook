@@ -37,10 +37,12 @@ uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 This makes **one Gemini image call per character** to produce individual PNGs
 (`style-sheet-{name}.png`) — one sheet per character, no combined cast sheet. Each sheet
 shows that character alone at multiple angles. Reference images are used as input: only
-that character's own `ref_image` (a single path or an array of paths), capped at 5 (the Gemini 3 Pro Image character-lane limit). There is no shared global pool — refs are mapped per character in
-Stage 1, so one character's photo never bleeds into another's sheet. The
-script writes each character's `style_sheet` path back into the `characters` array in
-`story.json`.
+that character's own `ref_image` (a single path or an array of paths — **every path must
+be a single-person image**; if the source photo was a group photo, use the per-person crop
+produced in Stage 1, not the original), capped at 5 (the Gemini 3 Pro Image character-lane
+limit). There is no shared global pool — refs are mapped per character in Stage 1, so one
+character's photo never bleeds into another's sheet. The script writes each character's
+`style_sheet` path back into the `characters` array in `story.json`.
 
 **Outfit lock.** Each sheet renders the character in exactly one canonical outfit —
 taken from the character's `appearance` description, never from the reference photos
@@ -71,6 +73,9 @@ pages.
 If a sheet is wrong:
 1. Fix that character's entry in the `characters` array in `story.json` (sharpen
    `appearance`, set/update `ref_image`).
+   - If the likeness anchored onto the wrong person or the crop clipped the subject,
+     fix the crop first: re-run `crop_character.py` with an adjusted `--box` (it
+     overwrites silently), then update `ref_image` to the corrected crop path.
 2. Delete only that character's sheet file (e.g. `rm style-sheet-pip.png`).
 3. Re-run the command above.
 

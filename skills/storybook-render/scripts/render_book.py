@@ -217,7 +217,11 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
 
 
 def _ref_photos(char: dict) -> list[str]:
-    """This character's own original reference photo paths, in order, existing only.
+    """This character's own reference photo paths, in order, existing only.
+
+    Each path must be a single-person image — a solo photo or a Stage-1 crop
+    produced by storybook-story's crop_character.py.  Multi-person group photos
+    should have been cropped to per-person files before story.json was written.
 
     Mirrors collect_ref_images_for_char() in make_style_sheet.py (the two skills share
     no module): normalize a string-or-list `ref_image` -> dedup keeping order -> drop
@@ -247,10 +251,10 @@ def collect_input_images(
 
     Each character listed in page['characters'] contributes its style sheet (names must
     match story['characters'][].name exactly). The HERO — the first name in
-    page['characters'] — additionally contributes its first original reference photo, so
-    the render anchors the hero's facial likeness on the real photo rather than only the
-    derived (lossy) style sheet. CONVENTION: author the hero/child first in each page's
-    cast list.
+    page['characters'] — additionally contributes its first `ref_image` (a solo photo or
+    a Stage-1 crop from crop_character.py), so the render anchors the hero's facial
+    likeness on the real photo rather than only the derived (lossy) style sheet.
+    CONVENTION: author the hero/child first in each page's cast list.
 
     Priority order into the budget: hero sheet, hero photo, then the remaining characters'
     sheets in cast order. Anything beyond the cap is named in a log line so nothing is

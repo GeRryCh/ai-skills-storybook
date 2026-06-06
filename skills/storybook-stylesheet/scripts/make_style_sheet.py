@@ -175,9 +175,14 @@ def build_char_prompt(story: dict, character: dict) -> str:
 def collect_ref_images_for_char(character: dict) -> list[str]:
     """This character's own reference photos, in order, capped at MAX_INPUT_IMAGES.
 
-    `ref_image` accepts a single path (string) or a list of paths. Only photos
-    mapped to THIS character are used — there is no shared global pool, so one
-    character's reference photo never bleeds into another character's sheet.
+    `ref_image` accepts a single path (string) or a list of paths.  Every path must be
+    a single-person image — a solo photo or a per-person crop produced in Stage 1 by
+    storybook-story's crop_character.py.  Multi-person group photos should have been
+    cropped before story.json was written; if a group photo slips through here the model
+    cannot know which person's likeness to anchor.
+
+    Only photos mapped to THIS character are used — there is no shared global pool, so
+    one character's reference photo never bleeds into another character's sheet.
     The cast-to-photo mapping is fixed in Stage 1 (storybook-story).
 
     Normalize -> dedup (keep order) -> drop missing files -> cap at MAX_INPUT_IMAGES (5
