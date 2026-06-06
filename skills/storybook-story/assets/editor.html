@@ -121,6 +121,7 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 <header>
   <h1 id="header-title">story.json editor</h1>
   <span class="dirty-dot" id="dirty-dot" title="Unsaved changes">●</span>
+  <span id="autosave-hint" style="font-size:11px;color:#fb923c;opacity:0.9;display:none"></span>
   <button class="btn-primary" id="btn-save" onclick="triggerSave()">Save</button>
 </header>
 
@@ -137,9 +138,15 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 let story = null;
 let schema = null;
 let storyMtime = null;
-const dirtyPages = new Set(); // references to page objects
+const dirtyPages  = new Set(); // unsaved changes — header dot + beforeunload guard
+const editedPages = new Set(); // edited since last render — amber badge (not cleared on save)
 let renderStatus = {};
 let charStatusData = {};
+// ── Auto-save state ────────────────────────────────────────────────────────
+let autoSaveTimer  = null;  // debounce handle
+let saveInFlight   = false; // one PUT at a time
+let savePending    = false; // markDirty fired while saveInFlight
+let autoSavePaused = false; // set on 409 (concurrent writer); cleared only by reload
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -168,7 +175,7 @@ async function init() {
 
 // ── Dirty tracking ─────────────────────────────────────────────────────────
 function markDirty(pageObj) {
-  if (pageObj) dirtyPages.add(pageObj);
+  if (pageObj) { dirtyPages.add(pageObj); editedPages.add(pageObj); }
   updateDirtyUi();
   // Refresh badges live
   document.querySelectorAll('[data-page-badge]').forEach(el => {
@@ -176,9 +183,15 @@ function markDirty(pageObj) {
     const page = story.pages && story.pages[idx];
     if (page) updatePageBadge(el, page);
   });
+  // Auto-save debounce (skip if paused after a 409)
+  if (!autoSavePaused) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => triggerSave(true), 1500);
+  }
 }
 function clearDirty() {
   dirtyPages.clear();
+  document.getElementById('dirty-dot').title = 'Unsaved changes';
   updateDirtyUi();
 }
 function updateDirtyUi() {
@@ -558,12 +571,13 @@ function updatePageBadge(badgeEl, page) {
   const num = page.page_num;
   const rs   = renderStatus[String(num)];
   const rendered = rs && rs.rendered;
-  const dirty    = dirtyPages.has(page);
+  // Use editedPages (not dirtyPages) — amber persists after auto-save until page is re-rendered
+  const edited   = editedPages.has(page);
   let cls = 'badge-render ';
   let txt = '';
-  if (rendered && !dirty)  { cls += 'rendered'; txt = 'rendered'; }
-  else if (rendered && dirty) { cls += 'edited';   txt = 'rendered · edited'; }
-  else                     { cls += 'none';     txt = 'not rendered'; }
+  if (rendered && !edited)  { cls += 'rendered'; txt = 'rendered'; }
+  else if (rendered && edited) { cls += 'edited';   txt = 'rendered · edited'; }
+  else                      { cls += 'none';     txt = 'not rendered'; }
   badgeEl.className = cls;
   badgeEl.textContent = txt;
 }
@@ -732,6 +746,9 @@ function movePage(evt, i, dir) {
 
 function deletePage(evt, i) {
   evt.stopPropagation();
+  const page = story.pages[i];
+  dirtyPages.delete(page);
+  editedPages.delete(page);
   story.pages.splice(i, 1);
   renumberPages();
   renderPages();
@@ -883,17 +900,25 @@ function renderAll() {
 }
 
 // ── Save ───────────────────────────────────────────────────────────────────
-async function triggerSave() {
-  const panel = document.getElementById('status-panel');
-  const btn   = document.getElementById('btn-save');
+// auto=true: quiet failures (no error panel spam); auto=false: loud (manual Save / Ctrl-S).
+// 409 is always loud and pauses all future auto-saves until the page is reloaded.
+async function triggerSave(auto = false) {
+  // Nothing to save — timer may fire after a manual save beat it
+  if (auto && dirtyPages.size === 0) return;
 
-  // Client-side pre-flight: required keys, enums, cast-subset, page_num type.
-  // (non-filesystem — mirrors server but fast feedback without a round-trip)
+  const btn = document.getElementById('btn-save');
+
+  // Client-side pre-flight
   const localErrors = clientValidate();
   if (localErrors.length) {
-    showStatus('error', localErrors);
+    if (!auto) showStatus('error', localErrors);
+    else       showAutoSaveHint(`unsaved · ${localErrors.length} error${localErrors.length > 1 ? 's' : ''}`);
     return;
   }
+
+  // In-flight serialization: queue at most one pending save; prevents self-409
+  if (saveInFlight) { savePending = true; return; }
+  saveInFlight = true;
 
   btn.disabled = true;
   btn.textContent = 'Saving…';
@@ -908,23 +933,28 @@ async function triggerSave() {
     });
     const data = await resp.json();
     if (resp.status === 409) {
+      // Always loud — concurrent writer (e.g. Stage 2 wrote style_sheet) — pause auto-save
+      autoSavePaused = true;
       showStatus('error', [data.error + ' — click "Reload" to load the latest version.'], true);
       return;
     }
     if (resp.status === 422) {
-      showStatus('error', data.errors.concat(data.warnings.map(w => '⚠ ' + w)));
+      if (!auto) showStatus('error', data.errors.concat(data.warnings.map(w => '⚠ ' + w)));
+      else       showAutoSaveHint('unsaved · validation error');
       return;
     }
     if (!resp.ok) {
-      showStatus('error', [data.error || 'Unknown server error']);
+      if (!auto) showStatus('error', [data.error || 'Unknown server error']);
+      else       showAutoSaveHint('unsaved · server error');
       return;
     }
     storyMtime = data.mtime;
     clearDirty();
+    hideAutoSaveHint();
     renderPages(); // refresh badges
     if (data.warnings && data.warnings.length) {
       showStatus('warn', data.warnings.map(w => '⚠ ' + w));
-    } else {
+    } else if (!auto) {
       hideStatus();
     }
     // Refetch status after save (style_sheet may now exist)
@@ -934,10 +964,14 @@ async function triggerSave() {
     charStatusData = sd.characters || {};
     renderPages();
   } catch (e) {
-    showStatus('error', ['Network error: ' + e.message]);
+    if (!auto) showStatus('error', ['Network error: ' + e.message]);
+    else       showAutoSaveHint('unsaved · network error');
   } finally {
+    saveInFlight = false;
     btn.disabled = false;
     btn.textContent = 'Save';
+    // Drain the queue: one pending save at most
+    if (savePending) { savePending = false; triggerSave(auto); }
   }
 }
 
@@ -979,6 +1013,19 @@ function hideStatus() {
   const p = document.getElementById('status-panel');
   p.className = 'status-panel';
   p.style.display = 'none';
+}
+// Auto-save hint: subtle header message for background-save errors (no panel spam)
+function showAutoSaveHint(msg) {
+  const h = document.getElementById('autosave-hint');
+  if (h) { h.textContent = msg; h.style.display = ''; }
+  const dot = document.getElementById('dirty-dot');
+  if (dot) dot.title = msg;
+}
+function hideAutoSaveHint() {
+  const h = document.getElementById('autosave-hint');
+  if (h) { h.textContent = ''; h.style.display = 'none'; }
+  const dot = document.getElementById('dirty-dot');
+  if (dot) dot.title = 'Unsaved changes';
 }
 
 // ── Keyboard shortcut ──────────────────────────────────────────────────────
