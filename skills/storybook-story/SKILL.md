@@ -156,8 +156,24 @@ story.json written to: {out_dir}/story.json
 Please review and edit the text, image prompts, and character descriptions, then
 tell me when to proceed. Open the file in any editor — change 'text' freely, keep
 'page_num' intact, and make 'characters[].appearance' as specific as you can.
+Or say "open the editor" for a visual form instead of raw JSON.
 
 Next: storybook-stylesheet (Stage 2) builds the character style sheet.
 ```
+
+### Visual editor (optional)
+
+When the user asks to open the editor or prefers a visual form over raw JSON,
+launch the local browser editor:
+
+```bash
+uv run {skillDir}/scripts/edit_story.py --story {out_dir}/story.json
+```
+
+It opens a browser form (localhost only, free, no API key) covering the title,
+style guide with live palette swatches, the cast with photo previews, and every
+page (text, image prompt, per-page cast with hero-first ordering). Validates
+against `assets/story_schema.json` before saving back to the same file and
+preserves all fields it does not recognise.
 
 Stop. Do not proceed until the user explicitly approves.

@@ -155,6 +155,29 @@ never crash the render. Tunables are module constants near the top (`BOX_ALPHA`,
 script never bakes story text into the generated image — every `image_prompt` reserves a
 low-detail safe zone for this overlay.
 
+## Local visual editor (`edit_story.py`)
+
+`skills/storybook-story/scripts/edit_story.py` is a stdlib-only PEP-723 script that
+launches a tiny local HTTP server (127.0.0.1 only) and opens `assets/editor.html` in
+the browser. It provides a visual form for `story.json` — book settings, cast with
+photo previews, palette swatches, and a page-by-page editor with hero-ordered cast
+selection and render-status badges. No API cost, no dependencies beyond Python ≥ 3.10.
+
+```bash
+uv run skills/storybook-story/scripts/edit_story.py --story /path/to/story.json
+# headless smoke test:
+uv run skills/storybook-story/scripts/edit_story.py --story /path/to/story.json \
+  --no-browser --port 8766
+```
+
+Round-trip contract: the editor preserves unknown keys at all levels and uses the same
+formatter as `make_style_sheet.py` (`json.dump(indent=2, ensure_ascii=False)`). Optional
+fields never get materialised when absent — the no-edit save is semantically stable.
+Validates against `story_schema.json` before writing, with separate error (blocking) vs.
+warning (non-blocking) tiers. Includes a 409 conflict guard: if `story.json` changes on
+disk while the editor is open (e.g. Stage 2 writes `style_sheet` paths), the save
+returns an error and a Reload button rather than silently clobbering the new content.
+
 ## Smoke-testing changes (do this on task completion)
 
 When a task is complete, smoke-test the change against the **pip-storm fixture** in
