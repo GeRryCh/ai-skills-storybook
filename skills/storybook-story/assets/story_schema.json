@@ -6,8 +6,8 @@
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string", "description": "Book title" },
-    "age_band": { "type": "string", "enum": ["3-5", "5-8"] },
-    "style": { "type": "string", "description": "Short human-readable illustration style label, e.g. 'soft watercolor, pastel palette'. Used in prose (image_prompts mention it) and as a quick summary; the paid scripts inject 'style_guide' (required) into every API call, not this field." },
+    "age_band": { "type": "string", "enum": ["3-5", "5-8"], "x-interview": { "priority": "core", "ask": "Who is the book for — which reader age band?" } },
+    "style": { "type": "string", "description": "Short human-readable illustration style label, e.g. 'soft watercolor, pastel palette'. Used in prose (image_prompts mention it) and as a quick summary; the paid scripts inject 'style_guide' (required) into every API call, not this field.", "x-interview": { "priority": "core", "ask": "What illustration style? E.g. soft watercolor (default), bold flat cartoon, colored-pencil, paper-cutout collage — or describe your own." } },
     "style_guide": {
       "type": "object",
       "description": "REQUIRED structured style guide. The render and stylesheet scripts assemble a single deterministic style block from these fields (in fixed order: medium → palette → line → lighting → mood) and inject it byte-identically into every API call. This locks book-wide visual consistency — each page is a separate stateless API call, and having the exact same verbatim block in every prompt is the documented consistency mechanism (per Google's Book_illustration workflow). Both paid scripts refuse to run when this object is missing or empty. At least one field must be set.",
@@ -55,7 +55,8 @@
       "type": "string",
       "enum": ["overlay", "native", "long"],
       "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. 'long': each body page becomes two physical pages — (1) full-bleed art with no text (pages/page-NN-long.png), (2) a separate text-only page with the story text on a centered, feathered semi-transparent panel over ONE shared model-generated background reused book-wide (pages/text-bg-long.png; designed with a reserved low-detail central text area). Cover (page 1) stays a single combined overlay-style page. Cost = N art calls + 1 shared-background call; a page with 'text_background_prompt' gets its own dedicated background instead (+1 call for that page). render_book.py's --text-mode flag overrides this per run.",
-      "default": "native"
+      "default": "native",
+      "x-interview": { "priority": "core", "ask": "How should the story text appear on the pages? 'long' suits text-heavy books for ages 5-8 (~80+ words per spread)." }
     },
     "text_background_prompt": {
       "type": "string",
@@ -64,11 +65,13 @@
     "language": {
       "type": "string",
       "description": "Optional BCP-47 language tag for the book text (e.g. 'en', 'de', 'en-GB'). Used as dc:language metadata in EPUB output. Default: 'en'.",
-      "default": "en"
+      "default": "en",
+      "x-interview": { "priority": "advanced", "ask": "Book language (BCP-47 tag, e.g. en, de)." }
     },
     "fonts": {
       "type": "object",
       "description": "Optional book-wide map of text role -> font family name. Defines which font each per-page 'font' role uses. Values are family names (e.g. 'Arial', 'Patrick Hand') resolved at render time: bundled asset in assets/fonts/ -> system-installed font -> bundled role default. Omit to use the bundled Andika (reader) / PatrickHand (display).",
+      "x-interview": { "priority": "advanced", "ask": "Custom fonts for body text (reader) and titles (display); bundled Andika / Patrick Hand by default." },
       "additionalProperties": false,
       "properties": {
         "reader": { "type": "string", "description": "Body-text font family. Default: Andika (bundled)." },
@@ -78,19 +81,22 @@
     "resolution": {
       "type": "string",
       "enum": ["1K", "2K", "4K"],
-      "description": "Optional book-wide image resolution for page rendering. 2K (default) is good for screen and print up to ~8×8 in; 1K is faster/cheaper for drafts; 4K for large-format print. The render CLI --resolution flag overrides this value when passed explicitly."
+      "description": "Optional book-wide image resolution for page rendering. 2K (default) is good for screen and print up to ~8×8 in; 1K is faster/cheaper for drafts; 4K for large-format print. The render CLI --resolution flag overrides this value when passed explicitly.",
+      "x-interview": { "priority": "advanced", "ask": "Render quality vs cost — 1K draft / 2K standard / 4K large-format print." }
     },
     "aspect_ratio": {
       "type": "string",
       "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
-      "description": "Optional book-wide aspect ratio applied to both style sheets and page renders. When omitted, the model picks framing on each call (non-deterministic). Set this to lock consistent framing across all sheets and pages (e.g. '4:3' for landscape, '3:4' for portrait, '1:1' for square). The stylesheet/render CLI --aspect-ratio flag overrides this value when passed explicitly."
+      "description": "Optional book-wide aspect ratio applied to both style sheets and page renders. When omitted, the model picks framing on each call (non-deterministic). Set this to lock consistent framing across all sheets and pages (e.g. '4:3' for landscape, '3:4' for portrait, '1:1' for square). The stylesheet/render CLI --aspect-ratio flag overrides this value when passed explicitly.",
+      "x-interview": { "priority": "advanced", "ask": "Lock one page framing for the whole book, or leave unset to let the model choose per page." }
     },
     "saved_formats": {
       "type": "array",
       "items": { "type": "string", "enum": ["pdf", "epub"] },
       "uniqueItems": true,
       "description": "Optional list of book file formats assembled after a full render: 'pdf' (multi-page PDF) and/or 'epub' (fixed-layout EPUB3). When omitted, ALL formats are produced. An empty array skips assembly. The render CLI --saved-formats flag overrides this value when passed explicitly ('none' to skip for one run).",
-      "default": ["pdf", "epub"]
+      "default": ["pdf", "epub"],
+      "x-interview": { "priority": "advanced", "ask": "Which finished book files to assemble after rendering." }
     },
     "pages": {
       "type": "array",

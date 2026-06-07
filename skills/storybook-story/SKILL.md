@@ -7,9 +7,10 @@ description: >
   "make a book about X", "write a storybook", "generate a kids book", or any request
   that combines a story idea with the word "illustrate", "pages", or "book".
   Even if the user only describes a character and says "make a story" — use this skill.
-  This is the ENTRY POINT: it produces story.json (free, no API). The user edits and
-  approves it, then storybook-stylesheet (Stage 2) and storybook-render (Stage 3) turn
-  it into illustrated pages.
+  This is the ENTRY POINT: it produces story.json (free, no API). Guides the user through
+  a short schema-driven interview before writing story.json. The user edits and approves
+  it, then storybook-stylesheet (Stage 2) and storybook-render (Stage 3) turn it into
+  illustrated pages.
 metadata:
   requires: {}
 ---
@@ -30,36 +31,54 @@ Read `assets/STYLE_PRIMER.md` and `assets/story_schema.json` before writing the 
 
 ---
 
-## Inputs
+## Interview
 
-Gather these from the user (ask once if not provided):
+Act as a guide through the decisive configuration choices **before writing anything**. Never re-ask what the user already stated in their request — ask only unknowns.
 
-| Input | Source | Default |
-|-------|--------|---------|
-| Story idea | free-text prompt | required |
-| Character reference photos | absolute paths (photos may contain multiple people — see Source-photo analysis below) | none |
-| Target age band | `3-5` or `5-8` | `3-5` |
-| Number of pages (spreads) | N | `8` |
-| Illustration style | free text | `"soft watercolor, gentle pastel palette, children's picture book"` |
-| Output directory | path | current working directory |
+### Static inputs (creative/structural — not schema-driven)
+
+These stay fixed in SKILL.md because they are prose-authored, not scalar knobs that churn with schema changes:
+
+| Input | Default | Notes |
+|-------|---------|-------|
+| Story idea | required | Core premise, setting, who the book is about |
+| Character look | — | Real photos of child/family, or invented characters? + absolute photo paths if photos supplied (may contain multiple people — see Source-photo analysis) |
+| Number of pages | `8` | Story length; ask alongside `text_mode` — both express length (PER-31) |
+| Output directory | current working directory | Don't ask; surface in the config summary |
+
+### Schema-driven questions — the generic algorithm
+
+The following algorithm covers **scalar book-level knobs** that churn when the schema evolves. SKILL.md never needs editing when a knob is added; only `story_schema.json` changes.
+
+1. Read `assets/story_schema.json`. Collect every top-level property whose definition contains an `"x-interview"` key. Properties without it are never asked.
+2. `"priority": "core"` → ask now, in the interview batch. `"priority": "advanced"` → never ask; present once in the configuration summary (Gate 1) as an overridable default.
+3. Per core question: question text = the `"ask"` value; if the property has an `"enum"`, the enum values become options with the default first (schema `"default"` if present, else the first enum value); option glosses derived from the property's `"description"`; non-enum fields are free-text with examples from `"ask"`.
+4. Enums with more than 4 values (e.g. `aspect_ratio`): present the default plus the 3 most visually representative options; any legal enum value typed free-form is accepted (the structured tool's automatic "Other" covers this).
+5. Use a structured question tool (e.g. AskUserQuestion) when available — batch core schema questions with still-unknown static inputs, up to the tool's per-call limit (4 questions/call); use a second call only if needed; otherwise degrade to one compact plain-chat message. Target ~4–6 questions total.
+6. **Required-field guard:** after collecting, cross-check `schema.required`. Any required field NOT covered by a core question or the known prose-authored set (`title`, `style_guide`, `cast`, `pages`) is a gap — surface it to the user and ask explicitly. Never skip it silently. (The guard makes the dynamic mechanism self-maintaining for the dangerous case where a new required scalar field is added to the schema.)
 
 ---
 
 ## Steps
 
 1. Read `assets/STYLE_PRIMER.md` (word counts, text placement, safe-zone rule).
-2. Read `assets/story_schema.json` to understand required fields.
-3. Read `assets/story_example.json` as a concrete pattern to follow.
+2. Read `assets/story_schema.json` and `assets/story_example.json`.
+3. **Run the Interview** — collect static inputs and core schema choices in one or two structured-question batches. Fold "is this a specific real named place?" into the batch when the story idea mentions a recognizable landmark (see Locations below).
 4. **Analyze any supplied photos** (see Source-photo analysis below) before authoring the cast.
 5. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
-6. Write `{out_dir}/story.json` following the schema exactly.
-7. **Validate `story.json` against the schema** — run the validator and fix any errors before continuing:
+6. Author cast, propose title, author `style_guide` (from the style answer + STYLE_PRIMER).
+7. **Gate 1: Configuration summary — confirm before writing** (see Configuration summary section below). Stop and wait for "go".
+8. Draft page prose and image prompts — word counts per the now-locked `age_band` and `text_mode` (drafting after Gate 1 avoids rework when a summary override changes word-count guidance).
+9. Write `{out_dir}/story.json` following the schema exactly.
+10. **Validate `story.json` against the schema** — run the validator and fix any errors before continuing:
 
 ```bash
 uv run {skillDir}/scripts/validate_story.py --story {out_dir}/story.json
 ```
 
 Exits 0 when clean. On errors (exit 2), fix `story.json` and re-run until clean. Surface any warnings to the user; they never block but may point to missing files or duplicate names worth reviewing.
+11. Show the Handoff message.
+12. **Gate 2: prose review** — stop and wait for explicit user approval before Stage 2.
 
 ### Source-photo analysis (BEFORE authoring the cast)
 
@@ -297,24 +316,63 @@ Every `image_prompt` MUST:
 
 ---
 
+## Configuration summary (Gate 1 — before writing story.json)
+
+Present the full resolved configuration for confirmation **before writing anything**. This is the first gate; the prose-review gate (Gate 2) follows after `story.json` is written.
+
+**Show a static header block:**
+```
+📖 Title (proposed): {proposed_title}
+📄 Pages: {N}
+📁 Output: {out_dir}
+🎭 Cast: {name} → {photo path or "invented"}, ...
+🎨 Style: {style_guide gist: medium + palette}
+```
+
+**Then a settings table:**
+
+| Setting | Value | Source |
+|---------|-------|--------|
+| age_band | {chosen} | answered / default |
+| style | {chosen} | answered / default |
+| text_mode | {chosen} | answered / default |
+| resolution | {value or "unset — 2K used at render time"} | default |
+| aspect_ratio | {value or "unset — model picks per page"} | default |
+| saved_formats | {value or "pdf + epub (all)"} | default |
+| language | {value} | default |
+| fonts | {value or "bundled Andika / Patrick Hand"} | default |
+
+The table rows come from the `x-interview`-annotated properties in `story_schema.json` — if new annotated fields appear in the schema, they appear here automatically.
+
+**Closing prompt:**
+```
+Reply "go" to accept this configuration, or name any setting to change
+(e.g. "resolution 4K, aspect_ratio 3:4"). Enum values for each setting
+are listed in the schema; any legal value is accepted.
+```
+
+Validate overrides against the field's `enum`; re-show only the changed rows; then proceed to drafting.
+
+### Omission rule
+
+Required fields (`title`, `age_band`, `style`, `style_guide`, `cast`, `pages`) are always written. Every **optional** field is written to `story.json` only when the user's choice diverges from the omission semantics — accepting a default means the key is omitted (preserves the editor's round-trip contract; optional fields that match the documented default are never materialised).
+
+Important edge cases:
+- `saved_formats: []` means "skip assembly" — this is NOT the same as omitting the field (which means "all formats"). Only write `[]` when the user explicitly requests no book files.
+- `aspect_ratio` omitted = model picks framing per page call (non-deterministic). Only write it when the user wants locked framing.
+- `resolution` omitted = 2K at render time. Only write it when the user specifies a quality.
+
+---
+
 ## Handoff
 
 ### Optional top-level config
 
-- **`text_mode`** — `"native"` (default), `"overlay"`, or `"long"`. Native bakes the story text directly into each illustration; overlay Pillow-composites it post-generation. **Long mode** splits each body page into two physical pages: a full-bleed illustration with no text, followed by a text-only page with the story text on a centered panel over ONE shared model-generated background reused book-wide (designed with a reserved central text area; +1 paid call total for the book). Choose `"long"` for text-heavy stories, older readers (age 5–8), or when the story carries more than ~80 words per spread. Cover (page 1) stays a single combined page in long mode. Pages with empty `text` emit an art-only page. Omit to use the default (`"native"`).
-- **`saved_formats`** — array of `"pdf"` and/or `"epub"` specifying which book file(s) the render stage assembles after a full render. Omit to produce all formats (default). Set `[]` to skip assembly. The render CLI `--saved-formats` flag overrides if passed explicitly.
-- **`language`** — BCP-47 language tag for the book text (e.g. `"en"`, `"de"`, `"en-GB"`). Used as `dc:language` metadata in the EPUB. Omit for the `"en"` default; set only when the story is non-English.
-- **`fonts`** — book-wide role → font-family map (see STYLE_PRIMER typography rules). Omit to use bundled Andika/PatrickHand.
-- **`resolution`** — `"1K"` / `"2K"` / `"4K"` image quality for page rendering. Default `"2K"`. Set this at the approval gate (it is a cost/quality decision for the user, not something to auto-pick). `"1K"` for fast/cheap drafts; `"4K"` for large-format print. The render CLI `--resolution` flag overrides if passed explicitly.
-- **`aspect_ratio`** — book-wide framing for both style sheets and page renders. Choices: `"1:1"` `"2:3"` `"3:2"` `"3:4"` `"4:3"` `"4:5"` `"5:4"` `"9:16"` `"16:9"` `"21:9"`. When omitted the model picks framing on each call (non-deterministic). Set only when the user wants consistent, fixed framing across the whole book. The render/stylesheet CLI `--aspect-ratio` flag overrides if passed explicitly.
-
-Do **not** auto-set `resolution` — leave it out unless the user asks for a specific quality.
-
-Do **not** auto-set `aspect_ratio` — leave it out unless the user wants fixed framing. Omitting it preserves today's behavior (model chooses per call) and avoids silently changing framing on existing books.
+Every optional book-level knob is defined in `assets/story_schema.json`; each property's `"description"` is the authoritative reference; interview/summary behavior comes from its `"x-interview"` annotation. See `CLAUDE.md` for the contract.
 
 Per-page `text_placement` defaults to `"floating"` (native mode). Override to `"top"` or `"bottom"` to pin text to a fixed band.
 
-**Long mode text-page backgrounds:** an optional top-level `text_background_prompt` customizes the shared book-wide background (omit for a generic style-matched one). An optional per-page `text_background_prompt` gives that page its OWN dedicated background instead of the shared one, via one extra paid Gemini call (the book style block is injected; no character references are sent; a low-detail central area is reserved for text).
+**Long mode text-page backgrounds:** an optional top-level `text_background_prompt` customizes the shared book-wide background (omit for a generic style-matched one). An optional per-page `text_background_prompt` gives that page its OWN dedicated background instead of the shared one, via one extra paid Gemini call.
 
 ---
 
