@@ -1,0 +1,85 @@
+{
+  "title": "Pip in the Valley of Gazelles",
+  "age_band": "3-5",
+  "style": "soft watercolor, warm Mediterranean palette, children's picture book illustration",
+  "style_guide": {
+    "medium": "soft watercolor with gentle pen-and-ink outline",
+    "palette": ["warm Jerusalem stone #D4B896", "sage and dry-grass green #A8B87C", "open sky blue #87CEEB", "amber sunset #E8A050", "dusty rose #D49080"],
+    "line": "thin warm sepia ink, rounded soft corners",
+    "lighting": "warm Mediterranean golden light, long soft shadows, clear open sky",
+    "mood": "curious, adventurous, warm and reassuring"
+  },
+  "characters": [
+    {
+      "name": "Pip",
+      "appearance": "small brave hedgehog, round body, soft brown spines, big curious dark eyes, tiny pink nose, wears a tiny red scarf",
+      "ref_image": ["refs/pip-ref.png"],
+      "style_sheet": "style-sheet-pip.png"
+    }
+  ],
+  "locations": [
+    {
+      "name": "Gazelle Valley",
+      "ref_image": "refs/loc-gazelle-valley.jpg",
+      "description": "Gazelle Valley (עמק הצבאים) — urban nature park in Jerusalem: rocky hillside terrain, dry golden scrub, wild gazelles roaming freely, Jerusalem neighborhoods visible on the surrounding hills",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Gazelle-Valley-093.jpg"
+    }
+  ],
+  "text_mode": "overlay",
+  "resolution": "1K",
+  "aspect_ratio": "4:3",
+  "saved_formats": ["pdf", "epub"],
+  "pages": [
+    {
+      "page_num": 1,
+      "characters": ["Pip"],
+      "location": "Gazelle Valley",
+      "text": "Pip in the Valley of Gazelles",
+      "image_prompt": "Cover of a children's picture book. A small brave hedgehog named Pip stands on a rocky path in Gazelle Valley Jerusalem, the open valley stretching behind in warm golden afternoon light, two gazelles grazing peacefully in the distance, rolling Jerusalem hills beyond. Soft watercolor, warm Mediterranean palette.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark",
+      "text_align": "center",
+      "font": "display"
+    },
+    {
+      "page_num": 2,
+      "characters": ["Pip"],
+      "location": "Gazelle Valley",
+      "text": "Every morning, Pip explored Gazelle Valley. The rocky paths went on and on!",
+      "image_prompt": "A small brave hedgehog named Pip trotting happily along a winding dusty path through Gazelle Valley Jerusalem, dry golden grasses and wild scrub on either side, three gazelles standing alertly on a nearby rocky slope watching Pip curiously, warm morning light, open blue sky. Children's picture book illustration, soft watercolor.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark",
+      "font": "reader"
+    },
+    {
+      "page_num": 3,
+      "characters": ["Pip"],
+      "location": "Gazelle Valley",
+      "text": "One day Pip found a baby gazelle, all alone and lost.",
+      "image_prompt": "A small brave hedgehog named Pip standing face-to-face with a tiny baby gazelle on a rocky hillside in Gazelle Valley Jerusalem, both looking at each other with big curious eyes, dry rocky terrain and distant Jerusalem stone buildings in the background, warm afternoon light. Children's picture book illustration, soft watercolor.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark",
+      "font": "reader"
+    },
+    {
+      "page_num": 4,
+      "characters": ["Pip"],
+      "location": "Gazelle Valley",
+      "text": "Pip led the little one back across the valley — and soon its family came running!",
+      "image_prompt": "A small brave hedgehog named Pip trotting ahead leading a baby gazelle across the open floor of Gazelle Valley Jerusalem, the baby gazelle following close behind, a group of three adult gazelles running joyfully towards them in the background, golden late-afternoon light flooding the valley. Children's picture book illustration, soft watercolor.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark",
+      "font": "reader"
+    },
+    {
+      "page_num": 5,
+      "characters": ["Pip"],
+      "location": "Gazelle Valley",
+      "text": "The gazelles nuzzled Pip gently. In the valley, everyone looks after everyone.",
+      "image_prompt": "A small brave hedgehog named Pip surrounded by a family of four gazelles in Gazelle Valley Jerusalem at sunset, the gazelles bowing their heads down gently towards Pip, warm amber and rose sunset light over the rocky valley, Jerusalem hillsides glowing in the distance. Children's picture book illustration, soft watercolor.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark",
+      "font": "reader"
+    }
+  ]
+}
