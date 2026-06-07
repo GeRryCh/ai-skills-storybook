@@ -41,7 +41,9 @@ entry gets a sheet**: characters (`kind` absent or `"character"`), objects (`kin
 entry's downloaded real-place photo(s) in `ref_image` (Stage 1, PER-50) when present —
 preserving the place's recognisable architecture, landmarks, and geography in the book's art
 style — or from `appearance` alone for fictional places. Each sheet shows that cast member
-alone at multiple angles. Reference images are used as input: only that entry's own
+alone: for characters, exactly four views — full-body front (анфас), full-body left profile,
+full-body right profile, and a face close-up; for objects and locations, multiple
+representative angles. Reference images are used as input: only that entry's own
 `ref_image` (a single path or an array of paths — **every path must be a single-person
 image** for characters; if the source photo was a group photo, use the per-person crop
 produced in Stage 1, not the original), capped at 5 (the Gemini 3 Pro Image
