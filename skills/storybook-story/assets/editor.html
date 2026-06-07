@@ -149,6 +149,28 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 .btn-recomp:hover:not(:disabled){background:#bbf7d0;cursor:pointer}
 .btn-recomp:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
 .regen-status-inline{font-size:11px;color:#64748b}
+/* Consolidate modal */
+dialog#consolidate-modal{border:1px solid #e2e8f0;border-radius:10px;
+  padding:24px;max-width:480px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+dialog#consolidate-modal::backdrop{background:rgba(15,23,42,.45)}
+dialog#consolidate-modal h3{margin:0 0 16px;font-size:16px;color:#1e293b}
+dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
+.cm-section{margin-bottom:16px}
+.cm-section label{font-size:13px;font-weight:500;color:#374151;display:flex;
+  gap:6px;align-items:center;cursor:pointer}
+.cm-section .cm-legend{font-size:12px;font-weight:600;color:#475569;
+  margin-bottom:6px;display:block}
+.cm-zip-row{margin-top:10px;padding-top:10px;border-top:1px solid #f1f5f9}
+.cm-zip-row small{font-size:11px;color:#94a3b8}
+.cm-results{margin:12px 0;min-height:0}
+.cm-result-item{font-size:13px;padding:3px 0}
+.cm-result-ok{color:#166534}
+.cm-result-err{color:#991b1b}
+.cm-result-err pre{white-space:pre-wrap;word-break:break-all;font-size:11px;
+  margin-top:2px;background:#fee2e2;border-radius:4px;padding:4px 8px;
+  max-height:80px;overflow:auto}
+.cm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;
+  padding-top:12px;border-top:1px solid #f1f5f9}
 </style>
 </head>
 <body>
@@ -165,6 +187,26 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 <main id="main">
   <p style="color:#64748b">Loading…</p>
 </main>
+
+<!-- Consolidate Story modal — lives outside <main> so renderAll() wipes don't remove it -->
+<dialog id="consolidate-modal">
+  <h3>Consolidate Story <small>(Stage 4 — free, no API calls)</small></h3>
+  <div class="cm-section">
+    <span class="cm-legend">Formats (saved to story.json):</span>
+    <div id="sf-container"></div>
+    <div class="cm-zip-row">
+      <label>
+        <input type="checkbox" id="cm-zip">
+        also build zip package <small>(run-time only — story.json + pages + sheets + book files)</small>
+      </label>
+    </div>
+  </div>
+  <div class="cm-results" id="cm-results"></div>
+  <div class="cm-actions">
+    <button class="btn-sm" onclick="closeConsolidateModal()">Close</button>
+    <button class="btn-primary" id="cm-run" onclick="runConsolidate()">Run</button>
+  </div>
+</dialog>
 
 <script>
 'use strict';
@@ -492,7 +534,9 @@ function renderSavedFormats(container) {
       if (container.querySelector('#sf-epub').checked) vals.push('epub');
       story.saved_formats = vals;
     }
-    markDirty(null);
+    // Pass field name so NEUTRAL_BOOK_FIELDS keeps this Pillow-free change
+    // from tripping the sticky bookPaidEdit flag (which kills fast re-composite).
+    markDirty(null, 'saved_formats');
   };
   expl.addEventListener('change', updateSf);
   container.querySelector('#sf-pdf').addEventListener('change', updateSf);
@@ -1046,17 +1090,7 @@ function renderBook() {
         <div class="field"><label>Display font (titles)</label><input type="text" id="book-font-display" placeholder="Patrick Hand"></div>
       </div>
     </fieldset>
-    <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
-      <legend style="font-size:12px;font-weight:600;color:#475569;padding:0 6px">export (Stage 4 — storybook-consolidate)</legend>
-      <div class="field">
-        <label>Language <small style="color:#94a3b8">(BCP-47, e.g. en, de, en-GB — EPUB dc:language metadata)</small></label>
-        <input type="text" id="book-language">
-      </div>
-      <div class="field">
-        <label>Saved formats <small style="color:#94a3b8">(hint for the export stage — nothing auto-assembles at render time)</small></label>
-        <div id="sf-container"></div>
-      </div>
-    </fieldset>`;
+    `;
 
   // Bind scalar fields
   const sg = story.style_guide || (story.style_guide = {});
@@ -1107,8 +1141,7 @@ function renderBook() {
   // Palette
   renderPaletteRows(b.querySelector('#palette-container'));
 
-  // Saved formats
-  renderSavedFormats(b.querySelector('#sf-container'));
+  // Saved formats moved to the Consolidate Story modal — rendered there on open.
 
   // Apply field-dependency rules (PER-48).
   applyDeps(b, null);
@@ -1392,6 +1425,108 @@ async function doRegenerate(num) {
   }
 }
 
+// ── Consolidate Story modal ────────────────────────────────────────────────
+let _consolidatePoll = null;
+
+function openConsolidateModal() {
+  const dlg = document.getElementById('consolidate-modal');
+  // Render the saved_formats tri-state into the modal's #sf-container.
+  renderSavedFormats(document.getElementById('sf-container'));
+  document.getElementById('cm-zip').checked = false;
+  // Resume status poll if a consolidation job is already running.
+  _refreshConsolidateStatus();
+  dlg.showModal();
+}
+
+function closeConsolidateModal() {
+  document.getElementById('consolidate-modal').close();
+}
+
+// Close on backdrop click (click whose target IS the dialog element itself).
+document.addEventListener('DOMContentLoaded', () => {
+  const dlg = document.getElementById('consolidate-modal');
+  dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+  dlg.addEventListener('close', () => {
+    if (_consolidatePoll) { clearInterval(_consolidatePoll); _consolidatePoll = null; }
+  });
+});
+
+async function runConsolidate() {
+  // Compute effective formats from the tri-state + zip toggle.
+  const sf = story.saved_formats; // undefined | array
+  const eff = sf === undefined ? ['pdf', 'epub'] : sf;   // unset = all; [] = none
+  const formats = [...eff];
+  if (document.getElementById('cm-zip').checked) formats.push('zip');
+
+  if (!formats.length) {
+    alert('Nothing to export. Enable at least one format in Saved formats, or check "also build zip".');
+    return;
+  }
+
+  // Flush unsaved edits so the scripts read the latest story.json (including
+  // any saved_formats change made inside this modal before clicking Run).
+  if (dirtyPages.size > 0) {
+    await triggerSave(false);
+    if (dirtyPages.size > 0) {
+      alert('Please save your changes first, then try consolidating.');
+      return;
+    }
+  }
+
+  const runBtn = document.getElementById('cm-run');
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running…';
+  document.getElementById('cm-results').innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/consolidate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({formats}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run';
+      alert('Could not start consolidation:\n\n' + (data.error || resp.statusText));
+      return;
+    }
+    _consolidatePoll = setInterval(_refreshConsolidateStatus, 1500);
+  } catch (e) {
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run';
+    alert('Network error: ' + e.message);
+  }
+}
+
+async function _refreshConsolidateStatus() {
+  try {
+    const resp = await fetch('/api/consolidate/status');
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // Render per-format results live.
+    const resultsEl = document.getElementById('cm-results');
+    if (resultsEl && data.results && data.results.length) {
+      resultsEl.innerHTML = data.results.map(r => {
+        if (r.ok) {
+          return `<div class="cm-result-item cm-result-ok">✓ ${r.format}${r.path ? ` → <code>${r.path}</code>` : ''}</div>`;
+        }
+        return `<div class="cm-result-item cm-result-err">✗ ${r.format}` +
+          (r.error ? `<div class="regen-error"><pre>${r.error.replace(/</g,'&lt;')}</pre></div>` : '') +
+          `</div>`;
+      }).join('');
+    }
+
+    // Stop polling on terminal states.
+    if (data.status === 'done' || data.status === 'error') {
+      if (_consolidatePoll) { clearInterval(_consolidatePoll); _consolidatePoll = null; }
+      const runBtn = document.getElementById('cm-run');
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run'; }
+    }
+  } catch (_) { /* network blip — keep polling */ }
+}
+
 // ── Full render ────────────────────────────────────────────────────────────
 function renderAll() {
   const main = document.getElementById('main');
@@ -1414,7 +1549,10 @@ function renderAll() {
         📄 Pages <span class="toggle">▼</span>
       </h2>
       <div class="section-body" id="pages-body"></div>
-    </section>`;
+    </section>
+    <div style="text-align:center;margin:4px 0 24px">
+      <button class="btn-primary" onclick="openConsolidateModal()">📦 Consolidate Story</button>
+    </div>`;
   renderBook();
   renderCast();
   renderPages();

@@ -265,7 +265,9 @@ and hit Regenerate to retry that page on the stronger model without touching the
 different mode than the book default). Fields that have no effect given the current effective text mode
 are greyed-out (user may still pre-set them); the `floating` placement option is hard-hidden
 when not in native mode. No API cost for browsing/selecting; regenerate triggers one
-paid Gemini call per page.
+paid Gemini call per page. A **"📦 Consolidate Story" button** sits below the Pages section
+and opens a modal (PER-49) for managing `saved_formats` and running Stage 4 directly from
+the editor — see "Consolidate Story modal" below.
 
 ```bash
 uv run skills/storybook-story/scripts/edit_story.py --story /path/to/story.json
@@ -309,6 +311,36 @@ Four server endpoints power per-page image controls:
 - **`POST /api/page/select`** body `{page_num, version}` — copies a history entry's
   artifact set into the canonical slot (the "used in book" image). Free, synchronous.
   All mutating endpoints gate on a per-page lock (409 if one is running).
+
+All three page-mutating endpoints also 409 while a consolidation job is running (merging
+reads pages/ concurrently with a regen that deletes canonicals would corrupt output).
+
+### Consolidate Story modal (PER-49)
+
+The export configuration (`saved_formats`) that was in the Book settings fieldset has been
+moved into a **"📦 Consolidate Story" modal** that also lets the user run Stage 4 directly.
+
+Two new server endpoints (both free, no API key, global consolidate lock):
+
+- **`POST /api/consolidate`** body `{formats: ["pdf","epub","zip"]}` — spawns
+  `merge_pdf.py`, `merge_epub.py`, and/or `package_book.py` sequentially in a background
+  thread (fixed order: pdf → epub → zip, so `package_book.py` globs books that just merged).
+  No `--text-mode` flag: the scripts resolve text mode from story.json themselves. Returns
+  200 immediately; poll `/api/consolidate/status` to watch progress.
+  409 if consolidation is already running OR any page render is running.
+- **`GET /api/consolidate/status`** — returns `{ok, status:"idle"|"running"|"done"|"error",
+  results:[{format, ok, path, error}]}`. Each result is appended under lock as it completes
+  (live per-format progress). Cheap poll target (mirrors `/api/versions` for pages).
+
+**Lock discipline:** `_consolidate_job` (module-level dict) is always mutated in place
+under `_regen_lock` (same lock as `_regen_jobs`). The worker thread never holds the lock
+across `subprocess.run` — status polls (also locked) would deadlock otherwise.
+
+**Modal layout:** single format set — the existing `saved_formats` tri-state (unset/`[]`/explicit)
+is rendered inside the modal and persists to story.json on change; a separate "also build zip"
+checkbox is run-time-only (never written to story.json; `saved_formats` schema stays `["pdf","epub"]`).
+Run flushes unsaved edits first (same dirty-check as the page regenerate button) so scripts
+read the latest story.json.
 
 ### Smart regenerate buttons (PER-47)
 

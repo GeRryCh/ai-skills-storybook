@@ -35,6 +35,15 @@ Endpoints:
                                prerequisite raw/art/bg is missing, 409 if a render is running.
   POST /api/page/select       copy a history version into the canonical slot (free, no API
                                call). Sets the "used in book" image for that page.
+  POST /api/consolidate       assemble PDF, EPUB, and/or zip package from rendered pages
+                               (free, no API key). Body: {formats: ["pdf","epub","zip"]}.
+                               Spawns merge_pdf.py / merge_epub.py / package_book.py
+                               sequentially in a background thread. Returns 200 immediately;
+                               poll /api/consolidate/status to watch progress.
+                               409 if consolidation or any page render is already running.
+  GET  /api/consolidate/status  consolidation job status + per-format results.
+                               Returns {ok, status:"idle"|"running"|"done"|"error",
+                               results:[{format,ok,path,error}]}.
 
 /img security stance: serving absolute paths outside the book directory is the
 feature — `ref_image` is documented as absolute paths anywhere on disk. There
@@ -107,10 +116,26 @@ RENDER_SCRIPT = (
     / "render_book.py"
 )
 
+_CONSOLIDATE_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "storybook-consolidate"
+    / "scripts"
+)
+CONSOLIDATE_SCRIPTS: dict[str, Path] = {
+    "pdf":  _CONSOLIDATE_DIR / "merge_pdf.py",
+    "epub": _CONSOLIDATE_DIR / "merge_epub.py",
+    "zip":  _CONSOLIDATE_DIR / "package_book.py",
+}
+
 # Per-page regeneration job state, shared across all handler threads.
 # Keys: page_num (int). Values: {"status": "running"|"done"|"error", "error": str|None}
 _regen_jobs: dict = {}
 _regen_lock = threading.Lock()
+
+# Single global consolidate job state, guarded by _regen_lock.
+# Mutate in place only (never rebind) so handler-method references see updates.
+# shape: {"status": "idle"|"running"|"done"|"error", "results": [...]}
+_consolidate_job: dict = {"status": "idle", "results": []}
 
 
 # ---------------------------------------------------------------------------
@@ -874,6 +899,54 @@ def _run_regen(
             _regen_jobs[num] = {"status": "error", "error": str(exc)}
 
 
+def _run_consolidate(story_path: Path, formats: list[str], env: dict) -> None:
+    """Thread target: run the requested consolidate scripts sequentially.
+
+    formats must be ordered: pdf first, epub second, zip last (package_book.py
+    globs *.pdf/*.epub, so book files must exist before packaging).
+
+    Lock discipline: acquire _regen_lock only to mutate/read _consolidate_job state;
+    never hold it across subprocess.run (polling would deadlock during a 600 s run).
+    """
+    for fmt in formats:
+        script = CONSOLIDATE_SCRIPTS[fmt]
+        cmd = ["uv", "run", str(script), "--story", str(story_path)]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(story_path.parent),
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=600,
+            )
+            if result.returncode == 0:
+                # Extract produced path from "MEDIA: <path>" line in stdout.
+                media_path = None
+                for line in result.stdout.splitlines():
+                    if line.startswith("MEDIA: "):
+                        media_path = line[len("MEDIA: "):].strip()
+                entry = {"format": fmt, "ok": True, "path": media_path, "error": None}
+            else:
+                stderr_tail = (result.stderr or "").strip()[-800:]
+                stdout_tail = (result.stdout or "").strip()[-800:]
+                error_msg = stderr_tail or stdout_tail or f"{fmt} failed (no output captured)"
+                entry = {"format": fmt, "ok": False, "path": None, "error": error_msg}
+        except subprocess.TimeoutExpired:
+            entry = {"format": fmt, "ok": False, "path": None,
+                     "error": f"{fmt} timed out after 10 minutes"}
+        except Exception as exc:  # noqa: BLE001
+            entry = {"format": fmt, "ok": False, "path": None, "error": str(exc)}
+
+        with _regen_lock:
+            _consolidate_job["results"].append(entry)
+
+    # Final status: error if any format failed, done if all succeeded.
+    with _regen_lock:
+        all_ok = all(r["ok"] for r in _consolidate_job["results"])
+        _consolidate_job["status"] = "done" if all_ok else "error"
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -925,6 +998,8 @@ def make_handler(story_path: Path, schema: dict):
                 self._get_status()
             elif route == "/api/versions":
                 self._get_versions(url)
+            elif route == "/api/consolidate/status":
+                self._get_consolidate_status()
             elif route == "/img":
                 self._get_img(url)
             else:
@@ -1097,6 +1172,8 @@ def make_handler(story_path: Path, schema: dict):
                 self._post_recomposite()
             elif route == "/api/page/select":
                 self._post_select()
+            elif route == "/api/consolidate":
+                self._post_consolidate()
             else:
                 self._fail(404, f"no such POST route: {route}")
 
@@ -1140,8 +1217,12 @@ def make_handler(story_path: Path, schema: dict):
                 self._fail(500, f"render script not found: {RENDER_SCRIPT}")
                 return
 
-            # Gate: only one regen per page at a time.
+            # Gate: only one regen per page at a time; also block while consolidating
+            # (consolidation reads pages/ — deleting canonicals mid-merge corrupts output).
             with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation is running — wait for it to finish before re-rendering")
+                    return
                 job = _regen_jobs.get(num, {})
                 if job.get("status") == "running":
                     self._fail(409, f"regeneration already running for page {num}")
@@ -1221,8 +1302,11 @@ def make_handler(story_path: Path, schema: dict):
                 self._send_json(422, {"ok": False, "error": reason, "fallback": True})
                 return
 
-            # Per-page lock — one op at a time.
+            # Per-page lock — one op at a time; also block while consolidating.
             with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation is running — wait for it to finish before re-compositing")
+                    return
                 job = _regen_jobs.get(num, {})
                 if job.get("status") == "running":
                     self._fail(409, f"regeneration already running for page {num}")
@@ -1269,8 +1353,12 @@ def make_handler(story_path: Path, schema: dict):
                 self._fail(400, "body must have page_num (int) and version (str)")
                 return
 
-            # Gate: select and regen's restore both mutate the canonical slot.
+            # Gate: select and regen's restore both mutate the canonical slot;
+            # also block while consolidating to avoid replacing a page mid-merge.
             with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation is running — wait for it to finish before selecting a version")
+                    return
                 job = _regen_jobs.get(num, {})
                 if job.get("status") == "running":
                     self._fail(
@@ -1312,6 +1400,77 @@ def make_handler(story_path: Path, schema: dict):
 
             payload = _build_versions_payload(pages_dir, story_dir, num)
             self._send_json(200, {"ok": True, **payload})
+
+        def _post_consolidate(self) -> None:
+            """Assemble PDF, EPUB, and/or zip from rendered pages (free, no API key).
+
+            Body: {"formats": ["pdf", "epub", "zip"]} — any non-empty subset.
+            Execution order is always pdf → epub → zip so package_book.py can glob
+            the book files that merge_pdf/epub just produced.
+
+            Returns 200 immediately; poll GET /api/consolidate/status for progress.
+            409 if consolidation is already running, or if any page render is running.
+            """
+            body, err = self._read_json_body()
+            if err:
+                self._fail(400, err)
+                return
+
+            try:
+                raw_formats = body.get("formats")
+                if not isinstance(raw_formats, list) or not raw_formats:
+                    raise ValueError
+            except (AttributeError, ValueError):
+                self._fail(400, "body must have non-empty formats list")
+                return
+
+            valid = {"pdf", "epub", "zip"}
+            bad = [f for f in raw_formats if f not in valid]
+            if bad:
+                self._fail(400, f"unknown format(s): {bad!r}; accepted: pdf, epub, zip")
+                return
+
+            # Fixed execution order: pdf → epub → zip.
+            ordered = [f for f in ("pdf", "epub", "zip") if f in raw_formats]
+
+            # Verify script files exist before spawning.
+            for fmt in ordered:
+                script = CONSOLIDATE_SCRIPTS[fmt]
+                if not script.is_file():
+                    self._fail(500, f"consolidate script not found: {script}")
+                    return
+
+            # Gate: block if consolidation or any page render is running.
+            with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation already running")
+                    return
+                if any(j.get("status") == "running" for j in _regen_jobs.values()):
+                    self._fail(
+                        409,
+                        "a page render is running — wait for it to finish before consolidating",
+                    )
+                    return
+                # Reset job state in place (never rebind the module-level dict).
+                _consolidate_job["status"] = "running"
+                _consolidate_job["results"] = []
+
+            env = os.environ.copy()
+            t = threading.Thread(
+                target=_run_consolidate,
+                args=(story_path, ordered, env),
+                daemon=True,
+            )
+            t.start()
+
+            self._send_json(200, {"ok": True})
+
+        def _get_consolidate_status(self) -> None:
+            """Return current consolidate job state (cheap poll target for the modal)."""
+            with _regen_lock:
+                status = _consolidate_job["status"]
+                results = list(_consolidate_job["results"])  # shallow copy for thread safety
+            self._send_json(200, {"ok": True, "status": status, "results": results})
 
     return EditorHandler
 
