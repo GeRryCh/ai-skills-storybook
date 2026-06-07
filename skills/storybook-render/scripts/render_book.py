@@ -34,6 +34,12 @@ Model selection (precedence: CLI --model > page 'model' > story 'model' > defaul
   gemini-3-pro-image     — higher quality, up to 5 reference images per call.
   Use --model or set page-level/book-level 'model' in story.json to override.
   Style sheets (Stage 2) always use gemini-3-pro-image regardless of this setting.
+  Auto-upgrade: when a page's reference list has ≥5 images and the effective model is
+  flash (including an explicit CLI or per-page flash override), that page is silently
+  upgraded to gemini-3-pro-image for that call only. Logged as:
+    "auto-upgraded page N to gemini-3-pro-image (5 refs > flash cap 4)"
+  story.json is never modified. Manually pinning a page's model to pro solely to
+  avoid the 4-ref cap is therefore no longer necessary.
 
 Text modes:
   overlay — safe-zone art + Pillow text overlay → pages/page-NN.png
@@ -70,11 +76,13 @@ SCRIPTS_DIR = Path(__file__).parent
 OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
 
 # Gemini image-generation config.
-IMAGE_MODEL = "gemini-3.1-flash-image"  # default; overridable per page/book/CLI
-IMAGE_MODELS = ["gemini-3.1-flash-image", "gemini-3-pro-image"]  # keep in sync with story_schema.json
+FLASH_IMAGE_MODEL = "gemini-3.1-flash-image"
+PRO_IMAGE_MODEL = "gemini-3-pro-image"
+IMAGE_MODEL = FLASH_IMAGE_MODEL  # default; overridable per page/book/CLI
+IMAGE_MODELS = [FLASH_IMAGE_MODEL, PRO_IMAGE_MODEL]  # keep in sync with story_schema.json
 MODEL_MAX_INPUT_IMAGES = {
-    "gemini-3.1-flash-image": 4,  # Gemini 3.1 Flash Image: up to 4 reference images per call
-    "gemini-3-pro-image": 5,      # Gemini 3 Pro Image: up to 5 reference images per call
+    FLASH_IMAGE_MODEL: 4,  # Gemini 3.1 Flash Image: up to 4 reference images per call
+    PRO_IMAGE_MODEL: 5,    # Gemini 3 Pro Image: up to 5 reference images per call
 }
 MAX_INPUT_IMAGES = 4  # safe fallback cap for unrecognised models
 
@@ -409,9 +417,12 @@ def _ref_photos(entry: dict) -> list[str]:
 
 def collect_input_images(
     story: dict, page: dict, log: list[str] | None = None,
-    max_images: int = MAX_INPUT_IMAGES,
 ) -> list[tuple[str, str]]:
-    """Per-page reference images for the render, capped at max_images (4 flash default / 5 pro).
+    """Build the full prioritized reference-image list for one page render call.
+
+    Returns ALL candidates in priority order — no cap applied. The caller
+    (run_nano_banana via select_refs) decides the effective cap after optionally
+    auto-upgrading the model.
 
     page['cast'] is ONE flat name list of mixed kinds (names must match
     story['cast'][].name exactly). Contribution by kind:
@@ -424,10 +435,9 @@ def collect_input_images(
                   from its real-place photos and/or 'appearance' — PER-50); falls
                   back to its first ref_image photo when no sheet exists yet.
 
-    Priority order into the budget: hero sheet → hero photo → remaining character
-    sheets (page order) → object refs (page order) → location refs (page order,
-    lowest, first to drop from the cap). Anything past the cap is named in a log
-    line so nothing is silently dropped.
+    Priority order: hero sheet → hero photo → remaining character sheets (page
+    order) → object refs (page order) → location refs (page order, lowest priority,
+    first to drop when the cap is applied by the caller).
 
     Returns (label, path) pairs; labels are interleaved identification notes in
     run_nano_banana. Label vocabulary must stay in sync with IMAGE_SYSTEM_PROMPT's
@@ -527,16 +537,26 @@ def collect_input_images(
                     f"ref_image; skipping."
                 )
 
-    selected = candidates[:max_images]
-    dropped = [label for label, _ in candidates[max_images:]]
-    if dropped:
-        msg = f"cap ({max_images}) reached; dropped: {', '.join(dropped)}"
-        if log is not None:
-            log.append(f"  Note: {msg}")
-        else:
-            print(f"Note: {msg}")
+    return candidates
 
-    return selected
+
+def select_refs(
+    candidates: list[tuple[str, str]], model: str,
+) -> tuple[str, list[tuple[str, str]], list[str]]:
+    """Apply the per-model ref cap, auto-upgrading flash → pro when candidates
+    exceed the flash cap (runtime-only; story.json is never modified).
+
+    If the effective model is flash and the candidate list exceeds the flash cap (4),
+    the model is silently promoted to gemini-3-pro-image before the cap is applied.
+    The caller is responsible for logging the upgrade.
+
+    Returns (effective_model, selected_pairs, dropped_labels).
+    """
+    flash_cap = MODEL_MAX_INPUT_IMAGES[FLASH_IMAGE_MODEL]
+    if model == FLASH_IMAGE_MODEL and len(candidates) > flash_cap:
+        model = PRO_IMAGE_MODEL
+    cap = MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES)
+    return model, candidates[:cap], [label for label, _ in candidates[cap:]]
 
 
 def _retry_delay(attempt: int, exc: Exception) -> float:
@@ -697,10 +717,19 @@ async def run_nano_banana(
     # the behavioural rules for each kind live in IMAGE_SYSTEM_PROMPT.
     contents: list = [prompt]
     contents_desc: list[tuple] = [("text", prompt)]  # mirrors contents for audit log
-    ref_pairs = collect_input_images(
-        story, page, log,
-        max_images=MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES),
-    )
+    candidates = collect_input_images(story, page, log)
+    new_model, ref_pairs, dropped = select_refs(candidates, model)
+    if new_model != model:
+        log.append(
+            f"  Note: auto-upgraded page {page.get('page_num', '?')} to {new_model} "
+            f"({len(candidates)} refs > flash cap {MODEL_MAX_INPUT_IMAGES[FLASH_IMAGE_MODEL]})"
+        )
+        model = new_model
+    if dropped:
+        log.append(
+            f"  Note: cap ({MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES)}) reached; "
+            f"dropped: {', '.join(dropped)}"
+        )
     for label, img_path in ref_pairs:
         p = Path(img_path)
         mime, _ = mimetypes.guess_type(str(p))

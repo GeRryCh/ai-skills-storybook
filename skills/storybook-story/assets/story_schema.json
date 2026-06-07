@@ -95,7 +95,7 @@
       "type": "string",
       "enum": ["gemini-3.1-flash-image", "gemini-3-pro-image"],
       "default": "gemini-3.1-flash-image",
-      "description": "Optional book-wide image model for page rendering (Stage 3 only — style sheets always use gemini-3-pro-image). 'gemini-3.1-flash-image' (default): faster and cheaper, up to 4 reference images per call. 'gemini-3-pro-image': higher quality, up to 5 reference images per call. A page-level 'model' overrides this for that page; the render CLI --model flag overrides both for an entire run.",
+      "description": "Optional book-wide image model for page rendering (Stage 3 only — style sheets always use gemini-3-pro-image). 'gemini-3.1-flash-image' (default): faster and cheaper, up to 4 reference images per call. 'gemini-3-pro-image': higher quality, up to 5 reference images per call. A page-level 'model' overrides this for that page; the render CLI --model flag overrides both for an entire run. Note: pages whose reference list exceeds 4 are automatically upgraded to gemini-3-pro-image at render time (runtime-only; story.json is never modified).",
       "x-interview": { "priority": "advanced", "ask": "Image model for page renders — flash (default, cheaper, 4-ref cap) or pro (higher quality, 5-ref cap)." }
     },
     "saved_formats": {
@@ -154,7 +154,7 @@
           "model": {
             "type": "string",
             "enum": ["gemini-3.1-flash-image", "gemini-3-pro-image"],
-            "description": "Optional per-page image model override. Unset = inherit the book-level 'model' field (or gemini-3.1-flash-image default). Set to 'gemini-3-pro-image' to retry a specific page on the stronger model without re-rendering the whole book. Also raises that page's reference-image cap from 4 to 5."
+            "description": "Optional per-page image model override. Unset = inherit the book-level 'model' field (or gemini-3.1-flash-image default). Set to 'gemini-3-pro-image' to retry a specific page on the stronger model without re-rendering the whole book. Also raises that page's reference-image cap from 4 to 5. Note: pages whose reference list exceeds 4 are automatically upgraded to gemini-3-pro-image at render time regardless of this field (runtime-only; story.json is never modified)."
           },
           "text_mode": {
             "type": "string",

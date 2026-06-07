@@ -27,7 +27,7 @@ directory (default: the user's cwd, e.g. this worktree root):
    rendering — a wrong sheet poisons every page that character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the cast entries listed in that page's `cast` field
-   (per-page selection, cap 4 flash default / 5 pro; overridable per page or book via the `model` field or `--model` CLI flag), then overlays text. Three text modes:
+   (per-page selection, cap 4 flash default / 5 pro; auto-upgrades flash→pro when refs ≥5 — PER-58; overridable per page or book via the `model` field or `--model` CLI flag), then overlays text. Three text modes:
    - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
    - `native`: `pages/page-NN-native.png` (model bakes text into art)
    - `long`: `pages/page-NN-long.png` (full-bleed art, no text) + `pages/page-NN-long-text.png`
@@ -198,7 +198,7 @@ this to send only the relevant per-cast-entry style sheets — the model never s
 for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
 crop), so the render anchors the hero's facial likeness on the real photo, not only on the
 (lossy) style sheet. **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
-Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped.
+Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped. **Auto-upgrade (PER-58):** `select_refs()` in `render_book.py` runs before the cap is applied — if the effective model is flash and the candidate list has ≥5 images, the page is silently upgraded to `gemini-3-pro-image` for that call only (logged, story.json untouched). The cap/drop logic is in `select_refs`; `collect_input_images` now returns the full uncapped candidate list.
 
 **Outfit lock (single canonical outfit per character).** For kind=character entries, `appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
@@ -247,14 +247,11 @@ photo is only the render-time fallback. Note for pre-PER-50 books: re-running St
 story whose location carried only a photo makes one extra paid call and writes `style_sheet`;
 render remains backward-compatible via the photo fallback for books never re-sheeted.
 
-**Cap priority in `collect_input_images` (render_book.py):**
+**Ref priority and cap (`render_book.py`):**
 
 > hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → **location refs (sheet, or photo fallback — lowest, first to drop)**
 
-The location reference is appended last and is the first to be dropped when the per-model
-cap is reached (4 flash default / 5 pro). Drops are logged, never silent. On pages whose
-`cast` lists only the place (no characters or objects), the location reference is the sole
-reference image (a page with `cast: []` sends no references at all).
+`collect_input_images()` builds the full prioritized candidate list (no cap). `select_refs(candidates, model)` then: auto-upgrades flash → pro when `len(candidates) > 4`, applies the cap, and returns `(effective_model, selected, dropped)`. Drops are logged, never silent. Flash pages with ≥5 refs are upgraded to pro before any ref is dropped; only past the pro cap (5) are refs dropped. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
 
 **Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds. Keep label wording in sync with the system prompt's "kind" vocabulary:
 
@@ -298,7 +295,10 @@ the browser. It provides a visual form for `story.json` — book settings, cast 
 photo previews, palette swatches, and a page-by-page editor with hero-ordered cast
 selection, render-status badges, **per-page image preview, generation history browser,
 a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
-and hit Regenerate to retry that page on the stronger model without touching the rest), and
+and hit Regenerate to retry that page on the stronger model without touching the rest), **a
+per-page ref-count warning badge** (PER-58: amber "5 refs → pro required" when the intent-based
+ref count is 5 and the effective model is flash — render auto-upgrades at runtime; red "N refs >
+pro cap 5 — refs will drop" when count ≥ 6 regardless of model), and
 **a per-page text mode picker** (unset = same as book; override lets individual pages render in a
 different mode than the book default). Fields that have no effect given the current effective text mode
 are greyed-out (user may still pre-set them); the `floating` placement option is hard-hidden

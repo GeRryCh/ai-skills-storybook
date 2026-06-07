@@ -78,6 +78,9 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 .badge-render.rendered{background:#d1fae5;color:#065f46}
 .badge-render.edited{background:#fef3c7;color:#92400e}
 .badge-render.none{background:#f1f5f9;color:#64748b}
+.badge-refs{font-size:11px;padding:1px 6px;border-radius:10px;font-weight:500;display:none}
+.badge-refs.warn{background:#fef3c7;color:#92400e;display:inline}
+.badge-refs.over{background:#fee2e2;color:#991b1b;display:inline}
 .card-header .spacer{flex:1}
 .card-header button{font-size:11px;padding:2px 6px}
 .card-body{padding:12px;display:none}
@@ -301,6 +304,11 @@ function markDirty(pageObj, field) {
     const idx = parseInt(el.dataset.pageBadge, 10);
     const page = story.pages && story.pages[idx];
     if (page) updatePageBadge(el, page);
+  });
+  document.querySelectorAll('[data-page-refbadge]').forEach(el => {
+    const idx = parseInt(el.dataset.pageRefbadge, 10);
+    const page = story.pages && story.pages[idx];
+    if (page) updateRefBadge(el, page);
   });
   // Auto-save debounce (skip if paused after a 409)
   if (!autoSavePaused) {
@@ -779,6 +787,36 @@ function updatePageBadge(badgeEl, page) {
   badgeEl.textContent = txt;
 }
 
+// Intent-based reference-image count for a page: every cast entry contributes 1,
+// plus 1 if the hero (first character-kind entry) has a ref_image photo.
+// Matches the render priority: character sheet + hero photo + other sheets + object/location refs.
+// No disk checks — this is a warning about full-render intent, computed client-side.
+function pageRefCount(page) {
+  const cast = page.cast || [];
+  const kindOf = n => { const c = (story.cast || []).find(c => c.name === n); return c ? (c.kind || 'character') : 'character'; };
+  const heroName = cast.find(n => kindOf(n) === 'character');
+  const hero = heroName ? (story.cast || []).find(c => c.name === heroName) : null;
+  return cast.length + (hero && refList(hero).length > 0 ? 1 : 0);
+}
+const FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image';
+function updateRefBadge(badgeEl, page) {
+  const n = pageRefCount(page);
+  const effModel = (page.model) || story.model || defaultFor('model');
+  if (n > 5) {
+    badgeEl.className = 'badge-refs over';
+    badgeEl.textContent = `${n} refs > pro cap 5 — refs will drop`;
+    badgeEl.title = 'Even gemini-3-pro-image accepts at most 5 reference images. The lowest-priority refs (locations first, then objects) are dropped at render and logged.';
+  } else if (n === 5 && effModel === FLASH_IMAGE_MODEL) {
+    badgeEl.className = 'badge-refs warn';
+    badgeEl.textContent = '5 refs → pro required';
+    badgeEl.title = 'Flash cap is 4 reference images. Render auto-upgrades this page to gemini-3-pro-image at runtime (story.json unchanged). No manual action needed.';
+  } else {
+    badgeEl.className = 'badge-refs';
+    badgeEl.textContent = '';
+    badgeEl.title = '';
+  }
+}
+
 function buildPageCard(page, i) {
   const card = document.createElement('div');
   card.className = 'card';
@@ -792,6 +830,7 @@ function buildPageCard(page, i) {
     <div class="card-header" onclick="toggleCard(this)">
       <span>Page ${page.page_num}</span>
       <span class="badge-render none" id="${badgeId}" data-page-badge="${i}"></span>
+      <span class="badge-refs" id="badge-refs-${i}" data-page-refbadge="${i}"></span>
       ${dirtyMarkup}
       <span class="spacer"></span>
       ${isFirst ? '' : `<button class="btn-sm" onclick="movePage(event,${i},-1)">↑</button>`}
@@ -856,8 +895,9 @@ function buildPageCard(page, i) {
       </div>
     </div>`;
 
-  // Badge
+  // Badges
   updatePageBadge(card.querySelector(`#${badgeId}`), page);
+  updateRefBadge(card.querySelector(`#badge-refs-${i}`), page);
 
   // Text / prompt
   const textTa   = card.querySelector(`#pg-text-${i}`);
