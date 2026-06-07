@@ -42,9 +42,7 @@ section>h2 .toggle{margin-left:auto;color:#64748b;font-size:12px}
 .field textarea{resize:vertical;min-height:60px}
 .field select.unset{color:#94a3b8}
 /* ── Conditional field relevance (PER-48) ─────────────────────────────── */
-.field.dep-dim{opacity:.5}
-.field.dep-dim:focus-within{opacity:1}
-.dep-note{color:#b45309;font-size:11px;font-weight:400;margin-left:4px}
+.field.dep-hidden{display:none}
 .field .row{display:flex;gap:8px;align-items:flex-start}
 .field .row input{flex:1}
 
@@ -364,17 +362,14 @@ const FIELD_DEPS = {
   // Book-level text_background_prompt — only consumed when some page renders in long mode.
   'book-text-bg': {
     relevant: () => anyLong(),
-    note: () => `no effect — no page renders in long mode`,
   },
   // Page-level text_background_prompt — only meaningful in long mode.
   'page-text-bg': {
     relevant: (page) => effMode(page) === 'long',
-    note: (page) => `no effect — this page renders in ${effMode(page)} mode, not long`,
   },
   // Page text_placement — no text band on long-mode body pages; cover is always relevant.
   'page-placement': {
     relevant: (page) => effMode(page) !== 'long' || page.page_num === 1,
-    note: () => 'no effect — long-mode body pages have no text band (text goes to its own page)',
     // 'floating' is only meaningful in native mode; in overlay/long it degrades to bottom.
     options: { floating: (page) => effMode(page) === 'native' },
   },
@@ -388,9 +383,7 @@ function applyDeps(rootEl, page) {
     const rule = FIELD_DEPS[wrap.dataset.dep];
     if (!rule) return;
     const ok = rule.relevant(page);
-    wrap.classList.toggle('dep-dim', !ok);
-    const noteEl = wrap.querySelector('.dep-note');
-    if (noteEl) noteEl.textContent = ok ? '' : (' — ' + rule.note(page));
+    wrap.classList.toggle('dep-hidden', !ok);
     if (rule.options) {
       const sel = wrap.querySelector('select');
       if (!sel) return;
@@ -793,7 +786,7 @@ function buildPageCard(page, i) {
       </div>
       <div class="grid3">
         <div class="field" data-dep="page-placement">
-          <label>Text placement<small class="dep-note"></small></label>
+          <label>Text placement</label>
           <select id="pg-placement-${i}"></select>
         </div>
         <div class="field">
@@ -810,7 +803,7 @@ function buildPageCard(page, i) {
         <input type="text" id="pg-colorhint-${i}" placeholder="e.g. dark, light">
       </div>
       <div class="field" data-dep="page-text-bg">
-        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small><small class="dep-note"></small></label>
+        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
         <input type="text" id="pg-textbgprompt-${i}" placeholder="e.g. a misty forest path at dawn, soft light filtering through leaves">
       </div>
       <div class="grid2">
@@ -1043,7 +1036,7 @@ function renderBook() {
       <div class="field"><label>Image model <small style="color:#94a3b8">(page renders only; style sheets always use pro)</small></label><select id="book-model"></select></div>
     </div>
     <div class="field" data-dep="book-text-bg">
-      <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small><small class="dep-note"></small></label>
+      <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
       <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
     </div>
     <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
