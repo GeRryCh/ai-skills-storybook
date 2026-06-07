@@ -10,8 +10,8 @@
 Render all pages of a children's storybook.
 
 For each page in story.json:
-  1. Generates the illustration via the Gemini API (gemini-3.1-flash-image), passing
-     the style sheet + character refs as input images for consistency.
+  1. Generates the illustration via the Gemini API (default: gemini-3.1-flash-image),
+     passing the style sheet + character refs as input images for consistency.
   2. In overlay/long mode: runs overlay_text.py to composite the story text.
   3. Prints MEDIA: <path> for each final page.
 
@@ -29,6 +29,12 @@ This script produces page images only. Assembly into PDF/EPUB is Stage 4
 (storybook-consolidate skill: merge_pdf.py / merge_epub.py / package_book.py — free,
 no API cost, run independently after reviewing the rendered pages).
 
+Model selection (precedence: CLI --model > page 'model' > story 'model' > default flash):
+  gemini-3.1-flash-image — default; faster/cheaper, up to 4 reference images per call.
+  gemini-3-pro-image     — higher quality, up to 5 reference images per call.
+  Use --model or set page-level/book-level 'model' in story.json to override.
+  Style sheets (Stage 2) always use gemini-3-pro-image regardless of this setting.
+
 Text modes:
   overlay — safe-zone art + Pillow text overlay → pages/page-NN.png
   native  — model bakes text into illustration → pages/page-NN-native.png
@@ -44,6 +50,8 @@ Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
                         [--from N] [--only N] [--resolution 1K|2K|4K]
                         [--aspect-ratio RATIO] [--text-mode overlay|native|long]
+                        [--model gemini-3.1-flash-image|gemini-3-pro-image]
+                        [--saved-formats pdf epub|none]
 """
 
 from __future__ import annotations
@@ -61,8 +69,13 @@ SCRIPTS_DIR = Path(__file__).parent
 OVERLAY_SCRIPT = SCRIPTS_DIR / "overlay_text.py"
 
 # Gemini image-generation config.
-IMAGE_MODEL = "gemini-3.1-flash-image"
-MAX_INPUT_IMAGES = 4  # Gemini 3.1 Flash Image: up to 4 character reference images per call
+IMAGE_MODEL = "gemini-3.1-flash-image"  # default; overridable per page/book/CLI
+IMAGE_MODELS = ["gemini-3.1-flash-image", "gemini-3-pro-image"]  # keep in sync with story_schema.json
+MODEL_MAX_INPUT_IMAGES = {
+    "gemini-3.1-flash-image": 4,  # Gemini 3.1 Flash Image: up to 4 reference images per call
+    "gemini-3-pro-image": 5,      # Gemini 3 Pro Image: up to 5 reference images per call
+}
+MAX_INPUT_IMAGES = 4  # safe fallback cap for unrecognised models
 
 # Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all
 # at once, so a single 429 must not silently drop a page.
@@ -164,6 +177,20 @@ def _overlay_placement(placement: str) -> str:
 def load_story(path: Path) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def resolve_model(
+    story: dict,
+    page: dict | None = None,
+    cli_model: str | None = None,
+) -> str:
+    """Resolve which Gemini model to use for one render call.
+
+    Precedence: CLI --model > page 'model' field > story top-level 'model' > IMAGE_MODEL default.
+    page=None skips per-page resolution (used for book-wide shared text-bg generation).
+    """
+    page_model = page.get("model") if page else None
+    return cli_model or page_model or story.get("model") or IMAGE_MODEL
 
 
 # Keep in sync with the copy in make_style_sheet.py
@@ -342,7 +369,7 @@ def _ref_photos(entry: dict) -> list[str]:
 
     Mirrors collect_ref_images_for_entry() in make_style_sheet.py (the two skills share
     no module): normalize a string-or-list `ref_image` -> dedup keeping order -> drop
-    missing files. No cap here; the caller's MAX_INPUT_IMAGES budget governs.
+    missing files. No cap here; the caller's per-model budget governs.
     """
     raw = entry.get("ref_image")
     if isinstance(raw, str):
@@ -362,9 +389,10 @@ def _ref_photos(entry: dict) -> list[str]:
 
 
 def collect_input_images(
-    story: dict, page: dict, log: list[str] | None = None
+    story: dict, page: dict, log: list[str] | None = None,
+    max_images: int = MAX_INPUT_IMAGES,
 ) -> list[tuple[str, str]]:
-    """Per-page reference images for the render, capped at MAX_INPUT_IMAGES (4 for flash).
+    """Per-page reference images for the render, capped at max_images (4 flash default / 5 pro).
 
     page['cast'] is ONE flat name list of mixed kinds (names must match
     story['cast'][].name exactly). Contribution by kind:
@@ -479,10 +507,10 @@ def collect_input_images(
                     f"ref_image; skipping."
                 )
 
-    selected = candidates[:MAX_INPUT_IMAGES]
-    dropped = [label for label, _ in candidates[MAX_INPUT_IMAGES:]]
+    selected = candidates[:max_images]
+    dropped = [label for label, _ in candidates[max_images:]]
     if dropped:
-        msg = f"cap ({MAX_INPUT_IMAGES}) reached; dropped: {', '.join(dropped)}"
+        msg = f"cap ({max_images}) reached; dropped: {', '.join(dropped)}"
         if log is not None:
             log.append(f"  Note: {msg}")
         else:
@@ -564,6 +592,7 @@ async def run_nano_banana(
     resolution: str,
     log: list[str],
     aspect_ratio: str | None = None,
+    model: str = IMAGE_MODEL,
 ) -> bool:
     """Generate one illustration via the Gemini API and write it to raw_path."""
     from google.genai import errors, types
@@ -573,7 +602,10 @@ async def run_nano_banana(
     # what the next image IS (sheet vs photograph, per cast kind);
     # the behavioural rules for each kind live in IMAGE_SYSTEM_PROMPT.
     contents: list = [prompt]
-    ref_pairs = collect_input_images(story, page, log)
+    ref_pairs = collect_input_images(
+        story, page, log,
+        max_images=MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES),
+    )
     for label, img_path in ref_pairs:
         p = Path(img_path)
         mime, _ = mimetypes.guess_type(str(p))
@@ -592,7 +624,7 @@ async def run_nano_banana(
         image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
     )
 
-    log.append(f"  Generating: {raw_path.name}")
+    log.append(f"  Generating: {raw_path.name} ({model})")
     # Build the genai client lazily — only on first actual paid call, so runs that
     # only rebuild free artifacts (text pages in long mode) need no GEMINI_API_KEY.
     genai_client = client.get()
@@ -601,7 +633,7 @@ async def run_nano_banana(
         last_exc: Exception
         try:
             response = await genai_client.aio.models.generate_content(
-                model=IMAGE_MODEL,
+                model=model,
                 contents=contents,
                 config=config,
             )
@@ -710,9 +742,11 @@ async def run_text_page(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None) -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None, cli_model: str | None = None) -> bool:
     """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
+    # Resolve model once: CLI override > page field > story field > default flash.
+    model = resolve_model(story, page, cli_model)
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
 
@@ -727,7 +761,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                 raw_path = pages_dir / "raw-page-01-long.png"
                 if not raw_path.exists():
                     prompt = build_image_prompt(page, story, "overlay")
-                    ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio)
+                    ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model)
                     if not ok or not raw_path.exists():
                         log.append("  ERROR: image generation failed for cover")
                         print("\n" + "\n".join(log))
@@ -752,7 +786,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         art_path = pages_dir / f"page-{nn}-long.png"
         if not art_path.exists():
             prompt = build_image_prompt(page, story, "long")
-            ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio)
+            ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio, model=model)
             if not ok or not art_path.exists():
                 log.append(f"  ERROR: art image generation failed for page {page_num}")
                 print("\n" + "\n".join(log))
@@ -783,7 +817,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                     bg_prompt_str = build_text_bg_prompt(story, page)
                     ok = await run_nano_banana(
                         client, bg_prompt_str, bg_path, story, {"cast": []},
-                        resolution, log, aspect_ratio,
+                        resolution, log, aspect_ratio, model=model,
                     )
                     if not ok or not bg_path.exists():
                         log.append(f"  ERROR: text bg generation failed for page {page_num}")
@@ -818,14 +852,14 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     if text_mode == "native":
         # In native mode the model bakes text into the illustration — write directly
         # to final_path; no separate raw file needed.
-        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log, aspect_ratio)
+        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log, aspect_ratio, model=model)
         if not ok or not final_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
             return False
     else:
         raw_path = pages_dir / f"raw-page-{nn}.png"
-        ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio)
+        ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model)
         if not ok or not raw_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
@@ -852,7 +886,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None, cli_model: str | None = None) -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
@@ -876,9 +910,11 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
         if needs_shared_bg:
             log = ["=== Shared text-page background ==="]
             prompt = build_text_bg_prompt(story)
+            # Shared bg: use book-level model resolution (no page in scope).
+            bg_model = resolve_model(story, None, cli_model)
             ok = await run_nano_banana(
                 client, prompt, shared_bg, story, {"cast": []},
-                resolution, log, aspect_ratio,
+                resolution, log, aspect_ratio, model=bg_model,
             )
             if ok and shared_bg.exists():
                 log.append(f"  Done: {shared_bg}")
@@ -891,7 +927,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
 
     print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
     results = await asyncio.gather(
-        *(render_page(client, page, story, pages_dir, resolution, text_mode, aspect_ratio) for page in todo)
+        *(render_page(client, page, story, pages_dir, resolution, text_mode, aspect_ratio, cli_model=cli_model) for page in todo)
     )
     return sum(1 for ok in results if not ok)
 
@@ -910,6 +946,17 @@ def main() -> None:
         help=(
             "Override the aspect ratio from story.json "
             "(default: story.json 'aspect_ratio' field, or unset — model chooses)."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        choices=IMAGE_MODELS,
+        default=None,
+        help=(
+            "Override the image model for every page this run "
+            "(default: per-page 'model' field, then story.json top-level 'model', "
+            "then gemini-3.1-flash-image). Page renders only; style sheets always use "
+            "gemini-3-pro-image regardless of this setting."
         ),
     )
     parser.add_argument("--from", dest="from_page", type=int, default=1,
@@ -1010,7 +1057,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio, cli_model=args.model)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:

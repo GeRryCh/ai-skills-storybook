@@ -127,6 +127,7 @@ def _schema_enums(schema: dict) -> dict[str, list]:
         "text_mode": top["text_mode"]["enum"],
         "resolution": top["resolution"]["enum"],
         "aspect_ratio": top["aspect_ratio"]["enum"],
+        "model": top["model"]["enum"],
         "saved_formats": top["saved_formats"]["items"]["enum"],
         "text_placement": page["text_placement"]["enum"],
         "text_align": page["text_align"]["enum"],
@@ -284,7 +285,7 @@ def validate_story(
                 errors.append("'style_guide.palette' must be an array of strings")
 
     # --- optional top-level enums/types -------------------------------------
-    for key in ("text_mode", "resolution", "aspect_ratio"):
+    for key in ("text_mode", "resolution", "aspect_ratio", "model"):
         if key in story and story[key] not in enums[key]:
             errors.append(
                 f"'{key}' must be one of {enums[key]} (got {story[key]!r})"
@@ -396,7 +397,7 @@ def validate_story(
                 for key in ("text", "image_prompt", "text_color_hint", "text_background_prompt"):
                     if key in page and not isinstance(page[key], str):
                         errors.append(f"{where}.{key} must be a string")
-                for key in ("text_placement", "text_align", "font"):
+                for key in ("text_placement", "text_align", "font", "model"):
                     if key in page and page[key] not in enums[key]:
                         errors.append(
                             f"{where}.{key} must be one of {enums[key]} "

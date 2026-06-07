@@ -26,7 +26,7 @@ directory (default: the user's cwd, e.g. this worktree root):
    character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the cast entries listed in that page's `cast` field
-   (per-page selection, cap 4 for the flash model), then overlays text. Three text modes:
+   (per-page selection, cap 4 flash default / 5 pro; overridable per page or book via the `model` field or `--model` CLI flag), then overlays text. Three text modes:
    - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
    - `native`: `pages/page-NN-native.png` (model bakes text into art)
    - `long`: `pages/page-NN-long.png` (full-bleed art, no text) + `pages/page-NN-long-text.png`
@@ -66,9 +66,10 @@ Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`
 
 The two paid scripts call the **Gemini image API directly** (via the `google-genai`
 Python SDK, declared as a PEP-723 inline dependency). They build a `genai.Client` with
-`api_key` from the environment, model `gemini-3-pro-image` (style sheets, up to 5 character
-reference images per call) or `gemini-3.1-flash-image` (page renders, up to 4 reference
-images per call), send the prompt plus reference images as `types.Part.from_bytes`, and
+`api_key` from the environment, model `gemini-3-pro-image` (style sheets, always, up to 5 character
+reference images per call) or for page renders the configurable model — default `gemini-3.1-flash-image`
+(4-ref cap) or `gemini-3-pro-image` (5-ref cap) set per-page, book-wide, or via `--model` CLI flag;
+style sheets always stay on pro regardless. Scripts send the prompt plus reference images as `types.Part.from_bytes`, and
 extract the returned image from `part.inline_data.data`.
 Requires `uv` on PATH and `GEMINI_API_KEY` in the environment. No sibling skill is
 needed (an earlier version shelled out to `nano-banana-pro-openrouter`; that logic is now
@@ -117,7 +118,10 @@ uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
 `--aspect-ratio RATIO` (override from story.json; unset → model chooses),
-`--text-mode overlay|native|long`.
+`--text-mode overlay|native|long`, `--model gemini-3.1-flash-image|gemini-3-pro-image`
+(override per-page/book model for one run; precedence: CLI > page field > story field > flash default),
+`--saved-formats pdf epub|none` (override story.json
+`saved_formats`; default when neither set: all formats).
 Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
@@ -157,7 +161,7 @@ is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 photo or a per-person crop. If a source photo contains multiple people, Stage 1 crops it
 to one file per character via `skills/storybook-story/scripts/crop_character.py` (Pillow
 only, free, no API). The original multi-person photo is never listed in any `ref_image`. This
-preserves the existing cap math (5 Stage-2 / 4 flash cap) unchanged — refs stay
+preserves the existing cap math (5 Stage-2 / 4-or-5 render cap by model) unchanged — refs stay
 per-character and per-person, so nothing interacts differently with the caps.
 
 Re-run recipe for a bad crop: re-run `crop_character.py` with an adjusted `--box` (it
@@ -171,7 +175,7 @@ this to send only the relevant per-cast-entry style sheets — the model never s
 for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
 crop), so the render anchors the hero's facial likeness on the real photo, not only on the
 (lossy) style sheet. **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
-Priority into the 4-image cap (flash) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped.
+Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped.
 
 **Outfit lock (single canonical outfit per character).** For kind=character entries, `appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
@@ -198,7 +202,7 @@ Real named places can contribute a photo reference during page rendering. They a
 
 > hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → **location refs (lowest, first to drop)**
 
-The location reference is appended last and is the first to be dropped when the 4-image cap is reached. Drops are logged, never silent. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
+The location reference is appended last and is the first to be dropped when the per-model cap is reached (4 flash default / 5 pro). Drops are logged, never silent. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
 
 **Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds. Keep label wording in sync with the system prompt's "kind" vocabulary:
 
@@ -241,7 +245,8 @@ launches a tiny local HTTP server (127.0.0.1 only) and opens `assets/editor.html
 the browser. It provides a visual form for `story.json` — book settings, cast with
 photo previews, palette swatches, and a page-by-page editor with hero-ordered cast
 selection, render-status badges, **per-page image preview, generation history browser,
-and a regenerate button**. No API cost for browsing/selecting; regenerate triggers one
+a regenerate button, and a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
+and hit Regenerate to retry that page on the stronger model without touching the rest). No API cost for browsing/selecting; regenerate triggers one
 paid Gemini call per page.
 
 ```bash

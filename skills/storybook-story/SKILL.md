@@ -257,7 +257,7 @@ see **image_prompt rules** below).
 
 #### Cap note
 
-The location photo is the **lowest-priority** reference image within Stage 3's 4-image cap:
+The location photo is the **lowest-priority** reference image within Stage 3's per-model cap (4 flash default / 5 pro):
 
 > hero sheet → hero photo → remaining character sheets → object refs → location photo
 
@@ -297,8 +297,8 @@ character-free pages (title cards, scenery-only spreads).
 **Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero, and Stage
 3 additionally feeds that character's first `ref_image` (a solo photo or a Stage-1 crop)
 into the render to lock its facial likeness. List the protagonist (e.g. the child the book is
-about) first on every page they appear; with a 4-image cap (flash model), a fifth reference
-may be dropped to make room for the hero's photo. Three-character pages can now carry hero
+about) first on every page they appear; with a 4-ref cap (flash default; 5 with pro), a fifth reference
+may be dropped to make room for the hero's photo. Three-character pages on flash can carry hero
 sheet + hero photo + both supporting sheets without dropping anything.
 
 Example:

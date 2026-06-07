@@ -705,6 +705,10 @@ function buildPageCard(page, i) {
         <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
         <input type="text" id="pg-textbgprompt-${i}" placeholder="e.g. a misty forest path at dawn, soft light filtering through leaves">
       </div>
+      <div class="field" style="max-width:320px">
+        <label>Image model <small style="color:#94a3b8">(retry knob — unset inherits the book model)</small></label>
+        <select id="pg-model-${i}"></select>
+      </div>
     </div>`;
 
   // Badge
@@ -723,6 +727,9 @@ function buildPageCard(page, i) {
     enumFor('text_align'), { optional: true, page });
   bindEnum(card.querySelector(`#pg-font-${i}`), page, 'font',
     enumFor('font'), { optional: true, page });
+  // Model override — sentinel shows the inherited default (page → book → schema default).
+  bindEnum(card.querySelector(`#pg-model-${i}`), page, 'model',
+    enumFor('model'), { optional: true, page, defaultVal: story.model || defaultFor('model') });
 
   // Color hint
   const hintInp = card.querySelector(`#pg-colorhint-${i}`);
@@ -910,6 +917,10 @@ function renderBook() {
       <div class="field"><label>Resolution</label><select id="book-resolution"></select></div>
       <div class="field"><label>Aspect ratio</label><select id="book-aspect-ratio"></select></div>
     </div>
+    <div class="grid2">
+      <div class="field"><label>Language (BCP-47, e.g. en, de, en-GB)</label><input type="text" id="book-language"></div>
+      <div class="field"><label>Image model <small style="color:#94a3b8">(page renders only; style sheets always use pro)</small></label><select id="book-model"></select></div>
+    </div>
     <div class="field">
       <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
       <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
@@ -955,6 +966,7 @@ function renderBook() {
   bindEnum(b.querySelector('#book-text-mode'), story, 'text_mode', enumFor('text_mode'), {optional:true});
   bindEnum(b.querySelector('#book-resolution'), story, 'resolution', enumFor('resolution'), {optional:true});
   bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true, defaultVal:'model chooses'});
+  bindEnum(b.querySelector('#book-model'), story, 'model', enumFor('model'), {optional:true});
 
   // Fonts — lazy-create/delete
   const fonts = story.fonts || {};
@@ -1284,7 +1296,7 @@ function clientValidate() {
   const errors = [];
   const required = (schema.required || []);
   required.forEach(k => { if (story[k] === undefined) errors.push(`Missing required field: ${k}`); });
-  for (const key of ['age_band','text_mode','resolution','aspect_ratio']) {
+  for (const key of ['age_band','text_mode','resolution','aspect_ratio','model']) {
     const e = enumFor(key);
     if (story[key] !== undefined && !e.includes(story[key]))
       errors.push(`'${key}' must be one of [${e.join(', ')}] (got: ${story[key]})`);
@@ -1295,7 +1307,7 @@ function clientValidate() {
       if (!castNames.includes(n))
         errors.push(`Page ${page.page_num}: cast member "${n}" is not in the cast`);
     });
-    for (const key of ['text_placement','text_align','font']) {
+    for (const key of ['text_placement','text_align','font','model']) {
       const e = enumFor(key);
       if (page[key] !== undefined && e.length && !e.includes(page[key]))
         errors.push(`Page ${page.page_num}: '${key}' invalid value "${page[key]}"`);

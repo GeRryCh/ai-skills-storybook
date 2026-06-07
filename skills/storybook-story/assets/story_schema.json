@@ -91,6 +91,13 @@
       "description": "Optional book-wide aspect ratio applied to both style sheets and page renders. When omitted, the model picks framing on each call (non-deterministic). Set this to lock consistent framing across all sheets and pages (e.g. '4:3' for landscape, '3:4' for portrait, '1:1' for square). The stylesheet/render CLI --aspect-ratio flag overrides this value when passed explicitly.",
       "x-interview": { "priority": "advanced", "ask": "Lock one page framing for the whole book, or leave unset to let the model choose per page." }
     },
+    "model": {
+      "type": "string",
+      "enum": ["gemini-3.1-flash-image", "gemini-3-pro-image"],
+      "default": "gemini-3.1-flash-image",
+      "description": "Optional book-wide image model for page rendering (Stage 3 only — style sheets always use gemini-3-pro-image). 'gemini-3.1-flash-image' (default): faster and cheaper, up to 4 reference images per call. 'gemini-3-pro-image': higher quality, up to 5 reference images per call. A page-level 'model' overrides this for that page; the render CLI --model flag overrides both for an entire run.",
+      "x-interview": { "priority": "advanced", "ask": "Image model for page renders — flash (default, cheaper, 4-ref cap) or pro (higher quality, 5-ref cap)." }
+    },
     "saved_formats": {
       "type": "array",
       "items": { "type": "string", "enum": ["pdf", "epub"] },
@@ -143,6 +150,11 @@
             "enum": ["reader", "display"],
             "description": "Font for the text overlay. 'reader' (Andika, body text) or 'display' (PatrickHand, titles/cover). Default: reader.",
             "default": "reader"
+          },
+          "model": {
+            "type": "string",
+            "enum": ["gemini-3.1-flash-image", "gemini-3-pro-image"],
+            "description": "Optional per-page image model override. Unset = inherit the book-level 'model' field (or gemini-3.1-flash-image default). Set to 'gemini-3-pro-image' to retry a specific page on the stronger model without re-rendering the whole book. Also raises that page's reference-image cap from 4 to 5."
           },
           "text_background_prompt": {
             "type": "string",

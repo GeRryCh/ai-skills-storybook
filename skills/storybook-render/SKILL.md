@@ -44,6 +44,8 @@ uv run {skillDir}/scripts/render_book.py \
 - `--only N` — render a single page (good for testing one page before a full run, or re-doing one page).
 - `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
 - `--aspect-ratio RATIO` — override the aspect ratio from `story.json` for this run (choices: `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`). Aspect ratio is normally configured via the top-level `aspect_ratio` field in `story.json`; when neither is set the model chooses framing per call.
+- `--model gemini-3.1-flash-image|gemini-3-pro-image` — override the image model for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--model` flag > `pages[].model` > top-level `model` > flash default). Flash (default): faster/cheaper, 4-ref cap. Pro: higher quality, 5-ref cap. Style sheets always use pro regardless. **Retry workflow:** set a page's `model` to `gemini-3-pro-image` in `story.json`, then `rm pages/page-NN*.png` and re-run `--only N`.
+- `--saved-formats pdf epub|none` — override `story.json`'s `saved_formats` for this run: which book file(s) to assemble after a full render. `epub` is a fixed-layout EPUB3 (pre-paginated, full-bleed pages). `none` skips assembly entirely (useful for partial `--from` runs where more pages are coming). `saved_formats` is normally configured in `story.json` (default: all formats when omitted).
 
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
@@ -73,7 +75,7 @@ For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png`
 
 If `story.json` has `cast` entries with `kind: "location"` and a page lists one of those
 names in its `pages[].cast` array, that place's `ref_image` photo is sent as an additional
-reference image with the **lowest** priority within the 4-image cap:
+reference image with the **lowest** priority within the per-model cap (4 flash default / 5 pro):
 
 > hero sheet → hero photo → remaining character sheets → object refs → **location photo**
 
@@ -146,7 +148,7 @@ uv run {skillDir}/scripts/overlay_text.py \
 
 **Sizing (text-page mode):** font shrinks from 96px toward a 22px floor; panel capped at ~80% of page height — large enough for ~80–200 words per logical page.
 
-Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display), `text_background_prompt` (long mode only — per-page dedicated text-page background overriding the shared one, +1 paid call). Top-level `text_background_prompt` customizes the shared book-wide text-page background.
+Per-page `story.json` fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display), `model` (gemini-3.1-flash-image/gemini-3-pro-image — retry knob; unset inherits book-level `model` or flash default), `text_background_prompt` (long mode only — per-page dedicated text-page background overriding the shared one, +1 paid call). Top-level `text_background_prompt` customizes the shared book-wide text-page background.
 
 ---
 
