@@ -29,6 +29,7 @@ Requires GEMINI_API_KEY in the environment.
 Usage:
   uv run make_style_sheet.py --story /path/to/story.json [--out-dir /path/to/outdir]
                               [--resolution 1K|2K|4K] [--aspect-ratio RATIO]
+                              [--only NAME]
 """
 
 from __future__ import annotations
@@ -512,9 +513,21 @@ def main() -> None:
             "(default: story.json 'aspect_ratio' field, or unset — model chooses)."
         ),
     )
+    parser.add_argument(
+        "--only",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Process only the cast entry whose name matches NAME exactly "
+            "(exit 2 if not found). The slug walk still runs for all entries "
+            "so filenames remain stable. Delete the entry's PNG first to force "
+            "regeneration past the skip-if-exists guard."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
+    only_name: str | None = args.only
     story = load_story(story_path)
     reject_legacy_keys(story)
     require_style_guide(story)
@@ -537,6 +550,18 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # --only: validate the target name exists before starting the slug walk.
+    if only_name is not None:
+        cast_names = [(e.get("name") or "").strip() for e in cast]
+        if only_name not in cast_names:
+            available = [n for n in cast_names if n]
+            print(
+                f"ERROR: no cast entry named {only_name!r}. "
+                f"Available: {', '.join(repr(n) for n in available) if available else '(none)'}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
     used_slugs: set[str] = set()
     any_failed = False
 
@@ -554,6 +579,12 @@ def main() -> None:
 
         slug = char_slug(name or "entry", used_slugs)
         target = out_dir / f"style-sheet-{slug}.png"
+
+        # --only: skip non-matching entries so they get zero side effects.
+        # The slug walk above must run for every entry to keep filenames stable
+        # for ALL cast members, even those we do not process.
+        if only_name is not None and name != only_name:
+            continue
 
         if target.exists():
             print(f"Skipping {name!r} — sheet already exists: {target}")

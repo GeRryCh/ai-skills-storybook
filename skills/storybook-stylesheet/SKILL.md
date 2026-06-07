@@ -60,13 +60,20 @@ sheet as the clothing reference, ignoring photo outfit variation.
 If the user supplied no character refs, the script still runs (prompt-only generation).
 
 **The script is idempotent per character.** If `style-sheet-{name}.png` already exists
-it is skipped. To force a regenerate for one character, delete that character's file
-and re-run:
+it is skipped. To force a regenerate for one character, use `--only NAME` (PER-59) after
+deleting that character's file:
 
 ```bash
 rm style-sheet-pip.png   # replace 'pip' with the character's slug
+uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json --only Pip
+# or re-run the full sheet stage (regenerates only missing sheets):
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
+
+`--only NAME` processes exactly one cast entry by exact name match (exit 2 if not found).
+The slug walk runs for all entries so filenames remain stable. This is also what the
+visual editor's "↻ Regenerate sheet" button invokes (it deletes the PNG first, then calls
+`--only NAME` via the server).
 
 ---
 

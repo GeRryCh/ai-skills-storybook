@@ -189,7 +189,8 @@ preserves the existing cap math (5 Stage-2 / 4-or-5 render cap by model) unchang
 per-character and per-person, so nothing interacts differently with the caps.
 
 Re-run recipe for a bad crop: re-run `crop_character.py` with an adjusted `--box` (it
-overwrites silently — free to iterate) → `rm style-sheet-{slug}.png` → re-run Stage 2.
+overwrites silently — free to iterate) → `rm style-sheet-{slug}.png` → re-run Stage 2
+(or use the editor's per-cast Regenerate sheet button — PER-59).
 Cross-session note: crop provenance is not stored in `story.json` (intentional — same rule
 as `style_sheet`). To redo a crop in a new session you need the original source photo again.
 
@@ -298,9 +299,10 @@ explicitly forced dark-toned backdrop area) for `light`.
 `skills/storybook-story/scripts/edit_story.py` is a stdlib-only PEP-723 script that
 launches a tiny local HTTP server (127.0.0.1 only) and opens `assets/editor.html` in
 the browser. It provides a visual form for `story.json` — book settings, cast with
-photo previews, palette swatches, and a page-by-page editor with hero-ordered cast
-selection, render-status badges, **per-page image preview, generation history browser,
-a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
+photo previews, palette swatches, **per-cast-entry style-sheet generate/regenerate button
+with version history and "Use in book" selector** (PER-59), and a page-by-page editor with
+hero-ordered cast selection, render-status badges, **per-page image preview, generation
+history browser, a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
 and hit Regenerate to retry that page on the stronger model without touching the rest), **a
 per-page ref-count warning badge** (PER-58: amber "5 refs → pro required" when the intent-based
 ref count is 5 and the effective model is flash — render auto-upgrades at runtime; red "N refs >
@@ -330,6 +332,48 @@ Validates against `story_schema.json` before writing, with separate error (block
 warning (non-blocking) tiers. Includes a 409 conflict guard: if `story.json` changes on
 disk while the editor is open (e.g. Stage 2 writes `style_sheet` paths), the save
 returns an error and a Reload button rather than silently clobbering the new content.
+
+### Style-sheet endpoints (PER-59)
+
+Three server endpoints mirror the page-image flow for cast-entry style sheets:
+
+- **`GET /api/sheet/versions?name=X`** — pure read; lists generated versions as
+  `{versions: [{id, path, mtime, in_use}], regen: {status, error}}`. Entry not found → 404.
+- **`POST /api/sheet/regenerate`** body `{name}` — archives the current sheet into history
+  (`pages/history/{stem}/{stamp}/{stem}.png`), deletes it, then spawns
+  `uv run make_style_sheet.py --only NAME` in a background thread. Returns 200 immediately;
+  poll `/api/sheet/versions?name=X` to watch progress. Requires `GEMINI_API_KEY`.
+  **Full-quiescence gate** (409): ANY running job blocks this call (consolidation, regen-all,
+  any page render, any other sheet regen). Reason: make_style_sheet.py rewrites story.json
+  on completion; concurrent jobs would corrupt each other's story.json write.
+  On failure, the previous sheet is restored from history so the book is never left sheet-less.
+  Works for first-generation too (no prior sheet → nothing to archive; Generate case).
+- **`POST /api/sheet/select`** body `{name, version}` — copies a history entry back into the
+  canonical slot (free, no API). Same full-quiescence gate (sheets are render inputs).
+
+**Sheet history layout** (within `pages/history/` next to story.json):
+```
+pages/history/
+  page-NN/            ← page history (existing)
+  style-sheet-{slug}/ ← sheet history (stem = Path(style_sheet).stem)
+    YYYYMMDD-HHMMSS/
+      style-sheet-{slug}.png
+```
+Sharing one `pages/history/` root means `rm -rf pages/` also wipes sheet history — documented
+accepted trade-off. Renaming a cast entry changes the slug → old-stem history is orphaned
+(same accepted drift class as page reorder).
+
+**GET /api/status** now includes ALL named cast entries (not only those with a `style_sheet`):
+`cast[name] = {style_sheet_exists: bool, regen: {status, error}}`. The `regen` field lets
+a reloaded client resume an in-flight sheet poll.
+
+**`make_style_sheet.py --only NAME`** (PER-59): process only the named cast entry; the slug
+walk still runs for ALL entries so filenames stay stable. Exit 2 if name not found.
+This is NOT equivalent to delete-PNG + full run: the full run rewrites `style_sheet` for
+every entry (absolute paths), which would desync the client's single-field mtime patch.
+
+**Known limitations:** pages using a regenerated sheet are stale but show no stale badge
+(badge tracks session edits, not sheet changes). The confirm-dialog warns the user.
 
 ### Image manipulation endpoints (PER-41, PER-47)
 

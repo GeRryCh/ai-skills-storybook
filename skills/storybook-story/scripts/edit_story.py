@@ -35,6 +35,17 @@ Endpoints:
                                prerequisite raw/art/bg is missing, 409 if a render is running.
   POST /api/page/select       copy a history version into the canonical slot (free, no API
                                call). Sets the "used in book" image for that page.
+  GET  /api/sheet/versions?name=X  list generated versions for a cast entry's style sheet
+                               (pure read, no disk mutation).
+                               Returns {ok, versions: [{id, path, mtime, in_use}], regen: {…}}
+  POST /api/sheet/regenerate  generate or regenerate a style sheet for one cast entry
+                               (paid Gemini call). Requires GEMINI_API_KEY. Body: {name}.
+                               Spawns uv run make_style_sheet.py --only NAME in a background
+                               thread; returns 200 immediately. Poll /api/sheet/versions.
+                               Full-quiescence gate (409): any running job blocks this
+                               (make_style_sheet.py rewrites story.json on completion).
+  POST /api/sheet/select      copy a sheet history version into the canonical slot (free).
+                               Body: {name, version}. Same full-quiescence gate as regenerate.
   POST /api/consolidate       assemble PDF, EPUB, and/or zip package from rendered pages
                                (free, no API key). Body: {formats: ["pdf","epub","zip"]}.
                                Spawns merge_pdf.py / merge_epub.py / package_book.py
@@ -60,12 +71,16 @@ A trailing newline is preserved iff the file on disk had one.
 History layout (pages/ next to story.json):
   pages/
     page-NN.png                  ← canonical (consolidation input)
+    style-sheet-{slug}.png       ← canonical sheet (out_dir defaults to story.json parent)
     history/
       page-NN/
         YYYYMMDD-HHMMSS/         ← one generation per stamped dir
           page-NN.png            (whatever artifacts existed are copied here)
           raw-page-NN.png
           …
+      style-sheet-{slug}/        ← sheet history (stem = Path(style_sheet).stem)
+        YYYYMMDD-HHMMSS/
+          style-sheet-{slug}.png
 
 "Used in book" = whichever history entry's preview-file hash matches the
 canonical preview. No manifest; survives CLI renders and pre-feature books.
@@ -116,6 +131,14 @@ RENDER_SCRIPT = (
     / "render_book.py"
 )
 
+# make_style_sheet.py — Stage 2 script invoked by the sheet-regenerate endpoint.
+STYLE_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "storybook-stylesheet"
+    / "scripts"
+    / "make_style_sheet.py"
+)
+
 _CONSOLIDATE_DIR = (
     Path(__file__).resolve().parents[2]
     / "storybook-consolidate"
@@ -144,6 +167,16 @@ _regen_all_job: dict = {"status": "idle", "error": None, "pages": []}
 # Timeout for a full-book render: pages run concurrently, so wall-clock ≈ slowest page
 # plus retries.  30 minutes should be generous even for large books.
 REGEN_ALL_TIMEOUT = 1800
+
+
+def _any_sheet_running() -> bool:
+    """Return True if any style-sheet regeneration job is currently running.
+    Caller must hold _regen_lock.
+    """
+    return any(
+        isinstance(k, str) and k.startswith("sheet:") and v.get("status") == "running"
+        for k, v in _regen_jobs.items()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +888,226 @@ def _build_versions_payload(
     return {"versions": versions, "regen": regen}
 
 
+# ---------------------------------------------------------------------------
+# Style-sheet history helpers (mirror the page history helpers above)
+# ---------------------------------------------------------------------------
+
+
+def _list_sheet_history_entries(pages_dir: Path, stem: str) -> list[dict]:
+    """List history entries for a style sheet, newest first.
+
+    stem = Path(entry["style_sheet"]).stem, e.g. "style-sheet-pip".
+    Each dict: {"id": stamp_str, "path": Path, "mtime": float}
+    Layout: pages/history/{stem}/{STAMP}/{stem}.png
+    """
+    hdir = pages_dir / "history" / stem
+    if not hdir.is_dir():
+        return []
+    entries = []
+    for stamp_dir in sorted(hdir.iterdir(), reverse=True):
+        if not stamp_dir.is_dir() or not _STAMP_RE.match(stamp_dir.name):
+            continue
+        png = stamp_dir / f"{stem}.png"
+        if not png.is_file():
+            continue
+        try:
+            mtime = stamp_dir.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        entries.append({"id": stamp_dir.name, "path": png, "mtime": mtime})
+    return entries
+
+
+def _adopt_sheet(pages_dir: Path, sheet_path: Path) -> str | None:
+    """Copy the current canonical sheet into a new history entry.
+
+    Returns the entry id, or the id of an existing matching entry (idempotent),
+    or None if the file does not exist. Does NOT delete the canonical file.
+    """
+    if not sheet_path.is_file():
+        return None
+    try:
+        canonical_hash = _file_hash(sheet_path)
+    except OSError:
+        return None
+    stem = sheet_path.stem
+    # Check for an existing duplicate (idempotent)
+    for entry in _list_sheet_history_entries(pages_dir, stem):
+        try:
+            if _file_hash(entry["path"]) == canonical_hash:
+                return entry["id"]
+        except OSError:
+            pass
+    # Create a new stamped entry
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    hdir = pages_dir / "history" / stem
+    target = hdir / stamp
+    suffix = 0
+    while target.exists():
+        suffix += 1
+        target = hdir / f"{stamp}-{suffix}"
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(sheet_path, target / f"{stem}.png")
+    except OSError:
+        pass
+    return target.name
+
+
+def _restore_sheet(pages_dir: Path, sheet_path: Path) -> None:
+    """Copy the most recent history entry back to the canonical sheet path.
+
+    Called on regen failure so the book is not left sheet-less.
+    Safe no-op when history is empty.
+    """
+    stem = sheet_path.stem
+    entries = _list_sheet_history_entries(pages_dir, stem)
+    if not entries:
+        return
+    src = entries[0]["path"]
+    try:
+        shutil.copy2(src, sheet_path)
+    except OSError:
+        pass
+
+
+def _build_sheet_versions_payload(
+    pages_dir: Path, story_dir: Path, name: str, sheet_path: "Path | None"
+) -> dict:
+    """Build the {versions, regen} dict returned by GET /api/sheet/versions."""
+    canonical_hash: "str | None" = None
+    if sheet_path is not None and sheet_path.is_file():
+        try:
+            canonical_hash = _file_hash(sheet_path)
+        except OSError:
+            pass
+
+    stem: "str | None" = sheet_path.stem if sheet_path is not None else None
+    hist = _list_sheet_history_entries(pages_dir, stem) if stem else []
+
+    versions = []
+    canonical_found_in_history = False
+
+    for entry in hist:
+        try:
+            h = _file_hash(entry["path"])
+        except OSError:
+            continue
+        in_use = canonical_hash is not None and h == canonical_hash
+        if in_use:
+            canonical_found_in_history = True
+        try:
+            rel = entry["path"].relative_to(story_dir)
+        except ValueError:
+            rel = entry["path"]
+        versions.append({
+            "id": entry["id"],
+            "path": str(rel),
+            "mtime": entry["mtime"],
+            "in_use": in_use,
+        })
+
+    # Canonical exists but not yet in history: prepend a pseudo-entry (same
+    # semantics as _build_versions_payload for pages).
+    if sheet_path is not None and sheet_path.is_file() and not canonical_found_in_history:
+        try:
+            mtime = sheet_path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        try:
+            rel = sheet_path.relative_to(story_dir)
+        except ValueError:
+            rel = sheet_path
+        versions.insert(0, {
+            "id": "current",
+            "path": str(rel),
+            "mtime": mtime,
+            "in_use": True,
+        })
+
+    with _regen_lock:
+        regen = dict(_regen_jobs.get(f"sheet:{name}", {"status": None, "error": None}))
+
+    return {"versions": versions, "regen": regen}
+
+
+# ---------------------------------------------------------------------------
+# Sheet-regeneration thread target
+# ---------------------------------------------------------------------------
+
+
+def _run_sheet_regen(
+    story_path: Path,
+    pages_dir: Path,
+    name: str,
+    old_sheet_path: "Path | None",
+    env: dict,
+) -> None:
+    """Thread target: invoke make_style_sheet.py --only NAME, then update _regen_jobs.
+
+    On success: adopts the new canonical sheet into history, marks done.
+    On failure: restores the old sheet from history (if any), marks error.
+    """
+    job_key = f"sheet:{name}"
+    try:
+        cmd = [
+            "uv",
+            "run",
+            str(STYLE_SCRIPT),
+            "--story",
+            str(story_path),
+            "--only",
+            name,
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=str(story_path.parent),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+        if result.returncode == 0:
+            # Re-read story.json for the (possibly new) style_sheet path written by the script.
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    updated = json.load(f)
+                new_entry = next(
+                    (e for e in updated.get("cast", []) if e.get("name") == name),
+                    None,
+                )
+                new_sheet_str = new_entry.get("style_sheet") if new_entry else None
+                new_sheet: "Path | None" = Path(new_sheet_str) if new_sheet_str else None
+            except (OSError, json.JSONDecodeError):
+                new_sheet = old_sheet_path
+            if new_sheet is not None and new_sheet.is_file():
+                _adopt_sheet(pages_dir, new_sheet)
+            with _regen_lock:
+                _regen_jobs[job_key] = {"status": "done", "error": None}
+        else:
+            if old_sheet_path is not None:
+                _restore_sheet(pages_dir, old_sheet_path)
+            # Prefer stderr (Python tracebacks); fall back to stdout (script log).
+            stderr_tail = (result.stderr or "").strip()[-800:]
+            stdout_tail = (result.stdout or "").strip()[-800:]
+            error_msg = stderr_tail or stdout_tail or "sheet generation failed (no output captured)"
+            with _regen_lock:
+                _regen_jobs[job_key] = {"status": "error", "error": error_msg}
+    except subprocess.TimeoutExpired:
+        if old_sheet_path is not None:
+            _restore_sheet(pages_dir, old_sheet_path)
+        with _regen_lock:
+            _regen_jobs[job_key] = {
+                "status": "error",
+                "error": "sheet generation timed out after 10 minutes",
+            }
+    except Exception as exc:  # noqa: BLE001
+        if old_sheet_path is not None:
+            _restore_sheet(pages_dir, old_sheet_path)
+        with _regen_lock:
+            _regen_jobs[job_key] = {"status": "error", "error": str(exc)}
+
+
 def _run_regen(
     story_path: Path,
     pages_dir: Path,
@@ -1085,6 +1338,8 @@ def make_handler(story_path: Path, schema: dict):
                 self._get_status()
             elif route == "/api/versions":
                 self._get_versions(url)
+            elif route == "/api/sheet/versions":
+                self._get_sheet_versions(url)
             elif route == "/api/consolidate/status":
                 self._get_consolidate_status()
             elif route == "/api/regenerate-all/status":
@@ -1135,15 +1390,27 @@ def make_handler(story_path: Path, schema: dict):
                     for sfx in ("", "-native", "-long")
                 )
                 page_status[str(num)] = {"rendered": rendered}
+            # Snapshot sheet-regen job states while holding the lock.
+            with _regen_lock:
+                sheet_jobs = {
+                    k[len("sheet:"):]: dict(v)
+                    for k, v in _regen_jobs.items()
+                    if isinstance(k, str) and k.startswith("sheet:")
+                }
             cast_status: dict[str, dict] = {}
             for entry in story.get("cast", []):
-                name, sheet = entry.get("name"), entry.get("style_sheet")
-                if isinstance(name, str) and isinstance(sheet, str):
-                    cast_status[name] = {
-                        "style_sheet_exists": resolve_story_rel(
-                            sheet, story_dir
-                        ).exists()
-                    }
+                name = entry.get("name")
+                if not isinstance(name, str):
+                    continue
+                sheet = entry.get("style_sheet")
+                style_sheet_exists = (
+                    isinstance(sheet, str)
+                    and resolve_story_rel(sheet, story_dir).exists()
+                )
+                cast_status[name] = {
+                    "style_sheet_exists": style_sheet_exists,
+                    "regen": sheet_jobs.get(name, {"status": None, "error": None}),
+                }
             self._send_json(
                 200, {"ok": True, "pages": page_status, "cast": cast_status}
             )
@@ -1261,6 +1528,10 @@ def make_handler(story_path: Path, schema: dict):
                 self._post_recomposite()
             elif route == "/api/page/select":
                 self._post_select()
+            elif route == "/api/sheet/regenerate":
+                self._post_sheet_regenerate()
+            elif route == "/api/sheet/select":
+                self._post_sheet_select()
             elif route == "/api/consolidate":
                 self._post_consolidate()
             elif route == "/api/regenerate-all":
@@ -1309,10 +1580,14 @@ def make_handler(story_path: Path, schema: dict):
                 return
 
             # Gate: only one regen per page at a time; also block while consolidating
-            # (consolidation reads pages/ — deleting canonicals mid-merge corrupts output).
+            # (consolidation reads pages/ — deleting canonicals mid-merge corrupts output)
+            # or while a sheet regen is running (page renders read sheet files as refs).
             with _regen_lock:
                 if _consolidate_job["status"] == "running":
                     self._fail(409, "consolidation is running — wait for it to finish before re-rendering")
+                    return
+                if _any_sheet_running():
+                    self._fail(409, "a style-sheet regeneration is running — wait for it to finish before re-rendering (page renders read sheet files as references)")
                     return
                 job = _regen_jobs.get(num, {})
                 if job.get("status") == "running":
@@ -1490,6 +1765,217 @@ def make_handler(story_path: Path, schema: dict):
                         pass
 
             payload = _build_versions_payload(pages_dir, story_dir, num)
+            self._send_json(200, {"ok": True, **payload})
+
+        # -- Style-sheet endpoints -------------------------------------------
+
+        def _get_sheet_versions(self, url) -> None:
+            """Return version history for one cast entry's style sheet (pure read).
+
+            Response: {ok, versions: [{id, path, mtime, in_use}], regen: {status, error}}
+            """
+            qs = parse_qs(url.query)
+            name = qs.get("name", [""])[0].strip()
+            if not name:
+                self._fail(400, "?name= must be non-empty")
+                return
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    s = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                self._fail(500, f"cannot read story.json: {e}")
+                return
+            entry = next((e for e in s.get("cast", []) if e.get("name") == name), None)
+            if entry is None:
+                self._fail(404, f"cast entry {name!r} not found")
+                return
+            sheet_str = entry.get("style_sheet")
+            sheet_path_val = (
+                resolve_story_rel(sheet_str, story_dir)
+                if isinstance(sheet_str, str)
+                else None
+            )
+            pages_dir = story_dir / "pages"
+            payload = _build_sheet_versions_payload(pages_dir, story_dir, name, sheet_path_val)
+            self._send_json(200, {"ok": True, **payload})
+
+        def _post_sheet_regenerate(self) -> None:
+            """Generate or regenerate the style sheet for one cast entry.
+
+            Body: {"name": "Cast Name"}
+            Requires GEMINI_API_KEY in the editor's environment.
+            Spawns uv run make_style_sheet.py --only NAME in a background thread;
+            returns 200 immediately. Poll GET /api/sheet/versions?name=… for progress.
+
+            Full-quiescence gate (all 409):
+            - any page render, sheet regen, recomposite, or regen-all is running
+            - consolidation is running
+            The full-quiescence rule ensures make_style_sheet.py's story.json write
+            (on completion) does not race with other jobs that read or write the file.
+            """
+            body, err = self._read_json_body()
+            if err:
+                self._fail(400, err)
+                return
+            name = (body or {}).get("name", "")
+            if not isinstance(name, str) or not name.strip():
+                self._fail(400, "body must have non-empty name (string)")
+                return
+            name = name.strip()
+
+            # Find the cast entry (name check before key check — smoke-testable without key).
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    s = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                self._fail(500, f"cannot read story.json: {e}")
+                return
+            entry = next((e for e in s.get("cast", []) if e.get("name") == name), None)
+            if entry is None:
+                self._fail(404, f"cast entry {name!r} not found in story.json")
+                return
+
+            # GEMINI_API_KEY check — sheet generation always triggers a paid call.
+            if not os.environ.get("GEMINI_API_KEY"):
+                self._fail(
+                    400,
+                    "GEMINI_API_KEY is not set in the editor's environment. "
+                    "Restart the editor with the key: "
+                    "GEMINI_API_KEY=your_key uv run edit_story.py --story …",
+                )
+                return
+
+            if not STYLE_SCRIPT.is_file():
+                self._fail(500, f"style sheet script not found: {STYLE_SCRIPT}")
+                return
+
+            # Full-quiescence gate.
+            job_key = f"sheet:{name}"
+            with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation is running — wait for it to finish before regenerating sheets")
+                    return
+                if _regen_all_job["status"] == "running":
+                    self._fail(409, "regenerate-all is running — wait for it to finish before regenerating sheets")
+                    return
+                if any(j.get("status") == "running" for j in _regen_jobs.values()):
+                    self._fail(409, "a render or sheet regeneration is already running — wait for it to finish")
+                    return
+                _regen_jobs[job_key] = {"status": "running", "error": None}
+
+            pages_dir = story_dir / "pages"
+            pages_dir.mkdir(parents=True, exist_ok=True)
+
+            # Archive and delete the current sheet so make_style_sheet.py skips
+            # past the skip-if-exists guard and generates a fresh one.
+            sheet_str = entry.get("style_sheet")
+            old_sheet: "Path | None" = None
+            if isinstance(sheet_str, str):
+                candidate = resolve_story_rel(sheet_str, story_dir)
+                if candidate.is_file():
+                    _adopt_sheet(pages_dir, candidate)
+                    try:
+                        candidate.unlink()
+                    except OSError:
+                        pass
+                    old_sheet = candidate
+                # If file is absent (path recorded but missing): Generate case.
+                # old_sheet stays None — _restore_sheet is a no-op on failure.
+
+            env = os.environ.copy()
+            t = threading.Thread(
+                target=_run_sheet_regen,
+                args=(story_path, pages_dir, name, old_sheet, env),
+                daemon=True,
+            )
+            t.start()
+
+            self._send_json(200, {"ok": True})
+
+        def _post_sheet_select(self) -> None:
+            """Copy a sheet history version into the canonical slot (free, no API call).
+
+            Body: {"name": "Cast Name", "version": "YYYYMMDD-HHMMSS"}
+            Same full-quiescence gate as _post_sheet_regenerate (sheets are render
+            inputs — swapping one while a render is running could corrupt the output).
+            """
+            body, err = self._read_json_body()
+            if err:
+                self._fail(400, err)
+                return
+            name = (body or {}).get("name", "")
+            version = (body or {}).get("version", "")
+            if not isinstance(name, str) or not name.strip():
+                self._fail(400, "body must have non-empty name (string)")
+                return
+            if not isinstance(version, str) or not version.strip():
+                self._fail(400, "body must have non-empty version (string)")
+                return
+            name = name.strip()
+            version = version.strip()
+
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    s = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                self._fail(500, f"cannot read story.json: {e}")
+                return
+            entry = next((e for e in s.get("cast", []) if e.get("name") == name), None)
+            if entry is None:
+                self._fail(404, f"cast entry {name!r} not found")
+                return
+
+            sheet_str = entry.get("style_sheet")
+            if not isinstance(sheet_str, str):
+                self._fail(400, f"cast entry {name!r} has no style_sheet path recorded")
+                return
+            sheet_path_val = resolve_story_rel(sheet_str, story_dir)
+            pages_dir = story_dir / "pages"
+
+            # Full-quiescence gate (same reasoning as _post_sheet_regenerate).
+            with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation is running — wait before selecting a sheet version")
+                    return
+                if _regen_all_job["status"] == "running":
+                    self._fail(409, "regenerate-all is running — wait before selecting a sheet version")
+                    return
+                if any(j.get("status") == "running" for j in _regen_jobs.values()):
+                    self._fail(409, "a render or sheet regeneration is running — wait before selecting a sheet version")
+                    return
+
+            # "current" pseudo-entry: canonical is already correct, just return fresh payload.
+            if version == "current":
+                payload = _build_sheet_versions_payload(pages_dir, story_dir, name, sheet_path_val)
+                self._send_json(200, {"ok": True, **payload})
+                return
+
+            # Validate stamp format (path-traversal guard).
+            if not _STAMP_RE.match(version):
+                self._fail(400, f"invalid version id: {version!r}")
+                return
+
+            stem = sheet_path_val.stem
+            stamp_dir = pages_dir / "history" / stem / version
+            if not stamp_dir.is_dir():
+                self._fail(404, f"version {version!r} not found for {name!r}")
+                return
+            src = stamp_dir / f"{stem}.png"
+            if not src.is_file():
+                self._fail(404, f"version {version!r} has no PNG for {name!r}")
+                return
+
+            # Adopt-on-mutate invariant: archive current before overwriting.
+            if sheet_path_val.is_file():
+                _adopt_sheet(pages_dir, sheet_path_val)
+
+            try:
+                shutil.copy2(src, sheet_path_val)
+            except OSError as e:
+                self._fail(500, f"cannot copy version: {e}")
+                return
+
+            payload = _build_sheet_versions_payload(pages_dir, story_dir, name, sheet_path_val)
             self._send_json(200, {"ok": True, **payload})
 
         def _post_consolidate(self) -> None:
