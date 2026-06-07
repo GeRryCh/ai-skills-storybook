@@ -162,6 +162,39 @@ def _ref_image_list(char: dict) -> list:
     return ref if isinstance(ref, list) else [ref]
 
 
+def _appearance_echo(appearance: str, prompt: str) -> str:
+    """Return the first 3-consecutive-word trigram from *appearance* found
+    verbatim in *prompt* (both lowercased, punctuation stripped), or "" if none.
+
+    PER-42 heuristic: flags when an image_prompt echoes a cast member's inherent
+    appearance, which weakens the style-sheet reference signal at render time.
+    Appearances shorter than 3 words are skipped (not enough signal to warn on).
+    """
+
+    def _words(s: str) -> list[str]:
+        return re.sub(r"[^\w\s]", " ", s.lower()).split()
+
+    ap_words = _words(appearance)
+    pr_words = _words(prompt)
+    if len(ap_words) < 3:
+        return ""
+    # Build a position index for the first word of each trigram to avoid O(n²)
+    pr_index: dict[str, list[int]] = {}
+    for j, w in enumerate(pr_words):
+        pr_index.setdefault(w, []).append(j)
+
+    for i in range(len(ap_words) - 2):
+        trigram = ap_words[i : i + 3]
+        for start_j in pr_index.get(trigram[0], []):
+            if (
+                start_j + 2 < len(pr_words)
+                and pr_words[start_j + 1] == trigram[1]
+                and pr_words[start_j + 2] == trigram[2]
+            ):
+                return " ".join(trigram)
+    return ""
+
+
 def validate_story(
     story: object, story_dir: Path, schema: dict
 ) -> tuple[list[str], list[str]]:
@@ -281,6 +314,7 @@ def validate_story(
 
     # --- cast ----------------------------------------------------------------
     cast_names: list[str] = []
+    cast_by_name: dict[str, dict] = {}  # name → entry; used by PER-42 echo check below
     cast = story.get("cast")
     if cast is not None:
         if not isinstance(cast, list) or not cast:
@@ -300,6 +334,7 @@ def validate_story(
                     if name in cast_names:
                         warnings.append(f"duplicate cast name '{name}'")
                     cast_names.append(name)
+                    cast_by_name[name] = entry
                 kind = entry.get("kind")
                 if kind is not None and kind not in enums["kind"]:
                     errors.append(
@@ -381,6 +416,30 @@ def validate_story(
                                     f"({cast_names}) — names must match "
                                     "cast[].name exactly"
                                 )
+                        # PER-42: warn when image_prompt echoes a sheet-backed
+                        # cast member's appearance (character/object kinds only;
+                        # locations are excluded — their appearance is scenery
+                        # that the prompt legitimately evokes by name).
+                        prompt_text = page.get("image_prompt")
+                        if isinstance(prompt_text, str):
+                            for n in pc:
+                                ce = cast_by_name.get(n)
+                                if ce is None:
+                                    continue
+                                ce_kind = ce.get("kind") or "character"
+                                if ce_kind not in ("character", "object"):
+                                    continue
+                                ce_appearance = ce.get("appearance", "")
+                                if not isinstance(ce_appearance, str):
+                                    continue
+                                frag = _appearance_echo(ce_appearance, prompt_text)
+                                if frag:
+                                    warnings.append(
+                                        f"{where}.image_prompt repeats appearance of "
+                                        f"'{n}' (\"{frag}\") — refer to sheet-backed "
+                                        "cast by name only; the style sheet defines "
+                                        "appearance (PER-42)"
+                                    )
             if nums and sorted(nums) != list(range(1, len(nums) + 1)):
                 warnings.append(
                     f"page_num sequence is not contiguous 1..{len(nums)}: {nums}"

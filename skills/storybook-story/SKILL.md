@@ -248,8 +248,11 @@ that place only** — never book-wide. This per-page selection is mandatory: wit
 the place's environment would bleed into every page of the book (see
 docs/future-explorations.md, PER-33).
 
-The page's `image_prompt` must also **name the place in prose** (e.g. "...under the
-Eiffel Tower...") so the render model knows the setting even in the text part of the prompt.
+The page's `image_prompt` must also **name the place** (e.g. "...under the Eiffel Tower...")
+so the render model knows the setting. Use the place **name only** — do not re-describe
+its appearance in the prompt; the location photo (or sheet) is the reference, and prose
+re-description makes the model deviate from it (same rule as character/object entries,
+see **image_prompt rules** below).
 
 #### Cap note
 
@@ -313,6 +316,23 @@ Every `image_prompt` MUST:
 - State the art style.
 - NOT contain the actual story text — the script renders it (baked into the illustration in native mode, Pillow-overlaid in overlay mode).
 - NOT contain text-position or safe-zone language — the script appends those transparently from `text_placement`.
+
+**Name-only rule for cast members (PER-42):** Refer to every entry in `pages[].cast` by
+**name only** — never repeat their `appearance` (species, age, colours, outfit, physical
+traits). Each cast entry is reference-backed at render time (character/object → style
+sheet; location → photo or sheet); the sheet/photo is a stronger, more consistent signal
+than prose, and inline appearance description makes the model deviate from the reference.
+
+- ✅ "Pip scrambles up the hill" — name + action, no appearance prose
+- ✅ "Red Umbrella tumbles in the wind" — name only; the object sheet carries its look
+- ✅ "...at the Eiffel Tower..." — place name; the location photo carries the setting
+- ❌ "A small brave hedgehog named Pip scrambles up the hill" — echoes `appearance`, weakens sheet
+
+**Pose, action, expression, and scene description stay in the prompt** — only inherent
+appearance (what the cast entry looks like) is dropped.
+
+**Non-cast background figures** (unnamed visitors, a park keeper, a passing dog) are
+described in prose as usual — they have no style sheet to anchor on.
 
 ---
 

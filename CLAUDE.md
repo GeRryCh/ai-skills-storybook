@@ -128,6 +128,15 @@ first. Preserve this behaviour — it makes partial-failure re-runs cheap.
 
 ## Key design decision: explicit cast, never prose-scraped
 
+**`image_prompt` references cast by name only (PER-42).** Every entry in `pages[].cast`
+is reference-backed at render time (character/object → style sheet; location → photo or
+sheet). Repeating a cast member's `appearance` prose in the `image_prompt` makes the
+render model deviate from the reference; name-only is the stronger, more consistent
+signal. Pose, action, expression, and scene description stay in the prompt — only inherent
+appearance (species, colours, outfit, physical traits) is omitted. Non-cast background
+figures are described in prose as usual (no reference to anchor on).
+`validate_story.py` warns on detected echoes (character/object kinds; locations excluded).
+
 The `cast` array in `story.json` is authored explicitly and is the **only** source for
 the style sheets. An earlier regex that scraped characters from prose minted phantom
 characters (a fish "Deep" from "deep twilight sky", a girl "She" from "She holds a rabbit")
