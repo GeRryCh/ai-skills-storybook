@@ -140,6 +140,12 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
   border-radius:6px;border:none;font-family:inherit;font-weight:500}
 .btn-regen:hover:not(:disabled){background:#ddd6fe;cursor:pointer}
 .btn-regen:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
+.btn-regen-secondary{background:#f8fafc;color:#64748b;border:1px solid #e2e8f0;font-size:11px;font-weight:400}
+.btn-regen-secondary:hover:not(:disabled){background:#f1f5f9;cursor:pointer}
+.btn-recomp{background:#dcfce7;color:#166534;font-size:12px;padding:4px 10px;
+  border-radius:6px;border:none;font-family:inherit;font-weight:600}
+.btn-recomp:hover:not(:disabled){background:#bbf7d0;cursor:pointer}
+.btn-recomp:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
 .regen-status-inline{font-size:11px;color:#64748b}
 </style>
 </head>
@@ -175,8 +181,22 @@ let saveInFlight   = false; // one PUT at a time
 let savePending    = false; // markDirty fired while saveInFlight
 let autoSavePaused = false; // set on 409 (concurrent writer); cleared only by reload
 // ── Version-history state ───────────────────────────────────────────────────
-const _pageVersionData = new Map(); // page_num → {versions: [...], viewIdx: int}
+const _pageVersionData = new Map(); // page_num → {versions: [...], viewIdx: int, fast: {...}}
 const _regenPolls      = new Map(); // page_num → intervalId
+// ── Smart-regenerate / Pillow-only tracking ──────────────────────────────────
+// editedFields: per-page tracking of which story.json fields changed since the
+// last completed render or recomposite (cleared on done, not on save).
+// bookPaidEdit: sticky flag — any render-affecting book-level edit forces paid
+// for every page; cleared only by page reload.
+const editedFields = new Map();   // pageObj → Set<fieldKey>
+let   bookPaidEdit = false;
+// Fields that only affect Pillow post-processing in overlay/long mode —
+// changing only these fields makes the fast "Re-composite (free)" path eligible.
+// (text_background_prompt excluded: needs a paid bg call.)
+const PILLOW_FIELDS = new Set(['text', 'text_placement', 'text_color_hint', 'text_align', 'font']);
+// Book-level fields that don't affect renders at all — changes to these never
+// set bookPaidEdit (e.g. title is metadata only; saved_formats is a consolidate hint).
+const NEUTRAL_BOOK_FIELDS = new Set(['title', 'language', 'saved_formats']);
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -205,8 +225,32 @@ async function init() {
 }
 
 // ── Dirty tracking ─────────────────────────────────────────────────────────
-function markDirty(pageObj) {
-  if (pageObj) { dirtyPages.add(pageObj); editedPages.add(pageObj); }
+// field: the story.json key that changed (e.g. 'text', 'image_prompt', 'cast').
+// Pass field=null or omit to mark as "unknown change" → conservative paid path.
+function markDirty(pageObj, field) {
+  if (pageObj) {
+    dirtyPages.add(pageObj);
+    editedPages.add(pageObj);
+    // Track which field changed for fast-path eligibility.
+    const key = field || '*';  // '*' = unknown → not in PILLOW_FIELDS → paid
+    if (!editedFields.has(pageObj)) editedFields.set(pageObj, new Set());
+    editedFields.get(pageObj).add(key);
+    updateRegenButtons(pageObj.page_num);
+  } else if (field === 'fonts') {
+    // Book-level fonts map change affects every page's composite.
+    (story.pages || []).forEach(p => {
+      editedPages.add(p);
+      if (!editedFields.has(p)) editedFields.set(p, new Set());
+      editedFields.get(p).add('font');
+      updateRegenButtons(p.page_num);
+    });
+  } else if (!field || !NEUTRAL_BOOK_FIELDS.has(field)) {
+    // Any render-affecting book-level edit (style_guide, model, text_mode, resolution,
+    // aspect_ratio, …) disables the fast path for all pages for this session.
+    bookPaidEdit = true;
+    // Refresh all regen buttons so the paid button re-appears everywhere.
+    (story.pages || []).forEach(p => updateRegenButtons(p.page_num));
+  }
   updateDirtyUi();
   // Refresh badges live
   document.querySelectorAll('[data-page-badge]').forEach(el => {
@@ -259,7 +303,7 @@ function bindText(el, obj, key, opts = {}) {
       obj[key] = v;
     }
     if (opts.onchange) opts.onchange(v);
-    markDirty(opts.page || null);
+    markDirty(opts.page || null, key);
   };
   el.addEventListener('change', handler);
   if (opts.oninput) el.addEventListener('input', opts.oninput);
@@ -296,7 +340,7 @@ function bindEnum(el, obj, key, enumVals, opts = {}) {
       el.classList.remove('unset');
     }
     if (opts.onchange) opts.onchange(el.value);
-    markDirty(opts.page || null);
+    markDirty(opts.page || null, key);
   });
 }
 
@@ -666,6 +710,8 @@ function buildPageCard(page, i) {
       <div class="pg-preview-wrap">
         <div id="pg-preview-${page.page_num}" class="preview-img-area"></div>
         <div class="preview-actions">
+          <button class="btn-recomp" id="btn-recomp-${page.page_num}" style="display:none"
+            onclick="doRecomposite(${page.page_num})">✎ Re-composite (free)</button>
           <button class="btn-regen" id="btn-regen-${page.page_num}"
             onclick="doRegenerate(${page.page_num})">↻ Render</button>
           <span class="regen-status-inline" id="regen-status-${page.page_num}"></span>
@@ -717,8 +763,8 @@ function buildPageCard(page, i) {
   // Text / prompt
   const textTa   = card.querySelector(`#pg-text-${i}`);
   const promptTa = card.querySelector(`#pg-prompt-${i}`);
-  textTa.addEventListener('change', () => { page.text = textTa.value; markDirty(page); });
-  promptTa.addEventListener('change', () => { page.image_prompt = promptTa.value; markDirty(page); });
+  textTa.addEventListener('change', () => { page.text = textTa.value; markDirty(page, 'text'); });
+  promptTa.addEventListener('change', () => { page.image_prompt = promptTa.value; markDirty(page, 'image_prompt'); });
 
   // Selects
   bindEnum(card.querySelector(`#pg-placement-${i}`), page, 'text_placement',
@@ -737,7 +783,7 @@ function buildPageCard(page, i) {
   hintInp.addEventListener('change', () => {
     if (hintInp.value === '') delete page.text_color_hint;
     else page.text_color_hint = hintInp.value;
-    markDirty(page);
+    markDirty(page, 'text_color_hint');
   });
 
   // Text page background prompt (long mode only)
@@ -746,7 +792,7 @@ function buildPageCard(page, i) {
   bgPromptInp.addEventListener('change', () => {
     if (bgPromptInp.value === '') delete page.text_background_prompt;
     else page.text_background_prompt = bgPromptInp.value;
-    markDirty(page);
+    markDirty(page, 'text_background_prompt');  // not Pillow-only: needs paid bg call
   });
 
   // Cast
@@ -754,13 +800,7 @@ function buildPageCard(page, i) {
 
   // Preview: if page is rendered or regen is in flight, populate the img area async.
   const _pnum = page.page_num;
-  const regenBtn = card.querySelector(`#btn-regen-${_pnum}`);
-  if (_regenPolls.has(_pnum) && regenBtn) {
-    regenBtn.disabled = true;
-    regenBtn.textContent = '↻ Rendering…';
-  } else if (renderStatus[String(_pnum)]?.rendered && regenBtn) {
-    regenBtn.textContent = '↻ Regenerate';
-  }
+  updateRegenButtons(_pnum);
   if (renderStatus[String(_pnum)]?.rendered || _regenPolls.has(_pnum)) {
     fetchVersions(_pnum);
   }
@@ -803,7 +843,7 @@ function renderPageCast(container, page) {
     // ↑
     if (j > 0) btns[0].addEventListener('click', () => {
       page.cast.splice(j - 1, 0, page.cast.splice(j, 1)[0]);
-      markDirty(page);
+      markDirty(page, 'cast');
       renderPageCast(container, page);
     });
     // ↓
@@ -811,14 +851,14 @@ function renderPageCast(container, page) {
       const db = j > 0 ? btns[1] : btns[0];
       db.addEventListener('click', () => {
         page.cast.splice(j + 1, 0, page.cast.splice(j, 1)[0]);
-        markDirty(page);
+        markDirty(page, 'cast');
         renderPageCast(container, page);
       });
     }
     // ✕
     btns[btns.length - 1].addEventListener('click', () => {
       page.cast.splice(j, 1);
-      markDirty(page);
+      markDirty(page, 'cast');
       renderPageCast(container, page);
     });
     listDiv.appendChild(entry);
@@ -837,7 +877,7 @@ function renderPageCast(container, page) {
       btn.addEventListener('click', () => {
         if (!page.cast) page.cast = [];
         page.cast.push(name);
-        markDirty(page);
+        markDirty(page, 'cast');
         renderPageCast(container, page);
       });
       unselDiv.appendChild(btn);
@@ -861,6 +901,7 @@ function deletePage(evt, i) {
   const page = story.pages[i];
   dirtyPages.delete(page);
   editedPages.delete(page);
+  editedFields.delete(page);  // clean up stale fast-path tracking
   story.pages.splice(i, 1);
   renumberPages();
   renderPages();
@@ -873,6 +914,9 @@ function renumberPages() {
     if (page.page_num !== newNum) {
       page.page_num = newNum;
       dirtyPages.add(page);
+      // page_num change is a render-affecting edit (page reorder)
+      if (!editedFields.has(page)) editedFields.set(page, new Set());
+      editedFields.get(page).add('page_num');
     }
   });
   updateDirtyUi();
@@ -984,7 +1028,7 @@ function renderBook() {
       if (r) story.fonts.reader = r; else delete story.fonts.reader;
       if (d) story.fonts.display = d; else delete story.fonts.display;
     }
-    markDirty(null);
+    markDirty(null, 'fonts');  // special key — marks 'font' on every page as Pillow-only
   };
   fontReaderInp.addEventListener('change', updateFonts);
   fontDisplayInp.addEventListener('change', updateFonts);
@@ -994,6 +1038,59 @@ function renderBook() {
 
   // Saved formats
   renderSavedFormats(b.querySelector('#sf-container'));
+}
+
+// ── Smart-regenerate button logic ──────────────────────────────────────────
+
+// Returns true when all in-session edits for this page are Pillow-only and the
+// server has confirmed the raw/art/bg prerequisite exists (fast.eligible).
+// Conservative: unknown fields, native mode, and any render-affecting book edit
+// all disable the fast path (current behavior = paid re-render).
+function fastAvailable(num) {
+  if (bookPaidEdit) return false;
+  // text_mode absent → native (default) → no Pillow split
+  const mode = story.text_mode;
+  if (mode !== 'overlay' && mode !== 'long') return false;
+  const page = (story.pages || []).find(p => p.page_num === num);
+  if (!page) return false;
+  const fields = editedFields.get(page);
+  if (!fields || fields.size === 0) return false;
+  if (![...fields].every(f => PILLOW_FIELDS.has(f))) return false;
+  const serverFast = (_pageVersionData.get(num) || {}).fast;
+  return !!(serverFast && serverFast.eligible);
+}
+
+// Central function: update both regen buttons for a given page_num.
+// This is the ONLY place that sets labels/visibility so poll flicker is impossible.
+function updateRegenButtons(num, regen) {
+  const recompBtn = document.getElementById(`btn-recomp-${num}`);
+  const regenBtn  = document.getElementById(`btn-regen-${num}`);
+  const statusEl  = document.getElementById(`regen-status-${num}`);
+  if (!regenBtn) return;
+
+  const running  = regen ? regen.status === 'running' : _regenPolls.has(num);
+  const hasVers  = (_pageVersionData.get(num) || {}).versions?.length > 0;
+  const fast     = !running && fastAvailable(num);
+
+  if (running) {
+    if (recompBtn) { recompBtn.style.display = 'none'; recompBtn.disabled = true; }
+    regenBtn.disabled    = true;
+    regenBtn.textContent = '↻ Rendering…';
+    regenBtn.classList.remove('btn-regen-secondary');
+    if (statusEl) statusEl.textContent = 'rendering…';
+  } else if (fast) {
+    if (recompBtn) { recompBtn.style.display = ''; recompBtn.disabled = false; }
+    regenBtn.disabled    = false;
+    regenBtn.textContent = '↻ Re-render (paid)';
+    regenBtn.classList.add('btn-regen-secondary');
+    if (statusEl) statusEl.textContent = '';
+  } else {
+    if (recompBtn) { recompBtn.style.display = 'none'; recompBtn.disabled = true; }
+    regenBtn.disabled    = false;
+    regenBtn.textContent = hasVers ? '↻ Regenerate' : '↻ Render';
+    regenBtn.classList.remove('btn-regen-secondary');
+    if (statusEl) statusEl.textContent = '';
+  }
 }
 
 // ── Page image preview + generation history ────────────────────────────────
@@ -1012,6 +1109,7 @@ function _renderVersionUI(num, apiData) {
 
   if (versions.length === 0) {
     area.innerHTML = '';
+    updateRegenButtons(num, regen);
     return;
   }
 
@@ -1040,21 +1138,8 @@ function _renderVersionUI(num, apiData) {
       ? `<div class="regen-error">⚠ Render failed:<pre>${esc((regen.error || '').slice(-400))}</pre></div>`
       : '');
 
-  // Keep regen button in sync
-  const btn      = document.getElementById(`btn-regen-${num}`);
-  const statusEl = document.getElementById(`regen-status-${num}`);
-  if (btn) {
-    if (regen.status === 'running') {
-      btn.disabled    = true;
-      btn.textContent = '↻ Rendering…';
-    } else {
-      btn.disabled    = false;
-      btn.textContent = n > 0 ? '↻ Regenerate' : '↻ Render';
-    }
-  }
-  if (statusEl) {
-    statusEl.textContent = regen.status === 'running' ? 'rendering…' : '';
-  }
+  // Delegate all button state to the central function (kills poll flicker)
+  updateRegenButtons(num, regen);
 }
 
 // Fetch /api/versions for page_num, cache, and update the UI.
@@ -1072,11 +1157,12 @@ async function fetchVersions(num) {
     const inUseIdx = versions.findIndex(v => v.in_use);
     let viewIdx = inUseIdx >= 0 ? inUseIdx : 0;
     if (prevIdx >= 0 && prevIdx < versions.length) viewIdx = prevIdx;
-    _pageVersionData.set(num, {versions, viewIdx});
+    // Cache fast-path hint alongside version data.
+    _pageVersionData.set(num, {versions, viewIdx, fast: data.fast});
 
     _renderVersionUI(num, data);
 
-    // If a poll is running and the regen just finished, stop polling and
+    // If a poll is running and the regen/recomposite just finished, stop polling and
     // update the page's render badge.
     const status = data.regen && data.regen.status;
     if (_regenPolls.has(num) && (status === 'done' || status === 'error')) {
@@ -1085,10 +1171,13 @@ async function fetchVersions(num) {
         renderStatus[String(num)] = {rendered: true};
         const cardIdx = (story.pages || []).findIndex(p => p.page_num === num);
         if (cardIdx >= 0) {
-          editedPages.delete(story.pages[cardIdx]);
+          const p = story.pages[cardIdx];
+          editedPages.delete(p);
+          editedFields.delete(p);  // clear fast-path tracking — composite applied
           const badgeEl = document.querySelector(`[data-page-badge="${cardIdx}"]`);
-          if (badgeEl) updatePageBadge(badgeEl, story.pages[cardIdx]);
+          if (badgeEl) updatePageBadge(badgeEl, p);
         }
+        updateRegenButtons(num, data.regen);
       }
     }
   } catch (e) {
@@ -1141,6 +1230,47 @@ async function _clickSelectVersion(num, versionId) {
     _renderVersionUI(num, data);
   } catch (e) {
     alert('Network error while selecting version: ' + e.message);
+  }
+}
+
+// Free re-composite handler: flush save → POST recomposite → poll.
+// No confirm dialog — zero cost and the current image is archived first.
+// On server 422 (prerequisite missing), offers a paid re-render fallback.
+async function doRecomposite(num) {
+  // Flush pending save so render_book.py reads the latest text fields.
+  if (dirtyPages.size > 0) {
+    await triggerSave(false);
+    if (dirtyPages.size > 0) {
+      alert('Please save your changes first, then try re-compositing.');
+      return;
+    }
+  }
+
+  updateRegenButtons(num, {status: 'running'});  // show Rendering… immediately
+
+  try {
+    const resp = await fetch('/api/page/recomposite', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({page_num: num}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      updateRegenButtons(num);  // restore button state
+      if (data.fallback) {
+        // Prerequisite raw/art/bg is missing — offer paid fallback.
+        if (confirm(`Fast re-composite unavailable:\n${data.error || ''}\n\nRun a full paid re-render instead?`)) {
+          doRegenerate(num);
+        }
+      } else {
+        alert('Could not start re-composite:\n\n' + (data.error || resp.statusText));
+      }
+      return;
+    }
+    startRegenPoll(num);
+  } catch (e) {
+    updateRegenButtons(num);
+    alert('Network error: ' + e.message);
   }
 }
 

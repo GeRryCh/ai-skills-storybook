@@ -27,6 +27,12 @@ Endpoints:
                                in the editor's environment. Spawns uv run render_book.py
                                --only N in a background thread; returns 200 immediately.
                                Poll /api/versions to watch progress.
+  POST /api/page/recomposite  re-run the free Pillow composite for one page (no API key,
+                               no paid call). Only applicable to overlay mode (existing
+                               raw-page-NN.png) and long mode (existing art/bg). Spawns
+                               render_book.py --only N --composite-only --text-mode <mode>.
+                               Returns 400 for native mode, 422 with fallback:true when the
+                               prerequisite raw/art/bg is missing, 409 if a render is running.
   POST /api/page/select       copy a history version into the canonical slot (free, no API
                                call). Sets the "used in book" image for that page.
 
@@ -538,6 +544,89 @@ def _history_dir(pages_dir: Path, num: int) -> Path:
     return pages_dir / "history" / f"page-{num:02d}"
 
 
+def _recomposite_plan(
+    story: dict, pages_dir: Path, num: int
+) -> tuple[str | None, list[str], str]:
+    """Eligibility check for a free Pillow re-composite of page num.
+
+    Returns (reason, delete_names, mode):
+      - reason: None if eligible; a human-readable explanation if not.
+      - delete_names: the active-mode composite output(s) to delete before
+        re-running (never raws, art, bg, or native files).
+      - mode: the resolved text_mode used in the check.
+
+    Single source of truth used by both GET /api/versions (fast hint) and
+    POST /api/page/recomposite (gate).
+    """
+    mode = story.get("text_mode", "native")
+    nn = f"{num:02d}"
+
+    if mode == "native":
+        return ("native mode has no raw/composite split", [], "native")
+
+    # Find the page in story.json
+    page = next((p for p in story.get("pages", []) if p.get("page_num") == num), None)
+    if page is None:
+        return (f"page {num} not found in story.json", [], mode)
+
+    if mode == "overlay":
+        raw = pages_dir / f"raw-page-{nn}.png"
+        if raw.is_file():
+            return (None, [f"page-{nn}.png"], "overlay")
+        return (
+            f"raw-page-{nn}.png not found — run a full paid re-render to generate the image first",
+            [],
+            "overlay",
+        )
+
+    # Long mode
+    if num == 1:  # cover: overlay-style, guarded by raw
+        raw = pages_dir / "raw-page-01-long.png"
+        if raw.is_file():
+            return (None, ["page-01-long.png"], "long")
+        return (
+            "raw-page-01-long.png not found — run a full paid re-render to generate the cover first",
+            [],
+            "long",
+        )
+
+    # Long body page
+    art = pages_dir / f"page-{nn}-long.png"
+    if not art.is_file():
+        return (
+            f"page-{nn}-long.png not found — run a full paid re-render to generate the art first",
+            [],
+            "long",
+        )
+
+    # Art exists — check text page eligibility
+    page_text = page.get("text", "").strip()
+    if not page_text:
+        # Emptying text is a valid free op: delete the text page so render skips it
+        return (None, [f"page-{nn}-long-text.png"], "long")
+
+    # Text page needs a background
+    if page.get("text_background_prompt", ""):
+        bg = pages_dir / f"page-{nn}-long-bg.png"
+        if not bg.is_file():
+            return (
+                f"page-{nn}-long-bg.png not found — run a full paid re-render to generate the background first",
+                [],
+                "long",
+            )
+    else:
+        bg = pages_dir / "text-bg-long.png"
+        if not bg.is_file():
+            return (
+                "text-bg-long.png (shared text-page background) not found — "
+                "run a full paid re-render to generate it first",
+                [],
+                "long",
+            )
+
+    return (None, [f"page-{nn}-long-text.png"], "long")
+
+
 def _list_history_entries(pages_dir: Path, num: int) -> list[dict]:
     """List history entries for page num, newest first.
 
@@ -703,23 +792,35 @@ def _build_versions_payload(
     return {"versions": versions, "regen": regen}
 
 
-def _run_regen(story_path: Path, pages_dir: Path, num: int, env: dict) -> None:
-    """Thread target: invoke render_book.py --only N, then update _regen_jobs.
+def _run_regen(
+    story_path: Path,
+    pages_dir: Path,
+    num: int,
+    env: dict,
+    extra_args: list[str] | None = None,
+) -> None:
+    """Thread target: invoke render_book.py --only N [extra_args], then update _regen_jobs.
 
     On success: adopts the new canonical into history, marks done.
     On failure: restores the previous canonical from history, marks error.
+
+    extra_args is appended after the base flags — used by the recomposite endpoint
+    to pass --composite-only and --text-mode <mode>.
     """
     try:
+        cmd = [
+            "uv",
+            "run",
+            str(RENDER_SCRIPT),
+            "--story",
+            str(story_path),
+            "--only",
+            str(num),
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
         result = subprocess.run(
-            [
-                "uv",
-                "run",
-                str(RENDER_SCRIPT),
-                "--story",
-                str(story_path),
-                "--only",
-                str(num),
-            ],
+            cmd,
             cwd=str(story_path.parent),
             capture_output=True,
             text=True,
@@ -732,11 +833,15 @@ def _run_regen(story_path: Path, pages_dir: Path, num: int, env: dict) -> None:
                 _regen_jobs[num] = {"status": "done", "error": None}
         else:
             _restore_from_history(pages_dir, num)
+            # Prefer stderr (Python tracebacks); fall back to stdout (per-page render
+            # log, which is where --composite-only errors and API errors are printed).
             stderr_tail = (result.stderr or "").strip()[-800:]
+            stdout_tail = (result.stdout or "").strip()[-800:]
+            error_msg = stderr_tail or stdout_tail or "render failed (no output captured)"
             with _regen_lock:
                 _regen_jobs[num] = {
                     "status": "error",
-                    "error": stderr_tail or "render failed (no stderr captured)",
+                    "error": error_msg,
                 }
     except subprocess.TimeoutExpired:
         _restore_from_history(pages_dir, num)
@@ -870,6 +975,24 @@ def make_handler(story_path: Path, schema: dict):
                 return
             pages_dir = story_dir / "pages"
             payload = _build_versions_payload(pages_dir, story_dir, num)
+            # Append fast-recomposite eligibility hint — pure read, isolated from
+            # the versions/regen data so a story.json parse error never breaks the
+            # paid-regen polling path.
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    s = json.load(f)
+                reason, _, mode = _recomposite_plan(s, pages_dir, num)
+                payload["fast"] = {
+                    "eligible": reason is None,
+                    "reason": reason,
+                    "mode": mode,
+                }
+            except (OSError, json.JSONDecodeError):
+                payload["fast"] = {
+                    "eligible": False,
+                    "reason": "story.json unreadable",
+                    "mode": None,
+                }
             self._send_json(200, {"ok": True, **payload})
 
         def _get_img(self, url) -> None:
@@ -952,6 +1075,8 @@ def make_handler(story_path: Path, schema: dict):
                 self.do_PUT()
             elif route == "/api/page/regenerate":
                 self._post_regenerate()
+            elif route == "/api/page/recomposite":
+                self._post_recomposite()
             elif route == "/api/page/select":
                 self._post_select()
             else:
@@ -1025,6 +1150,89 @@ def make_handler(story_path: Path, schema: dict):
             t = threading.Thread(
                 target=_run_regen,
                 args=(story_path, pages_dir, num, env),
+                daemon=True,
+            )
+            t.start()
+
+            self._send_json(200, {"ok": True})
+
+        def _post_recomposite(self) -> None:
+            """Free Pillow re-composite — no paid Gemini call, no GEMINI_API_KEY needed.
+
+            Deletes only the active-mode composite output (page-NN.png in overlay;
+            page-01-long.png or page-NN-long-text.png in long), then spawns
+            render_book.py --only N --composite-only --text-mode <mode>.
+
+            Returns 400 when native mode is active (no Pillow split).
+            Returns 422 with fallback:true when the prerequisite raw/art/bg is missing
+            (the client should offer the user a paid re-render fallback).
+            Returns 409 when a render is already running for that page.
+            """
+            body, err = self._read_json_body()
+            if err:
+                self._fail(400, err)
+                return
+            try:
+                num = int(body["page_num"])
+            except (KeyError, ValueError, TypeError):
+                self._fail(400, "body must have page_num (integer)")
+                return
+
+            if not RENDER_SCRIPT.is_file():
+                self._fail(500, f"render script not found: {RENDER_SCRIPT}")
+                return
+
+            # Read story.json fresh so _recomposite_plan sees the latest save.
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    story = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                self._fail(500, f"cannot read story.json: {e}")
+                return
+
+            pages_dir = story_dir / "pages"
+            reason, delete_names, mode = _recomposite_plan(story, pages_dir, num)
+
+            if mode == "native":
+                self._fail(400, reason)
+                return
+            if reason is not None:
+                # Ineligible but not native — fallback:true tells the client to offer
+                # a paid re-render. (409 lock conflicts have no fallback field so the
+                # client doesn't retry against a held lock.)
+                self._send_json(422, {"ok": False, "error": reason, "fallback": True})
+                return
+
+            # Per-page lock — one op at a time.
+            with _regen_lock:
+                job = _regen_jobs.get(num, {})
+                if job.get("status") == "running":
+                    self._fail(409, f"regeneration already running for page {num}")
+                    return
+                _regen_jobs[num] = {"status": "running", "error": None}
+
+            pages_dir.mkdir(parents=True, exist_ok=True)
+
+            # Adopt existing canonical into history before touching it.
+            _adopt_canonical(pages_dir, num)
+
+            # Delete only the active-mode composite output — never raws, art, bg, or
+            # native artifacts.  bg files are deliberately preserved (render skips them
+            # when present, avoiding a repeat paid bg call).
+            for name in delete_names:
+                p = pages_dir / name
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+            # Spawn composite-only render thread. Pin --text-mode to the mode the
+            # eligibility check used so both agree by construction.
+            env = os.environ.copy()
+            t = threading.Thread(
+                target=_run_regen,
+                args=(story_path, pages_dir, num, env),
+                kwargs={"extra_args": ["--composite-only", "--text-mode", mode]},
                 daemon=True,
             )
             t.start()

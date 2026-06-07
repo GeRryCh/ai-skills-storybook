@@ -542,13 +542,18 @@ def _retry_delay(attempt: int, exc: Exception) -> float:
 class _LazyClient:
     """Builds the genai.Client on first paid API call.
 
-    Allows runs that only rebuild free artifacts (e.g. a missing text page in long mode)
-    to complete without a GEMINI_API_KEY in the environment, honoring the repo's
-    idempotency contract: 'regen free artifacts for free'.
+    Allows runs that only rebuild free artifacts (e.g. a missing text page in long mode,
+    or an overlay composite when the raw already exists) to complete without a
+    GEMINI_API_KEY in the environment, honoring the repo's idempotency contract:
+    'regen free artifacts for free'.
+
+    When composite_only=True, any would-be paid Gemini call returns False immediately
+    with a clear error message — guaranteeing zero API spend.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, composite_only: bool = False) -> None:
         self._client = None
+        self.composite_only = composite_only
 
     def get(self):
         if self._client is None:
@@ -595,6 +600,16 @@ async def run_nano_banana(
     model: str = IMAGE_MODEL,
 ) -> bool:
     """Generate one illustration via the Gemini API and write it to raw_path."""
+    # --composite-only guard: refuse any paid call, return False so the run continues.
+    # The caller checks the return value; the run exits 1 via the "N page(s) failed" path.
+    if client.composite_only:
+        log.append(
+            f"  ERROR: {raw_path.name} requires a paid Gemini call, but --composite-only "
+            "is set. Delete only the composite output (not the raw/art file) and re-run, "
+            "or run without --composite-only to generate the image."
+        )
+        return False
+
     from google.genai import errors, types
 
     # Build contents: text prompt, then for each reference image a short
@@ -859,11 +874,15 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
             return False
     else:
         raw_path = pages_dir / f"raw-page-{nn}.png"
-        ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model)
-        if not ok or not raw_path.exists():
-            log.append(f"  ERROR: image generation failed for page {page_num}")
-            print("\n" + "\n".join(log))
-            return False
+        # Generate only when the raw doesn't already exist — mirrors the long-cover guard
+        # at :762.  Deleting page-NN.png alone (without its raw) triggers a free
+        # re-composite; deleting both triggers a paid re-render.
+        if not raw_path.exists():
+            ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model)
+            if not ok or not raw_path.exists():
+                log.append(f"  ERROR: image generation failed for page {page_num}")
+                print("\n" + "\n".join(log))
+                return False
 
         text = page.get("text", "")
         placement = _overlay_placement(page.get("text_placement", "floating"))
@@ -886,13 +905,17 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None, cli_model: str | None = None) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False) -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
-    so runs that only rebuild free artifacts (e.g. text pages in long mode) need no key.
+    so runs that only rebuild free artifacts (e.g. text pages in long mode, overlay
+    composites when the raw already exists) need no GEMINI_API_KEY.
+
+    When composite_only=True, any page that would require a paid Gemini call fails with
+    a clear error; free pages (existing raw/art/bg → overlay only) succeed normally.
     """
-    client = _LazyClient()
+    client = _LazyClient(composite_only=composite_only)
 
     # Long mode: the shared text-page background is one per book — generate it once,
     # sequentially, BEFORE the pages fire (pages only consume it; generating it inside
@@ -981,6 +1004,19 @@ def main() -> None:
             "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )
+    parser.add_argument(
+        "--composite-only",
+        dest="composite_only",
+        action="store_true",
+        default=False,
+        help=(
+            "Abort instead of making any paid Gemini call; only rebuild free Pillow "
+            "composites (overlay text panels, long-mode text pages, long cover) from "
+            "existing raw/art/bg files. Needs no GEMINI_API_KEY. "
+            "Pages that would require a new image are reported as failures (exit 1) "
+            "with a message naming the missing prerequisite file."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -1057,7 +1093,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio, cli_model=args.model)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio, cli_model=args.model, composite_only=args.composite_only)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:

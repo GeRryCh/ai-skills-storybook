@@ -121,7 +121,10 @@ uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 `--text-mode overlay|native|long`, `--model gemini-3.1-flash-image|gemini-3-pro-image`
 (override per-page/book model for one run; precedence: CLI > page field > story field > flash default),
 `--saved-formats pdf epub|none` (override story.json
-`saved_formats`; default when neither set: all formats).
+`saved_formats`; default when neither set: all formats),
+`--composite-only` (abort instead of making any paid Gemini call; only rebuild free Pillow
+composites from existing raw/art/bg files — needs no `GEMINI_API_KEY`; pages that would
+require a new image fail with a clear message naming the missing prerequisite, exit 1).
 Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
@@ -136,6 +139,16 @@ Both paid scripts **skip work whose output already exists**: `make_style_sheet.p
 the missing ones); `render_book.py` skips any `page-NN.png` that exists. To force a
 regenerate you must `rm` the target file (and the matching `raw-page-NN.png` for a page)
 first. Preserve this behaviour — it makes partial-failure re-runs cheap.
+
+**Overlay mode free re-composite (PER-47):** `render_book.py` now guards the overlay
+Gemini call with `if not raw_path.exists()`. This means:
+- `rm page-NN.png` alone + re-run = free re-composite from `raw-page-NN.png` (no API call,
+  no `GEMINI_API_KEY` needed).
+- `rm page-NN.png` + `rm raw-page-NN.png` + re-run = paid re-render (new image).
+  The same two-tier semantics apply to the long-mode cover (`page-01-long.png` /
+  `raw-page-01-long.png`); long-mode body text pages have always been free to rebuild
+  when `page-NN-long.png` and the shared `text-bg-long.png` already exist.
+  Use `--composite-only` to guarantee no paid call is ever made in a run.
 
 ## Key design decision: explicit cast, never prose-scraped
 
@@ -267,22 +280,49 @@ warning (non-blocking) tiers. Includes a 409 conflict guard: if `story.json` cha
 disk while the editor is open (e.g. Stage 2 writes `style_sheet` paths), the save
 returns an error and a Reload button rather than silently clobbering the new content.
 
-### Image manipulation endpoints (PER-41)
+### Image manipulation endpoints (PER-41, PER-47)
 
-Three new server endpoints power per-page image controls:
+Four server endpoints power per-page image controls:
 
 - **`GET /api/versions?page=N`** — pure read; lists generated versions for page N as
-  `{versions: [{id, path, mtime, in_use}], regen: {status, error}}`. Newest first.
-  `path` values are story-dir-relative and fed straight to `/img?path=…`.
+  `{versions: [{id, path, mtime, in_use}], regen: {status, error}, fast: {eligible, reason, mode}}`.
+  Newest first. `path` values are story-dir-relative and fed straight to `/img?path=…`.
+  The `fast` field (PER-47) signals whether a free Pillow re-composite is currently possible
+  (eligibility = mode is overlay/long AND the prerequisite raw/art/bg exists on disk).
 - **`POST /api/page/regenerate`** body `{page_num}` — archives the current image into
   history, deletes the canonical file(s), then spawns `uv run render_book.py --only N`
   in a background thread. Returns 200 immediately; poll `/api/versions` to watch
   progress. Requires `GEMINI_API_KEY` in the editor's env (checked on start). On
   render failure, the previous canonical is restored from history so the book is never
   left with a hole.
+- **`POST /api/page/recomposite`** body `{page_num}` (PER-47) — free Pillow re-composite;
+  no API key, no paid call. Deletes only the active-mode composite output (never raws/art/bg)
+  and spawns `render_book.py --only N --composite-only --text-mode <mode>`. Returns 400 for
+  native mode (no Pillow split), 422 with `fallback:true` when the prerequisite raw/art/bg is
+  missing (client offers paid re-render fallback), 409 when a render is already running.
+  Same adopt/restore history mechanics as regenerate.
 - **`POST /api/page/select`** body `{page_num, version}` — copies a history entry's
   artifact set into the canonical slot (the "used in book" image). Free, synchronous.
-  Both this endpoint and regenerate gate on a per-page lock (409 if one is running).
+  All mutating endpoints gate on a per-page lock (409 if one is running).
+
+### Smart regenerate buttons (PER-47)
+
+The editor tracks which story.json fields changed per page since the last completed render
+or recomposite. When ALL changed fields are Pillow-only (`text`, `text_placement`,
+`text_color_hint`, `text_align`, `font`) AND the server confirms `fast.eligible`, the UI
+shows two buttons: **"✎ Re-composite (free)"** (calls the recomposite endpoint) as primary
+and **"↻ Re-render (paid)"** as a small secondary override. Otherwise the single paid
+"↻ Regenerate" / "↻ Render" button is shown as before.
+
+**Accepted limitations:**
+- Tracking is per-browser-session only (stale `image_prompt` from a previous session won't
+  force paid — semantics: "apply text fields to the image you currently see").
+- Any render-affecting book-level edit (style_guide, model, resolution, text_mode, …) sets a
+  sticky `bookPaidEdit` flag for the session, forcing paid on all pages; reload resets it.
+- Long-body text-page archival gap (pre-existing): history identity = preview hash = the art
+  page; a text-page recomposite whose art hash is already in history archives nothing before
+  overwriting. The prior text page is not reliably recoverable — never say "reversible" for
+  long body in UI copy.
 
 ### History layout
 
