@@ -384,7 +384,6 @@ def text_page(
     font_ref = _resolve_font_ref(font, font_name)
     max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
     h_pad = int(w * H_PAD_FRACTION)
-    word_count = len(text.split())
 
     # Independent font-fit loop using TEXT_PAGE_* values (does not call _pick_font_size).
     zone_h = h * TEXT_PAGE_ZONE_FRACTION
@@ -394,7 +393,7 @@ def text_page(
         f = _load_font(font_ref, size)
         dummy = Image.new("RGBA", (w, h))
         draw = ImageDraw.Draw(dummy)
-        lines = _word_wrap("X " * word_count, f, max_text_w, draw)
+        lines = _word_wrap(text, f, max_text_w, draw)
         line_h = draw.textbbox((0, 0), "Ag", font=f)[3] + 8
         total_h = len(lines) * line_h + 2 * v_pad
         return total_h <= limit
