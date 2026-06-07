@@ -164,6 +164,61 @@ clothing from the sheet, not the hero photo. This locks one outfit per character
 the whole book. To change a character's outfit, edit `appearance`, delete the existing
 style-sheet PNG, and re-run `make_style_sheet.py`.
 
+## Location photo references (PER-38)
+
+Real named places (landmarks, cities, named buildings) can contribute a photo reference
+during page rendering — e.g. "the Eiffel Tower" prompts a search for a real photo.
+
+**Stage 1 (in-session, free):** the agent detects real named places in the story, calls
+`perplexity_search` to find a Wikimedia Commons freely-licensed photo, builds a
+deterministic download URL (`Special:FilePath/<File-title>?width=1600`), and runs
+`fetch_location.py` to download and validate it. If the Perplexity MCP is absent,
+locations are skipped with a user-facing message — Stage 1 never fails over this.
+
+**`fetch_location.py`** (`skills/storybook-story/scripts/fetch_location.py`): PEP-723,
+Pillow + stdlib `urllib`. Validates HTTP status, `content-type: image/*`, decodes with
+Pillow, checks min edge (≥512px default), downscales to max edge (≤1536px default), mode-
+normalises to RGB, saves as JPEG. Prints `MEDIA: {out}` for inline preview. Zero-cost
+smoke test:
+
+```bash
+uv run skills/storybook-story/scripts/fetch_location.py \
+  --url "https://commons.wikimedia.org/wiki/Special:FilePath/Tour_Eiffel_Wikimedia_Commons.jpg?width=1600" \
+  --out /tmp/smoke-loc.jpg
+```
+
+**Schema fields:** optional top-level `locations` array (`[{name, ref_image, description?,
+source_url?}]`) + optional `pages[].location` string. `ref_image` is a plain string (one
+path; no array). Declared in `story_schema.json` — `additionalProperties: false` at both
+levels means declarations are required for the editor not to warn. `pages[].location` must
+match a `locations[].name` exactly. Per-page selection is mandatory to prevent environment
+bleed (PER-33 lesson: a location photo used book-wide bleeds the place's environment into
+every page, including pages set elsewhere).
+
+**Cap priority in `collect_input_images` (render_book.py):**
+
+> hero sheet → hero photo → remaining cast sheets → **location photo (lowest)**
+
+The location photo is appended last in the candidates list and is the first to drop from the
+4-image cap. Drops are logged, never silent. On scenery-only pages (`characters: []`) with a
+`location` set, the location photo is the sole reference image. Unknown location names and
+missing files degrade to warnings + skip, never a render failure.
+
+**Labeled-interleaved contents (`run_nano_banana`):** `collect_input_images` now returns
+`(label, path)` pairs (it already built labels, then discarded them). Each reference image
+is preceded in the Gemini `contents` list by a short text part: `"Next image: {label}."`.
+This tells the model whether each image is a character style sheet, a character photograph,
+or a location photograph. The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each
+kind. Keep label wording in sync with the system prompt's "kind" vocabulary:
+
+- `"character style sheet for {name}"` → "defines design, outfit, art style"
+- `"real photograph of the character {name} (facial likeness reference)"` → "face only, outfit from sheet"
+- `"real photograph of the location {loc} (setting reference)"` → "setting, not a character, render in book style"
+
+`STYLE_ANCHOR` contains `"of a character"` in the photo-matching sentence (added in PER-38)
+to prevent the anchor from instructing the model to extract a face from a landmark photo on
+scenery-only pages.
+
 ## Text overlay (`overlay_text.py`)
 
 Pillow composites text on a feathered, semi-transparent rounded white panel that blends into

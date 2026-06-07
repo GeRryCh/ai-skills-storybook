@@ -257,6 +257,31 @@ def validate_story(
                             f"{where}.style_sheet not found on disk: {sheet}"
                         )
 
+    # --- locations (optional) -----------------------------------------------
+    loc_names: list[str] = []
+    locations = story.get("locations")
+    if locations is not None:
+        if not isinstance(locations, list):
+            errors.append("'locations' must be an array")
+        else:
+            for i, loc in enumerate(locations):
+                where = f"locations[{i}]"
+                if not isinstance(loc, dict):
+                    errors.append(f"{where} must be an object")
+                    continue
+                for req in ("name", "ref_image"):
+                    if not isinstance(loc.get(req), str):
+                        errors.append(f"{where} missing string field '{req}'")
+                name = loc.get("name")
+                if isinstance(name, str):
+                    loc_names.append(name)
+                ref_img = loc.get("ref_image")
+                if isinstance(ref_img, str) and ref_img:
+                    if not resolve_story_rel(ref_img, story_dir).exists():
+                        warnings.append(
+                            f"{where}.ref_image not found on disk: {ref_img}"
+                        )
+
     # --- pages ----------------------------------------------------------------
     pages = story.get("pages")
     if pages is not None:
@@ -303,6 +328,17 @@ def validate_story(
                                     f"({cast_names}) — names must match "
                                     "characters[].name exactly"
                                 )
+                page_loc = page.get("location")
+                if page_loc is not None:
+                    if not isinstance(page_loc, str):
+                        errors.append(f"{where}.location must be a string")
+                    elif loc_names and page_loc not in loc_names:
+                        # Warning (not error): render degrades gracefully (warn + skip)
+                        # when a location is missing, so blocking a save would be hostile.
+                        warnings.append(
+                            f"{where}.location: '{page_loc}' is not in locations "
+                            f"({loc_names}) — must match locations[].name exactly"
+                        )
             if nums and sorted(nums) != list(range(1, len(nums) + 1)):
                 warnings.append(
                     f"page_num sequence is not contiguous 1..{len(nums)}: {nums}"

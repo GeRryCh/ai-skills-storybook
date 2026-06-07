@@ -106,6 +106,23 @@ Missing pages emit a warning and are skipped; the output file is still built fro
 
 ---
 
+## Location photo references
+
+If `story.json` defines a top-level `locations` array and a page sets `"location"`, that
+place's `ref_image` photo is sent as an additional reference image with the **lowest**
+priority within the 4-image cap:
+
+> hero sheet → hero photo → remaining cast sheets → **location photo**
+
+Anything past the cap is logged (never silently dropped). On scenery-only pages
+(`"characters": []`) the location photo is the sole reference image.
+
+Each reference is sent with a short identifying note in the Gemini call so the model knows
+a location photo is the setting, not a character. Unknown locations and missing files
+degrade to a logged warning and skip — they never fail the render.
+
+---
+
 ## Cost & failure notes
 
 - Each page = one Gemini image call. 8 pages = 8 calls. Long mode adds 1 call for the shared text-page background (8 pages = 9 calls), plus 1 per page that sets `text_background_prompt`.

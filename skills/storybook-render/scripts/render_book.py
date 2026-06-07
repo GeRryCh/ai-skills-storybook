@@ -80,10 +80,19 @@ BACKOFF_MAX_SECONDS = 60.0
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
     "vivid, concrete, model-ready illustration. Pay attention to composition, "
-    "lighting, color, and visual balance. When a reference photograph is provided "
-    "alongside a character style sheet, draw the character's facial likeness from "
-    "the photo and the art style from the sheet. Clothing, outfit, and character "
-    "design always come from the style sheet, never from the photograph. "
+    "lighting, color, and visual balance. Reference images follow the prompt, "
+    "each introduced by a short text note identifying it. Rules by kind: "
+    "A 'character style sheet' defines that character's design, outfit, and "
+    "the illustration art style — follow it exactly. "
+    "A 'character photograph' supplies that character's facial likeness only — "
+    "clothing, outfit, and character design always come from the style sheet, "
+    "never from any photograph. "
+    "A 'location photograph' shows a real place that is the SETTING of the "
+    "scene: reproduce its recognizable architecture, landmarks, and geography, "
+    "rendered fully in the book's illustration style — it is scenery, never a "
+    "character or a person, and never photographic rendering. "
+    "The identification notes are instructions, not story text; never letter "
+    "them into the image. "
     "Output only the generated image without additional commentary."
 )
 
@@ -104,9 +113,10 @@ FULL_BLEED_ART_DIRECTIVE = (
 SHARED_TEXT_BG_NAME = "text-bg-long.png"
 STYLE_ANCHOR = (
     "Art style and character design must match the provided character reference "
-    "sheet(s) exactly. If a reference photograph is also provided, match that "
-    "character's facial likeness and identity to the photo, but render fully in the "
-    "illustration style of the sheet(s) — never reproduce photographic detail. "
+    "sheet(s) exactly. If a reference photograph of a character is also provided, "
+    "match that character's facial likeness and identity to the photo, but render "
+    "fully in the illustration style of the sheet(s) — never reproduce photographic "
+    "detail. "
     "Each character wears exactly the outfit shown on their reference sheet; "
     "never take clothing or outfit from a photograph. "
     "Consistent character design, {style}. "
@@ -308,7 +318,7 @@ def _ref_photos(char: dict) -> list[str]:
 
 def collect_input_images(
     story: dict, page: dict, log: list[str] | None = None
-) -> list[str]:
+) -> list[tuple[str, str]]:
     """Per-page reference images for the render, capped at MAX_INPUT_IMAGES (4 for flash).
 
     Each character listed in page['characters'] contributes its style sheet (names must
@@ -318,9 +328,14 @@ def collect_input_images(
     likeness on the real photo rather than only the derived (lossy) style sheet.
     CONVENTION: author the hero/child first in each page's cast list.
 
-    Priority order into the budget: hero sheet, hero photo, then the remaining characters'
-    sheets in cast order. Anything beyond the cap is named in a log line so nothing is
-    silently dropped.
+    Priority order into the budget: hero sheet, hero photo, remaining characters'
+    sheets in cast order, then the page's location photo (lowest priority, from
+    story['locations'] via page['location']). On scenery-only pages (characters: [])
+    with a location set, the location photo is the sole reference image.
+    Anything beyond the cap is named in a log line so nothing is silently dropped.
+
+    Returns a list of (label, path) pairs. Labels are passed as interleaved
+    identification notes in run_nano_banana so the model knows each image's role.
     """
     def warn(msg: str) -> None:
         if log is not None:
@@ -349,14 +364,39 @@ def collect_input_images(
         elif not Path(sheet).exists():
             warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
         else:
-            candidates.append((f"{name} sheet", sheet))
+            candidates.append((f"character style sheet for {name}", sheet))
         # Hero (first cast member) also contributes its real photo for face fidelity.
         if i == 0:
             photos = _ref_photos(char)
             if photos:
-                candidates.append((f"{name} photo", photos[0]))
+                candidates.append(
+                    (f"real photograph of the character {name} (facial likeness reference)", photos[0])
+                )
 
-    input_images = [path for _, path in candidates[:MAX_INPUT_IMAGES]]
+    # Location photo (lowest priority): sent only on pages that name a real place.
+    loc_name = page.get("location")
+    if loc_name:
+        loc = next(
+            (l for l in story.get("locations", []) if l.get("name") == loc_name),
+            None,
+        )
+        if loc is None:
+            warn(f"page references unknown location {loc_name!r}; skipping.")
+        else:
+            photo = loc.get("ref_image", "")
+            if not photo:
+                warn(f"location {loc_name!r} has no ref_image; skipping.")
+            elif not Path(photo).exists():
+                warn(
+                    f"location photo for {loc_name!r} not found on disk "
+                    f"({photo}); skipping."
+                )
+            else:
+                candidates.append(
+                    (f"real photograph of the location {loc_name} (setting reference)", photo)
+                )
+
+    selected = candidates[:MAX_INPUT_IMAGES]
     dropped = [label for label, _ in candidates[MAX_INPUT_IMAGES:]]
     if dropped:
         msg = f"cap ({MAX_INPUT_IMAGES}) reached; dropped: {', '.join(dropped)}"
@@ -365,7 +405,7 @@ def collect_input_images(
         else:
             print(f"Note: {msg}")
 
-    return input_images
+    return selected
 
 
 def _retry_delay(attempt: int, exc: Exception) -> float:
@@ -445,14 +485,23 @@ async def run_nano_banana(
     """Generate one illustration via the Gemini API and write it to raw_path."""
     from google.genai import errors, types
 
-    # Build contents: text prompt + one Part.from_bytes per input image.
+    # Build contents: text prompt, then for each reference image a short
+    # identification note followed by the image Part. The note tells the model
+    # what the next image IS (style sheet vs character photo vs location photo);
+    # the behavioural rules for each kind live in IMAGE_SYSTEM_PROMPT.
     contents: list = [prompt]
-    for img_path in collect_input_images(story, page, log):
+    ref_pairs = collect_input_images(story, page, log)
+    for label, img_path in ref_pairs:
         p = Path(img_path)
         mime, _ = mimetypes.guess_type(str(p))
         if not mime:
             mime = "image/png"
+        contents.append(f"Next image: {label}.")
         contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
+    if ref_pairs:
+        log.append(
+            f"  Refs: {'; '.join(label for label, _ in ref_pairs)}"
+        )
 
     config = types.GenerateContentConfig(
         system_instruction=IMAGE_SYSTEM_PROMPT,

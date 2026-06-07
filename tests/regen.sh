@@ -19,6 +19,13 @@ FIXTURE_DIR="$REPO_ROOT/tests/fixtures/pip-storm"
 STYLESHEET_SCRIPT="$REPO_ROOT/skills/storybook-stylesheet/scripts/make_style_sheet.py"
 RENDER_SCRIPT="$REPO_ROOT/skills/storybook-render/scripts/render_book.py"
 
+# NOTE: tests/fixtures/pip-storm/refs/loc-major-oak.jpg is a committed placeholder
+# for the Major Oak location reference (PER-38). It is NOT regenerated here — it is
+# a synthetic image created once to enable offline collect_input_images tests. To
+# replace it with a real photo: uv run skills/storybook-story/scripts/fetch_location.py
+# --url "https://commons.wikimedia.org/wiki/Special:FilePath/<MajorOakFile>" --out
+# tests/fixtures/pip-storm/refs/loc-major-oak.jpg --max-edge 512
+
 echo "=== Step 1: reference character image ==="
 uv run "$REPO_ROOT/tests/gen_ref.py"
 

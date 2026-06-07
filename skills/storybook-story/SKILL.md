@@ -51,7 +51,8 @@ Gather these from the user (ask once if not provided):
 2. Read `assets/story_schema.json` to understand required fields.
 3. Read `assets/story_example.json` as a concrete pattern to follow.
 4. **Analyze any supplied photos** (see Source-photo analysis below) before authoring the cast.
-5. Write `{out_dir}/story.json` following the schema exactly.
+5. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
+6. Write `{out_dir}/story.json` following the schema exactly.
 
 ### Source-photo analysis (BEFORE authoring the cast)
 
@@ -123,6 +124,116 @@ this list and nothing else — it shows exactly these characters and no others.
   Image character-lane limit).
 
 Never rely on auto-extraction: the cast is never guessed from prose.
+
+### Locations — real-place photo references (optional, Perplexity MCP)
+
+When the story mentions a **specific named real place** — a landmark, city, or recognizable
+building (e.g. "the Eiffel Tower", "Sherwood Forest's Major Oak", "the Brandenburg Gate")
+— you can find a real photo of that place and use it as a visual reference during rendering.
+This makes the rendered background resemble the actual location.
+
+**Never use this for generic settings** ("a forest", "the beach", "grandma's kitchen").
+Those are described in prose only. When it is unclear whether a place is real and named, ask
+the user along with the other Stage-1 questions.
+
+#### Availability check (skip gracefully — never fail Stage 1)
+
+This step needs the Perplexity MCP tools (`perplexity_search` etc.). If they are not
+available in this session, skip locations entirely and tell the user once:
+
+> "Location photo references skipped — Perplexity MCP not configured; the book renders
+> fine without them, places will be drawn from the prompt text alone."
+
+Never block or fail Stage 1 because of a missing MCP.
+
+#### Searching for a photo (per place)
+
+Call `perplexity_search` with a query like `"{place name}" photo site:commons.wikimedia.org`.
+
+Prefer **freely-licensed** sources (Wikimedia Commons CC0/PD/CC-BY, or Unsplash public
+domain). Pick a result that links to a Wikimedia Commons file page and note its `File:`
+title (e.g. `File:Tour_Eiffel_Wikimedia_Commons.jpg`).
+
+**Avoid** using `perplexity_ask` to obtain direct image URLs — it has been observed to
+return hallucinated URLs that return 404. If you do use it as a last resort, the download
+script still verifies the URL; a 404 produces a clear exit-1 error so you can try again.
+
+#### Building the direct-download URL
+
+Use the **Special:FilePath** redirect for a deterministic, no-parsing URL:
+
+```
+https://commons.wikimedia.org/wiki/Special:FilePath/{File-title-without-File:-prefix}?width=1600
+```
+
+URL-encode spaces as `_` (Commons convention). Example:
+
+```
+https://commons.wikimedia.org/wiki/Special:FilePath/Tour_Eiffel_Wikimedia_Commons.jpg?width=1600
+```
+
+Optionally query the Commons API for the canonical URL and license info:
+```
+https://commons.wikimedia.org/w/api.php?action=query&titles=File:Tour_Eiffel_Wikimedia_Commons.jpg&prop=imageinfo&iiprop=url|extmetadata&format=json
+```
+
+#### Downloading and validating
+
+```bash
+uv run {skillDir}/scripts/fetch_location.py \
+  --url "https://commons.wikimedia.org/wiki/Special:FilePath/{File-title}?width=1600" \
+  --out {out_dir}/loc-{slug}.jpg
+```
+
+**Naming convention:** `loc-{slug}.jpg`, where slug is the place name lowercased with
+non-alphanumerics replaced by hyphens — same rule as `ref-{char-slug}.png` for crops.
+Example: `loc-eiffel-tower.jpg`, `loc-major-oak.jpg`.
+
+On a non-zero exit code, read the error message and try the next candidate image. The
+script silently overwrites the output file — iteration is free.
+
+After a successful download, **view the file with the Read tool** and confirm:
+- The image shows the **right place**, recognizably.
+- It is **well-framed** (no extreme close-ups or partial views).
+- It contains **no prominent people** — a person in the frame risks being read as a
+  character by the render model. If present, pick another image.
+
+If the image is wrong, pick another candidate URL and re-run.
+
+#### Writing to story.json
+
+Add an entry to the top-level `locations` array:
+
+```json
+"locations": [
+  {
+    "name": "Eiffel Tower",
+    "ref_image": "loc-eiffel-tower.jpg",
+    "description": "iron lattice tower on the Champ de Mars, Paris",
+    "source_url": "https://commons.wikimedia.org/wiki/File:Tour_Eiffel_Wikimedia_Commons.jpg"
+  }
+]
+```
+
+Then set `"location": "Eiffel Tower"` on the pages **physically set at that place only**
+— never book-wide. This per-page selection is mandatory: without it, the place's
+environment would bleed into every page of the book (see docs/future-explorations.md,
+PER-33).
+
+The page's `image_prompt` must also **name the place in prose** (e.g. "...under the
+Eiffel Tower...") so the render model knows the setting even in the text part of the prompt.
+
+#### Cap note
+
+The location photo is the **lowest-priority** reference image within Stage 3's 4-image cap:
+
+> hero sheet → hero photo → remaining cast sheets → location photo
+
+On pages with 3 or more characters, the location photo may be dropped from the cap (it
+will be logged — never silently dropped). On scenery-only pages (`characters: []`) the
+location photo is the sole reference image.
+
+---
 
 ### Style guide — the `style_guide` object (REQUIRED)
 

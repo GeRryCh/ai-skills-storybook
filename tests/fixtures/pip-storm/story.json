@@ -17,6 +17,14 @@
       "style_sheet": "style-sheet-pip.png"
     }
   ],
+  "locations": [
+    {
+      "name": "Major Oak",
+      "ref_image": "refs/loc-major-oak.jpg",
+      "description": "Ancient oak tree in Sherwood Forest with a massive spreading crown and propped lower branches",
+      "source_url": "https://commons.wikimedia.org/wiki/Category:Major_Oak"
+    }
+  ],
   "fonts": {
     "reader": "Andika",
     "display": "Patrick Hand"
@@ -53,8 +61,9 @@
     {
       "page_num": 4,
       "characters": ["Pip"],
+      "location": "Major Oak",
       "text": "Under an old oak tree Pip found a cosy spot. Safe and warm, Pip smiled.",
-      "image_prompt": "A small brave hedgehog named Pip curled up snugly under the roots of a large old oak tree, watching rain fall outside, a warm amber glow around Pip. Children's picture book illustration, soft watercolor, warm amber and brown tones. Square composition. Leave the bottom quarter of the image as a soft, warm, low-detail area suitable for overlaying text.",
+      "image_prompt": "A small brave hedgehog named Pip curled up snugly under the roots of a large old oak tree like the Major Oak in Sherwood Forest, watching rain fall outside, a warm amber glow around Pip. Children's picture book illustration, soft watercolor, warm amber and brown tones. Square composition. Leave the bottom quarter of the image as a soft, warm, low-detail area suitable for overlaying text.",
       "text_placement": "bottom",
       "text_color_hint": "dark"
     }

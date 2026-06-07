@@ -40,6 +40,21 @@
         }
       }
     },
+    "locations": {
+      "type": "array",
+      "description": "Optional list of REAL named places (landmarks, cities, specific buildings) used as photo references during page rendering. Stage 1 finds candidates via the Perplexity MCP and downloads/validates them with scripts/fetch_location.py. Generic settings ('a forest', 'the beach') do NOT belong here — those are described in prose only. A page opts in via pages[].location (per-page selection only, so one place's environment never bleeds into pages set elsewhere).",
+      "items": {
+        "type": "object",
+        "required": ["name", "ref_image"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "description": "Place name exactly as written in pages[].location and mentioned in that page's image_prompt." },
+          "ref_image": { "type": "string", "description": "Path to the downloaded reference photo (loc-{slug}.jpg produced by fetch_location.py). ONE photo per location (plain string, not array). Sent as the LOWEST-priority reference image (after character sheets and the hero photo) within render_book.py's 4-image cap." },
+          "description": { "type": "string", "description": "Optional short visual description of the place (human/editor reference only; not injected into prompts)." },
+          "source_url": { "type": "string", "description": "Optional provenance: the page or direct URL the photo came from (prefer the Wikimedia Commons file page — it carries license and attribution)." }
+        }
+      }
+    },
     "text_mode": {
       "type": "string",
       "enum": ["overlay", "native", "long"],
@@ -129,6 +144,10 @@
           "text_background_prompt": {
             "type": "string",
             "description": "Long mode only. When set, this page's text page gets its OWN dedicated background (pages/page-NN-long-bg.png) generated from this description via ONE extra paid Gemini call, instead of the book's shared background (the book style block is injected; no character references are sent; a low-detail central area is reserved for text). Omit to use the shared book-wide background at no extra cost. Ignored in overlay/native modes and on the cover or empty-text pages. If set on an empty-text page a warning is logged and no text page is generated."
+          },
+          "location": {
+            "type": "string",
+            "description": "Optional name of ONE location from the top-level locations array whose reference photo is sent (lowest priority) when rendering this page. Must match locations[].name exactly. Set only on pages physically set at that place — never book-wide — so the place's environment cannot bleed into other pages. On scenery-only pages (characters: []), the location photo is the sole reference image."
           }
         }
       }
