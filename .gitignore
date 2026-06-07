@@ -6,7 +6,10 @@ __pycache__
 *.pdf
 *.epub
 *.zip
+log.txt
 
 # test fixtures — track committed sample artifacts inside tests/
 !/tests/
 !/tests/**
+# re-ignore log.txt inside test fixture dirs (paid regen.sh runs produce these)
+/tests/**/log.txt

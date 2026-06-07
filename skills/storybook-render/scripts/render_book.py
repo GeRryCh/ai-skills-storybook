@@ -57,6 +57,7 @@ Usage:
 from __future__ import annotations
 import argparse
 import asyncio
+from datetime import datetime
 import json
 import mimetypes
 import os
@@ -606,6 +607,65 @@ def _ensure_png(data: bytes) -> bytes:
     return buf.getvalue()
 
 
+def append_api_log(
+    log_path: Path,
+    *,
+    script: str,
+    target: Path,
+    model: str,
+    resolution: str,
+    aspect_ratio: str | None,
+    response_modalities: list[str],
+    system_instruction: str,
+    contents_desc: list[tuple],  # ("text", str) | ("image", path_str, mime, n_bytes)
+) -> None:
+    """Append one human-readable entry describing an outgoing Gemini request.
+
+    Audit log of exactly what is sent: full config, full system instruction,
+    full prompt, and per-reference-image metadata (never raw bytes), in
+    contents order. Append-only; grows across regenerates by design.
+    Best-effort — a logging failure must never fail a paid render.
+    Single os.write to an O_APPEND fd: atomic across concurrent processes
+    (editor regenerates spawn one render_book.py process per page).
+    Keep in sync with the copy in make_style_sheet.py.
+    """
+    try:
+        lines: list[str] = [
+            "=" * 78,
+            f"{datetime.now().astimezone().isoformat(timespec='seconds')}  {script}  ->  {target.name}",
+            f"target: {target}",
+            f"model: {model}",
+            f"resolution: {resolution}",
+            f"aspect_ratio: {aspect_ratio or '(unset - model chooses)'}",
+            f"response_modalities: {', '.join(response_modalities)}",
+            "",
+            "--- system_instruction ---",
+            system_instruction,
+            "",
+        ]
+        for i, item in enumerate(contents_desc):
+            if item[0] == "text":
+                head = "prompt" if i == 0 else "text"
+                lines += [f"--- contents[{i}]: {head} ---", item[1], ""]
+            else:
+                _, src, mime, n = item
+                lines += [
+                    f"--- contents[{i}]: image ---",
+                    f"source: {src}",
+                    f"mime: {mime}",
+                    f"bytes: {n}",
+                    "",
+                ]
+        entry = ("\n".join(lines) + "\n").encode("utf-8")
+        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, entry)  # single write: atomic on O_APPEND regular files
+        finally:
+            os.close(fd)
+    except Exception as e:
+        print(f"WARNING: failed to write API log {log_path}: {e}", file=sys.stderr)
+
+
 async def run_nano_banana(
     client: _LazyClient,
     prompt: str,
@@ -635,6 +695,7 @@ async def run_nano_banana(
     # what the next image IS (sheet vs photograph, per cast kind);
     # the behavioural rules for each kind live in IMAGE_SYSTEM_PROMPT.
     contents: list = [prompt]
+    contents_desc: list[tuple] = [("text", prompt)]  # mirrors contents for audit log
     ref_pairs = collect_input_images(
         story, page, log,
         max_images=MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES),
@@ -644,16 +705,20 @@ async def run_nano_banana(
         mime, _ = mimetypes.guess_type(str(p))
         if not mime:
             mime = "image/png"
+        data = p.read_bytes()
         contents.append(f"Next image: {label}.")
-        contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
+        contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        contents_desc.append(("text", f"Next image: {label}."))
+        contents_desc.append(("image", str(p), mime, len(data)))
     if ref_pairs:
         log.append(
             f"  Refs: {'; '.join(label for label, _ in ref_pairs)}"
         )
 
+    response_modalities = ["TEXT", "IMAGE"]
     config = types.GenerateContentConfig(
         system_instruction=IMAGE_SYSTEM_PROMPT,
-        response_modalities=["TEXT", "IMAGE"],
+        response_modalities=response_modalities,
         image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
     )
 
@@ -661,6 +726,19 @@ async def run_nano_banana(
     # Build the genai client lazily — only on first actual paid call, so runs that
     # only rebuild free artifacts (text pages in long mode) need no GEMINI_API_KEY.
     genai_client = client.get()
+    # Audit log: every paid target lives directly inside pages_dir = out_dir/pages,
+    # so out_dir/log.txt is raw_path.parent.parent / "log.txt".
+    append_api_log(
+        raw_path.parent.parent / "log.txt",
+        script="render_book.py",
+        target=raw_path,
+        model=model,
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
+        response_modalities=response_modalities,
+        system_instruction=IMAGE_SYSTEM_PROMPT,
+        contents_desc=contents_desc,
+    )
     response = None
     for attempt in range(MAX_RETRIES):
         last_exc: Exception

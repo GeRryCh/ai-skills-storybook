@@ -52,6 +52,15 @@ directory (default: the user's cwd, e.g. this worktree root):
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
+Both paid scripts write an append-only audit log **`out_dir/log.txt`** for every outgoing
+Gemini request — full config, system instruction, full prompt, and per-reference-image
+metadata (source path, mime, byte count; never raw bytes) in `contents` order. The helper
+`append_api_log()` is duplicated in both scripts (keep in sync with `build_style_block()`
+and `_ensure_png`). Runs with `--composite-only` and editor recomposites never write
+this log (the `--composite-only` guard returns before the hook). Editor regenerates spawn
+`render_book.py` as a subprocess, so they are automatically covered. `log.txt` is
+gitignored (including inside `tests/fixtures/`).
+
 A top-level `style_guide` object is **required** in `story.json`: both paid scripts
 assemble it into one byte-identical style block (`build_style_block()`, duplicated in
 both scripts — keep the copies in sync) injected verbatim into every Gemini call. This is

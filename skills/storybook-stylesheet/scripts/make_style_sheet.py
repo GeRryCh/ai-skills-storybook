@@ -32,6 +32,7 @@ Usage:
 
 from __future__ import annotations
 import argparse
+from datetime import datetime
 import json
 import mimetypes
 import os
@@ -351,6 +352,65 @@ def _ensure_png(data: bytes) -> bytes:
     return buf.getvalue()
 
 
+def append_api_log(
+    log_path: Path,
+    *,
+    script: str,
+    target: Path,
+    model: str,
+    resolution: str,
+    aspect_ratio: str | None,
+    response_modalities: list[str],
+    system_instruction: str,
+    contents_desc: list[tuple],  # ("text", str) | ("image", path_str, mime, n_bytes)
+) -> None:
+    """Append one human-readable entry describing an outgoing Gemini request.
+
+    Audit log of exactly what is sent: full config, full system instruction,
+    full prompt, and per-reference-image metadata (never raw bytes), in
+    contents order. Append-only; grows across regenerates by design.
+    Best-effort — a logging failure must never fail a paid render.
+    Single os.write to an O_APPEND fd: atomic across concurrent processes
+    (editor regenerates spawn one render_book.py process per page).
+    Keep in sync with the copy in render_book.py.
+    """
+    try:
+        lines: list[str] = [
+            "=" * 78,
+            f"{datetime.now().astimezone().isoformat(timespec='seconds')}  {script}  ->  {target.name}",
+            f"target: {target}",
+            f"model: {model}",
+            f"resolution: {resolution}",
+            f"aspect_ratio: {aspect_ratio or '(unset - model chooses)'}",
+            f"response_modalities: {', '.join(response_modalities)}",
+            "",
+            "--- system_instruction ---",
+            system_instruction,
+            "",
+        ]
+        for i, item in enumerate(contents_desc):
+            if item[0] == "text":
+                head = "prompt" if i == 0 else "text"
+                lines += [f"--- contents[{i}]: {head} ---", item[1], ""]
+            else:
+                _, src, mime, n = item
+                lines += [
+                    f"--- contents[{i}]: image ---",
+                    f"source: {src}",
+                    f"mime: {mime}",
+                    f"bytes: {n}",
+                    "",
+                ]
+        entry = ("\n".join(lines) + "\n").encode("utf-8")
+        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, entry)  # single write: atomic on O_APPEND regular files
+        finally:
+            os.close(fd)
+    except Exception as e:
+        print(f"WARNING: failed to write API log {log_path}: {e}", file=sys.stderr)
+
+
 def generate_image(
     prompt: str,
     input_images: list[str],
@@ -372,18 +432,34 @@ def generate_image(
         system_prompt = image_system_prompt("character")
 
     # Build contents: text prompt + one Part.from_bytes per input image.
+    # No interleaved label strings (stylesheet sends bare image parts).
     contents: list = [prompt]
+    contents_desc: list[tuple] = [("text", prompt)]  # mirrors contents for audit log
     for img in input_images:
         p = Path(img)
         mime, _ = mimetypes.guess_type(str(p))
         if not mime:
             mime = "image/png"
-        contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
+        data = p.read_bytes()
+        contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+        contents_desc.append(("image", str(p), mime, len(data)))
 
+    response_modalities = ["TEXT", "IMAGE"]
     config = types.GenerateContentConfig(
         system_instruction=system_prompt,
-        response_modalities=["TEXT", "IMAGE"],
+        response_modalities=response_modalities,
         image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
+    )
+    append_api_log(
+        out_path.parent / "log.txt",  # out_path is out_dir/style-sheet-*.png
+        script="make_style_sheet.py",
+        target=out_path,
+        model=IMAGE_MODEL,
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
+        response_modalities=response_modalities,
+        system_instruction=system_prompt,
+        contents_desc=contents_desc,
     )
 
     try:
