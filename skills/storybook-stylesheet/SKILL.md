@@ -1,7 +1,7 @@
 ---
 name: storybook-stylesheet
 description: >
-  Stage 2 of 3 in the storybook pipeline — generate per-character style sheets.
+  Stage 2 of 4 in the storybook pipeline — generate per-character style sheets.
   Use when an approved story.json already exists (from storybook-story) and the user
   wants to build, regenerate, or fix the character reference sheets — e.g. "make the
   style sheet", "regenerate the character sheets", "the characters look inconsistent /

@@ -1,7 +1,7 @@
 ---
 name: storybook-story
 description: >
-  Stage 1 of 3 in the storybook pipeline — draft the manuscript.
+  Stage 1 of 4 in the storybook pipeline — draft the manuscript.
   Use this skill whenever the user mentions: children's storybook, picture book,
   illustrated kids' book, bedtime story with pictures, story for my kid/child/toddler,
   "make a book about X", "write a storybook", "generate a kids book", or any request
@@ -10,7 +10,7 @@ description: >
   This is the ENTRY POINT: it produces story.json (free, no API). Guides the user through
   a short schema-driven interview before writing story.json. The user edits and approves
   it, then storybook-stylesheet (Stage 2) and storybook-render (Stage 3) turn it into
-  illustrated pages.
+  illustrated pages, and storybook-consolidate (Stage 4) assembles the finished book files.
 metadata:
   requires: {}
 ---
@@ -19,13 +19,14 @@ metadata:
 
 ## Pipeline
 
-This is the first of three skills. Together they make a fully illustrated picture book:
+This is the first of four skills. Together they make a fully illustrated picture book:
 
 1. **storybook-story** (this skill, free) — draft `story.json`: per-page text + image prompts + explicit character cast (global + per-page). User edits and approves the text before any money is spent.
 2. **storybook-stylesheet** (paid) — generate `style-sheet-{name}.png`: one reference image per character, the consistency anchors for every page.
-3. **storybook-render** (paid) — generate each page illustration using only the character sheets for the characters listed on that page, then overlay text.
+3. **storybook-render** (paid) — generate each page illustration using only the character sheets for the characters listed on that page, then overlay text. Output is page images only.
+4. **storybook-consolidate** (free) — after the user reviews the rendered pages, choose formats interactively (`saved_formats` is the default answer), merge pages into PDF and/or fixed-layout EPUB3, package everything into a zip. No API calls.
 
-The three skills hand off a single file: `story.json` in the output directory.
+The four skills hand off a single file: `story.json` in the output directory.
 
 Read `assets/STYLE_PRIMER.md` and `assets/story_schema.json` before writing the manifest. Mimic the structure in `assets/story_example.json`.
 
@@ -378,7 +379,7 @@ Validate overrides against the field's `enum`; re-show only the changed rows; th
 Required fields (`title`, `age_band`, `style`, `style_guide`, `cast`, `pages`) are always written. Every **optional** field is written to `story.json` only when the user's choice diverges from the omission semantics — accepting a default means the key is omitted (preserves the editor's round-trip contract; optional fields that match the documented default are never materialised).
 
 Important edge cases:
-- `saved_formats: []` means "skip assembly" — this is NOT the same as omitting the field (which means "all formats"). Only write `[]` when the user explicitly requests no book files.
+- `saved_formats: []` records a "no book files" preference consumed by Stage 4 (storybook-consolidate) as a hint — this is NOT the same as omitting the field (omitted means "all formats" as default hint). No script reads this field; the consolidate skill uses it as the default answer when asking which formats to export, and the interactive choice there always wins. Only write `[]` when the user explicitly requests no book files.
 - `aspect_ratio` omitted = model picks framing per page call (non-deterministic). Only write it when the user wants locked framing.
 - `resolution` omitted = 2K at render time. Only write it when the user specifies a quality.
 

@@ -5,6 +5,7 @@ __pycache__
 *.png
 *.pdf
 *.epub
+*.zip
 
 # test fixtures — track committed sample artifacts inside tests/
 !/tests/

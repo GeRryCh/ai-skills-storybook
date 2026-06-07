@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A set of **three Claude Code skills** that together turn a story idea (optionally with
+A set of **four Claude Code skills** that together turn a story idea (optionally with
 character photos) into a fully illustrated children's picture book. It is not an app — it
 is skill definitions (`SKILL.md`) plus the Python scripts they invoke. There is no build
 step and no test suite; the scripts are the product.
 
 ## The pipeline (read this first)
 
-Three skills run in order and hand off a **single file, `story.json`**, in an output
+Four skills run in order and hand off a **single file, `story.json`**, in an output
 directory (default: the user's cwd, e.g. this worktree root):
 
 1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), crops
@@ -40,8 +40,15 @@ directory (default: the user's cwd, e.g. this worktree root):
      (`pages/page-NN-long-bg.png`, +1 paid call). **Cost: N art calls + 1 shared-bg
      call. Text-page composition itself is free Pillow work (rebuildable without an
      API key while the bg PNG exists).**
-   After a full render, assembles book file(s) via `merge_pdf.py` / `merge_epub.py` at no
-   extra API cost. Long mode outputs `{title}-long.pdf` / `{title}-long.epub`.
+   Output is page images only. **Approval gate**: show all rendered pages, stop for
+   review before proceeding to assembly.
+4. **storybook-consolidate** (free, no API) — after the user reviews and approves the
+   rendered pages, chooses formats interactively (`saved_formats` is the default answer —
+   omitted = both PDF and EPUB; `[]` = "no book files" preference; **no script reads this
+   field**; interactive choice wins), assembles `{title}{suffix}.pdf` and/or
+   `{title}{suffix}.epub` via `merge_pdf.py` / `merge_epub.py`, and optionally packages
+   story.json + pages + style sheets + book files into `{slug}-book.zip` via
+   `package_book.py`. All free.
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
@@ -94,29 +101,29 @@ uv run skills/storybook-render/scripts/render_book.py --story story.json --only 
 uv run skills/storybook-render/scripts/overlay_text.py \
   --image any.png --text "Once upon a time..." --placement bottom --out /tmp/t.png
 
-# Merge already-rendered pages into a PDF (no API cost)
-uv run skills/storybook-render/scripts/merge_pdf.py --story story.json
+# Stage 4 — assemble into PDF (no API cost); scripts now in storybook-consolidate
+uv run skills/storybook-consolidate/scripts/merge_pdf.py --story story.json
 # native mode PDF:
-uv run skills/storybook-render/scripts/merge_pdf.py --story story.json --text-mode native
+uv run skills/storybook-consolidate/scripts/merge_pdf.py --story story.json --text-mode native
 
 # Merge already-rendered pages into a fixed-layout EPUB3 (no API cost)
-uv run skills/storybook-render/scripts/merge_epub.py --story story.json
+uv run skills/storybook-consolidate/scripts/merge_epub.py --story story.json
 # native mode EPUB:
-uv run skills/storybook-render/scripts/merge_epub.py --story story.json --text-mode native
+uv run skills/storybook-consolidate/scripts/merge_epub.py --story story.json --text-mode native
+
+# Package book assets into a zip (no API cost)
+uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 ```
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
 `--aspect-ratio RATIO` (override from story.json; unset → model chooses),
-`--text-mode overlay|native`, `--saved-formats pdf epub|none` (override story.json
-`saved_formats`; default when neither set: all formats).
+`--text-mode overlay|native|long`.
 Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.
 
-After a full render (`--only` not set), `render_book.py` automatically assembles book
-file(s) per `saved_formats` (story.json field → CLI override → default all). Writes
-`{title}.pdf` / `{title}.epub` (overlay) or `{title}-native.*` (native) next to
-`story.json`. Pass `--saved-formats none` to suppress (e.g. for `--from` partial runs).
+After a full render, `render_book.py` prints a pointer to Stage 4 (storybook-consolidate).
+Assembly is Stage 4's job — `render_book.py` produces page images only.
 
 ## Idempotency / re-run semantics (important when editing scripts)
 
@@ -331,7 +338,7 @@ Required fields authored by prose logic (`title`, `style_guide`, `cast`, `pages`
 
 ### Omission rule
 
-Accepting a default at Gate 1 means the optional key is **omitted** from `story.json` (preserves the editor's round-trip contract where "optional fields never get materialised when absent"). `saved_formats: []` (skip assembly) is NOT the same as omitted (all formats). `aspect_ratio` omitted = model picks framing per page call.
+Accepting a default at Gate 1 means the optional key is **omitted** from `story.json` (preserves the editor's round-trip contract where "optional fields never get materialised when absent"). `saved_formats: []` (records "no book files" preference — hint for Stage 4) is NOT the same as omitted (hint = all formats). No script reads `saved_formats`; storybook-consolidate uses it as the default answer when asking which formats to export, and the interactive choice there always wins. `aspect_ratio` omitted = model picks framing per page call.
 
 ### `ask` field guidance
 
@@ -385,20 +392,27 @@ uv run skills/storybook-render/scripts/overlay_text.py \
   --text-page --out /tmp/smoke-textpage.png
 
 # No API cost — re-merge the committed fixture pages into a PDF (all three modes)
-uv run skills/storybook-render/scripts/merge_pdf.py \
+# Scripts now live in storybook-consolidate (moved from storybook-render in PER-44)
+uv run skills/storybook-consolidate/scripts/merge_pdf.py \
   --story tests/fixtures/pip-storm/story.json
-uv run skills/storybook-render/scripts/merge_pdf.py \
+uv run skills/storybook-consolidate/scripts/merge_pdf.py \
   --story tests/fixtures/pip-storm/story.json --text-mode native
-uv run skills/storybook-render/scripts/merge_pdf.py \
+uv run skills/storybook-consolidate/scripts/merge_pdf.py \
   --story tests/fixtures/pip-storm-long/story.json --text-mode long
 
 # No API cost — re-merge into a fixed-layout EPUB3 (all three modes)
-uv run skills/storybook-render/scripts/merge_epub.py \
+uv run skills/storybook-consolidate/scripts/merge_epub.py \
   --story tests/fixtures/pip-storm/story.json
-uv run skills/storybook-render/scripts/merge_epub.py \
+uv run skills/storybook-consolidate/scripts/merge_epub.py \
   --story tests/fixtures/pip-storm/story.json --text-mode native
-uv run skills/storybook-render/scripts/merge_epub.py \
+uv run skills/storybook-consolidate/scripts/merge_epub.py \
   --story tests/fixtures/pip-storm-long/story.json --text-mode long
+
+# No API cost — package smoke (--out /tmp to avoid polluting fixture dirs)
+uv run skills/storybook-consolidate/scripts/package_book.py \
+  --story tests/fixtures/pip-storm/story.json --out /tmp/smoke-package.zip
+# Note: rebuilt EPUBs always differ (timestamp+uuid in content.opf) — run
+# `git restore tests/fixtures` after smoking to discard churned fixture binaries.
 ```
 
 Prefer these zero-cost checks; they cover overlay, text-page composition, PDF merge, EPUB

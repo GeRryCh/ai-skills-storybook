@@ -2,7 +2,7 @@
 # regen.sh — Regenerate all pip-storm fixture artifacts from scratch.
 #
 # Requires: OPENROUTER_API_KEY in env, uv on PATH.
-# Cost: ~10 image API calls (1 ref + 1 stylesheet + 4 overlay raw + 4 native).
+# Cost: ~10 image API calls (1 ref + 1 stylesheet + 4 overlay raw + 4 native) + free merges.
 # Run from the repo root.
 #
 # To regenerate just one piece, delete the relevant output and re-run:
@@ -11,13 +11,15 @@
 #   rm tests/fixtures/pip-storm/pages/page-0N.png && (cd … && uv run …/render_book.py … --only N)
 #
 # IMPORTANT: After regeneration, normalize story.json paths to relative values
-# before committing — see step (5) in this file.
+# before committing — see step (6) in this file.
 
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_DIR="$REPO_ROOT/tests/fixtures/pip-storm"
 STYLESHEET_SCRIPT="$REPO_ROOT/skills/storybook-stylesheet/scripts/make_style_sheet.py"
 RENDER_SCRIPT="$REPO_ROOT/skills/storybook-render/scripts/render_book.py"
+MERGE_PDF="$REPO_ROOT/skills/storybook-consolidate/scripts/merge_pdf.py"
+MERGE_EPUB="$REPO_ROOT/skills/storybook-consolidate/scripts/merge_epub.py"
 
 # NOTE: tests/fixtures/pip-storm/refs/loc-major-oak.jpg is a committed placeholder
 # for the Major Oak cast entry (kind=location, PER-34/38). It is NOT regenerated here —
@@ -40,8 +42,13 @@ echo "=== Step 3: overlay pages (stage 3, text_mode=overlay) ==="
 echo "=== Step 4: native pages (stage 3, text_mode=native) ==="
 (cd "$FIXTURE_DIR" && uv run "$RENDER_SCRIPT" --story story.json --text-mode native --resolution 1K)
 
+echo "=== Step 5: assemble book files (stage 4, free — no API cost) ==="
+# Merge set must match the committed artifacts (pip-storm ships -native.pdf/.epub only).
+(cd "$FIXTURE_DIR" && uv run "$MERGE_PDF"  --story story.json --text-mode native)
+(cd "$FIXTURE_DIR" && uv run "$MERGE_EPUB" --story story.json --text-mode native)
+
 echo ""
-echo "=== Step 5: normalize story.json paths before committing ==="
+echo "=== Step 6: normalize story.json paths before committing ==="
 echo "make_style_sheet.py rewrites cast[].style_sheet to an absolute path."
 echo "Edit story.json manually (or run the python snippet below) to restore relative paths:"
 echo ""

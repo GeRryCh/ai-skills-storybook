@@ -361,7 +361,8 @@ function addPaletteRow() {
 }
 
 // ── saved_formats handling ─────────────────────────────────────────────────
-// Unset ≠ [] in schema — unset means "all formats"; [] means "skip assembly".
+// Unset ≠ [] in schema — unset means "all formats" (hint); [] means "no book files" (hint).
+// No script reads this field; storybook-consolidate uses it as the default export answer.
 function renderSavedFormats(container) {
   const sf = story.saved_formats; // may be undefined or array
   const isExplicit = sf !== undefined;
@@ -372,7 +373,7 @@ function renderSavedFormats(container) {
         Set saved_formats explicitly
       </label>
       <span style="font-size:12px;color:#64748b">
-        (unset = produce all; empty array = skip assembly)
+        (unset = all formats; empty = no book files)
       </span>
     </div>
     <div class="sf-checks" id="sf-checks" style="${isExplicit ? '' : 'display:none'}">
@@ -909,10 +910,6 @@ function renderBook() {
       <div class="field"><label>Resolution</label><select id="book-resolution"></select></div>
       <div class="field"><label>Aspect ratio</label><select id="book-aspect-ratio"></select></div>
     </div>
-    <div class="grid2">
-      <div class="field"><label>Language (BCP-47, e.g. en, de, en-GB)</label><input type="text" id="book-language"></div>
-      <div></div>
-    </div>
     <div class="field">
       <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
       <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
@@ -924,10 +921,17 @@ function renderBook() {
         <div class="field"><label>Display font (titles)</label><input type="text" id="book-font-display" placeholder="Patrick Hand"></div>
       </div>
     </fieldset>
-    <div class="field">
-      <label>Saved formats</label>
-      <div id="sf-container"></div>
-    </div>`;
+    <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
+      <legend style="font-size:12px;font-weight:600;color:#475569;padding:0 6px">export (Stage 4 — storybook-consolidate)</legend>
+      <div class="field">
+        <label>Language <small style="color:#94a3b8">(BCP-47, e.g. en, de, en-GB — EPUB dc:language metadata)</small></label>
+        <input type="text" id="book-language">
+      </div>
+      <div class="field">
+        <label>Saved formats <small style="color:#94a3b8">(hint for the export stage — nothing auto-assembles at render time)</small></label>
+        <div id="sf-container"></div>
+      </div>
+    </fieldset>`;
 
   // Bind scalar fields
   const sg = story.style_guide || (story.style_guide = {});

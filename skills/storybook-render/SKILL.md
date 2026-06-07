@@ -1,14 +1,17 @@
 ---
 name: storybook-render
 description: >
-  Stage 3 of 3 in the storybook pipeline — render the illustrated pages.
+  Stage 3 of 4 in the storybook pipeline — render the illustrated pages.
   Use when an approved story.json AND a style-sheet.png already exist (from
   storybook-story + storybook-stylesheet) and the user wants to generate, re-render,
   or fix page illustrations — e.g. "render the book", "render the pages", "re-render
   page 3", "regenerate the pages", "redo the cover". Generates one illustration per
   page (using the style sheet as the consistency anchor) and overlays the story text.
-  Costs one image API call per page. If the style sheet is missing, run
-  storybook-stylesheet first; if story.json is missing, run storybook-story first.
+  Costs one image API call per page. Output is page images only — book file assembly
+  (PDF/EPUB) and packaging happen in Stage 4 (storybook-consolidate), free, after
+  the user reviews the rendered pages.
+  If the style sheet is missing, run storybook-stylesheet first; if story.json is
+  missing, run storybook-story first.
 metadata:
   requires:
     bins:
@@ -38,20 +41,19 @@ uv run {skillDir}/scripts/render_book.py \
 
 **Useful flags:**
 - `--from N` — resume from page N (skips earlier pages, also skips any already-existing files)
-- `--only N` — render a single page (good for testing one page before a full run, or re-doing one page). Does **not** trigger the auto PDF/EPUB merge (it's a proof operation).
+- `--only N` — render a single page (good for testing one page before a full run, or re-doing one page).
 - `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
 - `--aspect-ratio RATIO` — override the aspect ratio from `story.json` for this run (choices: `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`). Aspect ratio is normally configured via the top-level `aspect_ratio` field in `story.json`; when neither is set the model chooses framing per call.
-- `--saved-formats pdf epub|none` — override `story.json`'s `saved_formats` for this run: which book file(s) to assemble after a full render. `epub` is a fixed-layout EPUB3 (pre-paginated, full-bleed pages). `none` skips assembly entirely (useful for partial `--from` runs where more pages are coming). `saved_formats` is normally configured in `story.json` (default: all formats when omitted).
 
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
 Output:
 
-| Mode | Art file | Text file | Book files |
-|------|----------|-----------|------------|
-| overlay | `pages/page-NN.png` | (same file) | `{title}.pdf`, `{title}.epub` |
-| native | `pages/page-NN-native.png` | (same file) | `{title}-native.pdf`, `{title}-native.epub` |
-| long | `pages/page-NN-long.png` | `pages/page-NN-long-text.png` | `{title}-long.pdf`, `{title}-long.epub` |
+| Mode | Art file | Text file |
+|------|----------|-----------|
+| overlay | `pages/page-NN.png` | (same file) |
+| native | `pages/page-NN-native.png` | (same file) |
+| long | `pages/page-NN-long.png` | `pages/page-NN-long-text.png` |
 
 In long mode the cover (page 1) is a single combined page — `pages/page-01-long.png`. Body pages with empty `text` emit an art-only page (no text page generated). Text pages sit on ONE shared model-generated background per book — `pages/text-bg-long.png` (+1 paid call total, generated once before the pages fire; it reserves a low-detail central area for the text panel). A page with `text_background_prompt` gets its own dedicated background instead (`pages/page-NN-long-bg.png`, +1 call for that page). Cost: N art calls + 1 shared-bg call.
 
@@ -64,45 +66,6 @@ Each final file is printed as `MEDIA: <path>` so the IDE can display it inline.
 - To force-regen a per-page dedicated bg (only if `text_background_prompt` set): `rm pages/page-NN-long-bg.png pages/page-NN-long-text.png` then re-run.
 
 For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png` for overlay), then `--only N`.
-
----
-
-## PDF & EPUB output
-
-After a full render succeeds, book file(s) are assembled automatically (no extra API
-cost) per the `saved_formats` field in `story.json` (default: all formats — both PDF
-and EPUB). Files sit next to `story.json`, named after the book title:
-
-- Overlay mode → `{out_dir}/{title}.pdf` and/or `{out_dir}/{title}.epub`
-- Native mode  → `{out_dir}/{title}-native.pdf` and/or `{out_dir}/{title}-native.epub`
-- Long mode    → `{out_dir}/{title}-long.pdf` and/or `{out_dir}/{title}-long.epub`
-
-The EPUB is fixed-layout EPUB3 (pre-paginated): one full-bleed image per physical page,
-viewport = image dimensions, page text carried as `<img>` alt attribute. In long mode,
-the EPUB nav only lists art pages (one entry per logical story page); text pages follow
-each art page in the spine but don't add nav entries.
-
-To rebuild from already-rendered pages (no render cost):
-
-```bash
-# PDF:
-uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json
-# native / long mode:
-uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --text-mode native
-uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --text-mode long
-# explicit output path:
-uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --out my-book.pdf
-
-# EPUB:
-uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json
-# native / long mode:
-uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --text-mode native
-uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --text-mode long
-# explicit output path:
-uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --out my-book.epub
-```
-
-Missing pages emit a warning and are skipped; the output file is still built from the rest.
 
 ---
 
@@ -184,3 +147,19 @@ uv run {skillDir}/scripts/overlay_text.py \
 **Sizing (text-page mode):** font shrinks from 96px toward a 22px floor; panel capped at ~80% of page height — large enough for ~80–200 words per logical page.
 
 Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display), `text_background_prompt` (long mode only — per-page dedicated text-page background overriding the shared one, +1 paid call). Top-level `text_background_prompt` customizes the shared book-wide text-page background.
+
+---
+
+## Handoff
+
+After a full render, show all `MEDIA:` page images to the user. **Stop for review.** This is the point of the Stage 3/4 split — the user reviews the rendered pages before committing to assembly. Fix any pages with `--only N` and re-render as needed.
+
+Once the user approves:
+
+```
+All pages approved → ready for Stage 4.
+Next: storybook-consolidate (Stage 4) assembles the finished book files (PDF /
+      fixed-layout EPUB3) and can zip the book for sharing — free, no API calls.
+```
+
+Do not proceed to Stage 4 until the user has reviewed the pages and approved.

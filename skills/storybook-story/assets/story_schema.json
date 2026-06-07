@@ -64,7 +64,7 @@
     },
     "language": {
       "type": "string",
-      "description": "Optional BCP-47 language tag for the book text (e.g. 'en', 'de', 'en-GB'). Used as dc:language metadata in EPUB output. Default: 'en'.",
+      "description": "Optional BCP-47 language tag for the book text (e.g. 'en', 'de', 'en-GB'). Used as dc:language metadata in EPUB output (Stage 4, storybook-consolidate). Default: 'en'.",
       "default": "en",
       "x-interview": { "priority": "advanced", "ask": "Book language (BCP-47 tag, e.g. en, de)." }
     },
@@ -95,9 +95,9 @@
       "type": "array",
       "items": { "type": "string", "enum": ["pdf", "epub"] },
       "uniqueItems": true,
-      "description": "Optional list of book file formats assembled after a full render: 'pdf' (multi-page PDF) and/or 'epub' (fixed-layout EPUB3). When omitted, ALL formats are produced. An empty array skips assembly. The render CLI --saved-formats flag overrides this value when passed explicitly ('none' to skip for one run).",
+      "description": "Optional export hint consumed by Stage 4 (storybook-consolidate): which finished book files the user wants assembled from the rendered pages — 'pdf' (multi-page PDF) and/or 'epub' (fixed-layout EPUB3). Omitted = all formats; an empty array records a 'no book files' preference. Nothing is assembled automatically and no script reads this field — the consolidate skill uses it as the default answer when asking which formats to export, and the interactive choice always wins.",
       "default": ["pdf", "epub"],
-      "x-interview": { "priority": "advanced", "ask": "Which finished book files to assemble after rendering." }
+      "x-interview": { "priority": "advanced", "ask": "Which finished book files to export at the end (Stage 4 default — changeable at export time)." }
     },
     "pages": {
       "type": "array",
