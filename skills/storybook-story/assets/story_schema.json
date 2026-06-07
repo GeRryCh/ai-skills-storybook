@@ -81,6 +81,7 @@
     "resolution": {
       "type": "string",
       "enum": ["1K", "2K", "4K"],
+      "default": "2K",
       "description": "Optional book-wide image resolution for page rendering. 2K (default) is good for screen and print up to ~8×8 in; 1K is faster/cheaper for drafts; 4K for large-format print. The render CLI --resolution flag overrides this value when passed explicitly.",
       "x-interview": { "priority": "advanced", "ask": "Render quality vs cost — 1K draft / 2K standard / 4K large-format print." }
     },

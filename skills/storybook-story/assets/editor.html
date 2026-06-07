@@ -901,7 +901,7 @@ function renderBook() {
   bindEnum(b.querySelector('#book-age-band'), story, 'age_band', enumFor('age_band'));
   bindEnum(b.querySelector('#book-text-mode'), story, 'text_mode', enumFor('text_mode'), {optional:true});
   bindEnum(b.querySelector('#book-resolution'), story, 'resolution', enumFor('resolution'), {optional:true});
-  bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true});
+  bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true, defaultVal:'model chooses'});
 
   // Fonts — lazy-create/delete
   const fonts = story.fonts || {};
