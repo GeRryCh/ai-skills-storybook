@@ -42,8 +42,8 @@
     },
     "text_mode": {
       "type": "string",
-      "enum": ["overlay", "native"],
-      "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. render_book.py's --text-mode flag overrides this per run.",
+      "enum": ["overlay", "native", "long"],
+      "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. 'long': each body page becomes two physical pages — (1) full-bleed art with no text (pages/page-NN-long.png), (2) a separate text-only page with the story text on a centered, feathered semi-transparent panel over a blurred/washed copy of the art (pages/page-NN-long-text.png). Cover (page 1) stays a single combined overlay-style page. Default cost = same as other modes (1 paid call per logical page); pages with optional 'text_background_prompt' add 1 extra paid call for a dedicated text-page background. render_book.py's --text-mode flag overrides this per run.",
       "default": "native"
     },
     "language": {
@@ -121,6 +121,10 @@
             "enum": ["reader", "display"],
             "description": "Font for the text overlay. 'reader' (Andika, body text) or 'display' (PatrickHand, titles/cover). Default: reader.",
             "default": "reader"
+          },
+          "text_background_prompt": {
+            "type": "string",
+            "description": "Long mode only. When set, generates a dedicated background image for this page's text page via ONE extra paid Gemini call (the book style block is injected; no character references are sent). Omit to derive the background from this page's own illustration — blurred and lightened — at no extra cost. Ignored in overlay/native modes and on the cover or empty-text pages. If set on an empty-text page a warning is logged and no text page is generated."
           }
         }
       }

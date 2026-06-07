@@ -181,7 +181,7 @@ Every `image_prompt` MUST:
 
 ### Optional top-level config
 
-- **`text_mode`** — `"native"` (default) or `"overlay"`. Native bakes the story text directly into each illustration; overlay Pillow-composites it post-generation. Omit to use the default.
+- **`text_mode`** — `"native"` (default), `"overlay"`, or `"long"`. Native bakes the story text directly into each illustration; overlay Pillow-composites it post-generation. **Long mode** splits each body page into two physical pages: a full-bleed illustration with no text, followed by a text-only page with the story text on a centered panel over a blurred copy of the art. Choose `"long"` for text-heavy stories, older readers (age 5–8), or when the story carries more than ~80 words per spread. Cover (page 1) stays a single combined page in long mode. Pages with empty `text` emit an art-only page. Omit to use the default (`"native"`).
 - **`saved_formats`** — array of `"pdf"` and/or `"epub"` specifying which book file(s) the render stage assembles after a full render. Omit to produce all formats (default). Set `[]` to skip assembly. The render CLI `--saved-formats` flag overrides if passed explicitly.
 - **`language`** — BCP-47 language tag for the book text (e.g. `"en"`, `"de"`, `"en-GB"`). Used as `dc:language` metadata in the EPUB. Omit for the `"en"` default; set only when the story is non-English.
 - **`fonts`** — book-wide role → font-family map (see STYLE_PRIMER typography rules). Omit to use bundled Andika/PatrickHand.
@@ -193,6 +193,8 @@ Do **not** auto-set `resolution` — leave it out unless the user asks for a spe
 Do **not** auto-set `aspect_ratio` — leave it out unless the user wants fixed framing. Omitting it preserves today's behavior (model chooses per call) and avoids silently changing framing on existing books.
 
 Per-page `text_placement` defaults to `"floating"` (native mode). Override to `"top"` or `"bottom"` to pin text to a fixed band.
+
+**Long mode optional per-page field:** `text_background_prompt` — when set, generates a dedicated background for that page's text page via one extra paid Gemini call (the book style block is injected; no character references are sent). Omit to derive the background from that page's own illustration, blurred and lightened, at no extra cost.
 
 ---
 

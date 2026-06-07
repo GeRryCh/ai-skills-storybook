@@ -11,26 +11,36 @@ Render all pages of a children's storybook.
 For each page in story.json:
   1. Generates the illustration via the Gemini API (gemini-3.1-flash-image), passing
      the style sheet + character refs as input images for consistency.
-  2. Runs overlay_text.py to composite the story text.
+  2. In overlay/long mode: runs overlay_text.py to composite the story text.
   3. Prints MEDIA: <path> for each final page.
 
 Pages are fully independent, so they are all fired concurrently via asyncio
 (one async Gemini request per page, no thread pool, no local concurrency cap).
 Transient 429/5xx responses are retried with exponential backoff + jitter.
 
-Skips pages whose final file already exists (safe to re-run after partial failure).
+Skips pages whose final file(s) already exist (safe to re-run after partial failure).
+In long mode, per-artifact skip checks mean a missing text page can be rebuilt without
+re-firing the paid art call — and without needing GEMINI_API_KEY when no paid call is made.
 
-Requires GEMINI_API_KEY in the environment.
+Requires GEMINI_API_KEY in the environment when a paid Gemini call is needed.
 
 After all pages render successfully, book file(s) are assembled automatically
 via merge_pdf.py / merge_epub.py per the story.json `saved_formats` field (or
 the --saved-formats CLI override). Skipped when --only is used or when
 --saved-formats none is passed.
 
+Text modes:
+  overlay — safe-zone art + Pillow text overlay → pages/page-NN.png
+  native  — model bakes text into illustration → pages/page-NN-native.png
+  long    — full-bleed art (no text) + separate text page → pages/page-NN-long.png +
+            pages/page-NN-long-text.png. Cover (page 1) stays combined (overlay-style).
+            Default cost = same as other modes (1 paid call per logical page). Pages with
+            optional text_background_prompt add 1 extra paid call for that page's text bg.
+
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
                         [--from N] [--only N] [--resolution 1K|2K|4K]
-                        [--aspect-ratio RATIO] [--text-mode overlay|native]
+                        [--aspect-ratio RATIO] [--text-mode overlay|native|long]
                         [--saved-formats pdf epub|none]
 """
 
@@ -77,6 +87,13 @@ TEXT_SAFE_ZONE_DIRECTIVE = (
     "Leave the {placement} quarter of the image as a soft, "
     "low-detail, lightly-toned area suitable for overlaying text. "
     "Do not place any narrative text in the image."
+)
+
+# Long mode: the model fills the full canvas — no text, no safe zone reserved.
+FULL_BLEED_ART_DIRECTIVE = (
+    "Use the full canvas for the illustration — rich, full-bleed artwork from edge to edge "
+    "with no reserved text area. Do not render any words, letters, captions, or typography "
+    "anywhere in the image."
 )
 STYLE_ANCHOR = (
     "Art style and character design must match the provided character reference "
@@ -210,10 +227,36 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
         )
         return f"{base}. {anchor}. {native}"
 
+    if text_mode == "long":
+        # Long mode art page: strip any baked-in safe-zone sentence; request full-bleed
+        # art with no text (text is rendered on a separate physical page).
+        raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", page["image_prompt"])
+        base = raw_prompt.rstrip(". ")
+        return f"{base}. {anchor}. {FULL_BLEED_ART_DIRECTIVE}"
+
     # overlay (default): unchanged behaviour. "floating" is native-only -> bottom here.
     base = page["image_prompt"].rstrip(". ")
     safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(placement=_overlay_placement(placement))
     return f"{base}. {safe_zone}. {anchor}"
+
+
+def build_text_bg_prompt(page: dict, story: dict) -> str:
+    """Prompt for a dedicated text-page background (long mode, text_background_prompt set).
+
+    No character references are sent for this call, so STYLE_ANCHOR is not used.
+    The style block is injected verbatim for book-wide visual consistency.
+    """
+    style = build_style_block(story)
+    bg_desc = page.get("text_background_prompt", "").rstrip(". ")
+    return (
+        f"{bg_desc}. "
+        "Render a soft, low-detail, calm full-bleed decorative background — "
+        "no characters, no faces, no lettering, no typography anywhere in the image. "
+        "Use the full canvas from edge to edge. "
+        f"Art style: {style}. "
+        "Preserve this exact palette, lighting, line treatment, and rendering style "
+        "unchanged across every page of the book."
+    )
 
 
 def _ref_photos(char: dict) -> list[str]:
@@ -326,8 +369,33 @@ def _retry_delay(attempt: int, exc: Exception) -> float:
     return random.uniform(0, capped)
 
 
+class _LazyClient:
+    """Builds the genai.Client on first paid API call.
+
+    Allows runs that only rebuild free artifacts (e.g. a missing text page in long mode)
+    to complete without a GEMINI_API_KEY in the environment, honoring the repo's
+    idempotency contract: 'regen free artifacts for free'.
+    """
+
+    def __init__(self) -> None:
+        self._client = None
+
+    def get(self):
+        if self._client is None:
+            from google import genai as _genai
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                print(
+                    "ERROR: GEMINI_API_KEY is not set in the environment.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            self._client = _genai.Client(api_key=api_key)
+        return self._client
+
+
 async def run_nano_banana(
-    client,
+    client: _LazyClient,
     prompt: str,
     raw_path: Path,
     story: dict,
@@ -355,11 +423,14 @@ async def run_nano_banana(
     )
 
     log.append(f"  Generating: {raw_path.name}")
+    # Build the genai client lazily — only on first actual paid call, so runs that
+    # only rebuild free artifacts (text pages in long mode) need no GEMINI_API_KEY.
+    genai_client = client.get()
     response = None
     for attempt in range(MAX_RETRIES):
         last_exc: Exception
         try:
-            response = await client.aio.models.generate_content(
+            response = await genai_client.aio.models.generate_content(
                 model=IMAGE_MODEL,
                 contents=contents,
                 config=config,
@@ -429,11 +500,148 @@ async def run_overlay(
     return proc.returncode == 0
 
 
+async def run_text_page(
+    image_path: Path,
+    text: str,
+    color: str,
+    font: str,
+    font_name: str | None,
+    align: str,
+    out_path: Path,
+    canvas_from: Path | None,
+    log: list[str],
+) -> bool:
+    """Shell overlay_text.py in text-page mode (long story mode body pages). No API cost."""
+    cmd = [
+        "uv", "run", str(OVERLAY_SCRIPT),
+        "--image", str(image_path),
+        "--text", text,
+        "--text-page",
+        "--out", str(out_path),
+        "--color", color,
+        "--font", font,
+        "--align", align,
+    ]
+    if font_name:
+        cmd += ["--font-name", font_name]
+    if canvas_from is not None:
+        cmd += ["--canvas-from", str(canvas_from)]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        if stdout:
+            log.append(stdout.decode().rstrip())
+        if stderr:
+            log.append(stderr.decode().rstrip())
+    return proc.returncode == 0
+
+
 async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None) -> bool:
-    """Render one page (nano-banana + optional overlay). Prints its own log atomically. Page-independent."""
+    """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
+
+    # ---- Long story mode --------------------------------------------------------
+    if text_mode == "long":
+        is_cover = page_num == 1
+
+        if is_cover:
+            # Cover: single combined page rendered overlay-style (title on art, no split).
+            final_path = pages_dir / "page-01-long.png"
+            if not final_path.exists():
+                raw_path = pages_dir / "raw-page-01-long.png"
+                if not raw_path.exists():
+                    prompt = build_image_prompt(page, story, "overlay")
+                    ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio)
+                    if not ok or not raw_path.exists():
+                        log.append("  ERROR: image generation failed for cover")
+                        print("\n" + "\n".join(log))
+                        return False
+                text = page.get("text", "")
+                placement = _overlay_placement(page.get("text_placement", "floating"))
+                color = page.get("text_color_hint", "dark")
+                font = page.get("font", "reader")
+                font_name = (story.get("fonts") or {}).get(font)
+                align = page.get("text_align", "left")
+                ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, final_path, log)
+                if not ok or not final_path.exists():
+                    log.append("  ERROR: text overlay failed for cover")
+                    print("\n" + "\n".join(log))
+                    return False
+            log.append(f"  Done: {final_path}")
+            log.append(f"MEDIA: {final_path}")
+            print("\n" + "\n".join(log))
+            return True
+
+        # Body page: art page + optional text page.
+        art_path = pages_dir / f"page-{nn}-long.png"
+        if not art_path.exists():
+            prompt = build_image_prompt(page, story, "long")
+            ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio)
+            if not ok or not art_path.exists():
+                log.append(f"  ERROR: art image generation failed for page {page_num}")
+                print("\n" + "\n".join(log))
+                return False
+
+        page_text = page.get("text", "").strip()
+        if not page_text:
+            text_bg_prompt = page.get("text_background_prompt", "")
+            if text_bg_prompt:
+                log.append(f"  Warning: text_background_prompt set but text is empty; skipping text page.")
+            log.append(f"  Done: {art_path}")
+            log.append(f"MEDIA: {art_path}")
+            print("\n" + "\n".join(log))
+            return True
+
+        # Shared text-page rendering args.
+        color = page.get("text_color_hint", "dark")
+        font = page.get("font", "reader")
+        font_name = (story.get("fonts") or {}).get(font)
+        align = page.get("text_align", "left")
+        text_path = pages_dir / f"page-{nn}-long-text.png"
+        text_bg_prompt = page.get("text_background_prompt", "")
+
+        if text_bg_prompt:
+            # Dedicated background (+1 paid call, idempotent on bg_path).
+            bg_path = pages_dir / f"page-{nn}-long-bg.png"
+            if not bg_path.exists():
+                bg_prompt_str = build_text_bg_prompt(page, story)
+                ok = await run_nano_banana(
+                    client, bg_prompt_str, bg_path, story, {"characters": []},
+                    resolution, log, aspect_ratio,
+                )
+                if not ok or not bg_path.exists():
+                    log.append(f"  ERROR: text bg generation failed for page {page_num}")
+                    print("\n" + "\n".join(log))
+                    return False
+            if not text_path.exists():
+                # bg_path is the source image; canvas_from=art_path locks the dims.
+                ok = await run_text_page(bg_path, page_text, color, font, font_name, align, text_path, art_path, log)
+                if not ok or not text_path.exists():
+                    log.append(f"  ERROR: text page failed for page {page_num}")
+                    print("\n" + "\n".join(log))
+                    return False
+        else:
+            # Default: blur own art (Pillow-only, free).
+            if not text_path.exists():
+                ok = await run_text_page(art_path, page_text, color, font, font_name, align, text_path, None, log)
+                if not ok or not text_path.exists():
+                    log.append(f"  ERROR: text page failed for page {page_num}")
+                    print("\n" + "\n".join(log))
+                    return False
+
+        log.append(f"  Done: {art_path}, {text_path}")
+        log.append(f"MEDIA: {art_path}")
+        log.append(f"MEDIA: {text_path}")
+        print("\n" + "\n".join(log))
+        return True
+
+    # ---- Native / overlay modes -------------------------------------------------
     suffix = "-native" if text_mode == "native" else ""
     final_path = pages_dir / f"page-{nn}{suffix}.png"
 
@@ -477,15 +685,12 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
 
 
 async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None) -> int:
-    """Fire every page concurrently. Returns the number of failures."""
-    from google import genai
+    """Fire every page concurrently. Returns the number of failures.
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("ERROR: GEMINI_API_KEY is not set in the environment.", file=sys.stderr)
-        return len(todo)
-
-    client = genai.Client(api_key=api_key)
+    The genai.Client is built lazily on the first actual paid API call via _LazyClient,
+    so runs that only rebuild free artifacts (e.g. text pages in long mode) need no key.
+    """
+    client = _LazyClient()
     print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
     results = await asyncio.gather(
         *(render_page(client, page, story, pages_dir, resolution, text_mode, aspect_ratio) for page in todo)
@@ -516,13 +721,16 @@ def main() -> None:
     parser.add_argument(
         "--text-mode",
         dest="text_mode",
-        choices=["overlay", "native"],
+        choices=["overlay", "native", "long"],
         default=None,
         help=(
             "Override story.json's text_mode for this run. "
             "overlay: generate image with text-safe zone, then Pillow-composite text. "
             "native: ask the model to render story text directly into the illustration "
             "(output goes to page-NN-native.png). "
+            "long: full-bleed art + separate text page per body page (page-NN-long.png + "
+            "page-NN-long-text.png); cover stays combined (overlay-style). Same default "
+            "cost as other modes; pages with text_background_prompt add 1 extra paid call. "
             "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )
@@ -581,7 +789,8 @@ def main() -> None:
         print()
 
     # Select pages to render, skipping filtered-out and already-existing ones.
-    suffix = "-native" if text_mode == "native" else ""
+    # Long mode uses its own skip logic (two physical files per logical page);
+    # native/overlay map 1-to-1 via a filename suffix.
     todo: list[dict] = []
     for page in pages:
         page_num = page["page_num"]
@@ -589,11 +798,34 @@ def main() -> None:
             continue
         if page_num < args.from_page:
             continue
-        final_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
-        if final_path.exists():
-            print(f"Page {page_num}: already exists, skipping. ({final_path})")
-            print(f"MEDIA: {final_path}")
-            continue
+
+        if text_mode == "long":
+            is_cover = page_num == 1
+            art_path = pages_dir / ("page-01-long.png" if is_cover else f"page-{page_num:02d}-long.png")
+            if is_cover:
+                if art_path.exists():
+                    print(f"Page {page_num} (cover): already exists, skipping. ({art_path})")
+                    print(f"MEDIA: {art_path}")
+                    continue
+            else:
+                page_text = page.get("text", "").strip()
+                text_path = pages_dir / f"page-{page_num:02d}-long-text.png"
+                art_done = art_path.exists()
+                text_done = not page_text or text_path.exists()
+                if art_done and text_done:
+                    print(f"Page {page_num}: already exists, skipping. ({art_path})")
+                    print(f"MEDIA: {art_path}")
+                    if page_text and text_path.exists():
+                        print(f"MEDIA: {text_path}")
+                    continue
+        else:
+            suffix = "-native" if text_mode == "native" else ""
+            final_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
+            if final_path.exists():
+                print(f"Page {page_num}: already exists, skipping. ({final_path})")
+                print(f"MEDIA: {final_path}")
+                continue
+
         todo.append(page)
 
     errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio)) if todo else 0

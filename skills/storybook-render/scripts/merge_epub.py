@@ -7,26 +7,34 @@
 Merge all rendered page images for a storybook into a fixed-layout EPUB3.
 
 Reads the ordered page list from story.json and collects the final rendered
-PNGs from {out_dir}/pages/. Works for both text modes:
-  - overlay (default): reads pages/page-NN.png
-  - native:            reads pages/page-NN-native.png
+PNGs from {out_dir}/pages/. Works for all three text modes:
+  - overlay: reads pages/page-NN.png
+  - native:  reads pages/page-NN-native.png
+  - long:    interleaves art and text pages — pages/page-NN-long.png followed by
+             pages/page-NN-long-text.png (when the page has text); cover (page 1)
+             is a single pages/page-01-long.png.
 
-Output: {out_dir}/{slug(title)}.epub   (overlay mode)
+Output: {out_dir}/{slug(title)}.epub         (overlay mode)
         {out_dir}/{slug(title)}-native.epub  (native mode)
+        {out_dir}/{slug(title)}-long.epub    (long mode)
 or whatever path is given via --out.
 
-The EPUB is EPUB3 fixed-layout (pre-paginated): each page is one full-bleed
-image spread with viewport dimensions matching the image. Page text from
-story.json rides along as the <img> alt attribute (accessible, but text is
-baked into the rendered PNG itself in overlay mode, or rendered natively by
-the image model in native mode). No external dependencies — built entirely
-from stdlib zipfile, struct, uuid, and xml.sax.saxutils.
+The EPUB is EPUB3 fixed-layout (pre-paginated): each physical page is one full-bleed
+image spread with viewport dimensions matching the image. In long mode, the EPUB nav
+only lists art pages (the logical story pages); text pages immediately follow each art
+page in the spine but do not appear as separate nav entries.
+
+Page text from story.json rides along as the <img> alt attribute (accessible).
+No external dependencies — built entirely from stdlib zipfile, struct, uuid, and
+xml.sax.saxutils.
 
 Emits MEDIA: <epub_path> on success (consistent with render_book.py convention).
 Designed to run standalone — no image API cost, no OpenRouter calls.
 
+Keep collection logic in sync with merge_pdf.py.
+
 Usage:
-  uv run merge_epub.py --story /path/to/story.json [--text-mode overlay|native]
+  uv run merge_epub.py --story /path/to/story.json [--text-mode overlay|native|long]
                        [--out-dir DIR] [--out my-book.epub]
 """
 
@@ -110,9 +118,13 @@ def _content_opf(
     lang: str,
     identifier: str,
     modified: str,
-    page_entries: list[tuple[int, int, int]],  # (page_num, width, height)
+    page_descs: list[tuple[str, int, int, bool]],  # (slug, width, height, is_cover_image)
 ) -> str:
-    """Build the OPF package document for a fixed-layout EPUB3."""
+    """Build the OPF package document for a fixed-layout EPUB3.
+
+    page_descs is an ordered list of physical-page descriptors — one per physical
+    page in spine order. In long mode this includes interleaved art + text pages.
+    """
     manifest_items: list[str] = []
     spine_items: list[str] = []
 
@@ -121,10 +133,10 @@ def _content_opf(
         ' media-type="application/xhtml+xml" properties="nav"/>'
     )
 
-    for idx, (page_num, _w, _h) in enumerate(page_entries):
-        pid = f"page-{page_num:02d}"
-        iid = f"img-{page_num:02d}"
-        cover_prop = ' properties="cover-image"' if idx == 0 else ""
+    for slug, _w, _h, is_cover in page_descs:
+        pid = slug
+        iid = f"img-{slug}"
+        cover_prop = ' properties="cover-image"' if is_cover else ""
 
         manifest_items.append(
             f'    <item id="{pid}" href="pages/{pid}.xhtml"'
@@ -163,13 +175,17 @@ def _content_opf(
     )
 
 
-def _nav_xhtml(title: str, page_nums: list[int], lang: str) -> str:
-    """Build the EPUB3 navigation document (required; not in spine)."""
+def _nav_xhtml(title: str, nav_items: list[tuple[str, str]], lang: str) -> str:
+    """Build the EPUB3 navigation document (required; not in spine).
+
+    nav_items: ordered list of (slug, label) for pages that appear in the nav.
+    In long mode only art pages (with nav labels) are listed; text pages are None-labeled
+    and omitted from the nav, so readers see one entry per logical story page.
+    """
     items: list[str] = []
-    for idx, n in enumerate(page_nums):
-        label = _esc(title) if idx == 0 else f"Page {n}"
+    for slug, label in nav_items:
         items.append(
-            f'        <li><a href="pages/page-{n:02d}.xhtml">{label}</a></li>'
+            f'        <li><a href="pages/{slug}.xhtml">{_esc(label)}</a></li>'
         )
     toc_items = "\n".join(items)
 
@@ -194,14 +210,15 @@ def _nav_xhtml(title: str, page_nums: list[int], lang: str) -> str:
     )
 
 
-def _page_xhtml(page_num: int, width: int, height: int, alt_text: str, lang: str) -> str:
+def _page_xhtml(slug: str, width: int, height: int, alt_text: str, lang: str) -> str:
     """Build the XHTML page document for one fixed-layout spread.
 
+    slug is the internal page identifier, e.g. 'page-02' or 'page-02-text'.
     The <style> block uses plain string concatenation (not an f-string) to
     avoid the f-string brace trap: literal { } in CSS are replacement fields
     inside an f-string and cause NameError at runtime.
     """
-    pid = f"page-{page_num:02d}"
+    pid = slug
     style = "html,body{margin:0;padding:0;width:100%;height:100%}img{display:block;width:100%;height:100%}"
 
     return (
@@ -211,7 +228,7 @@ def _page_xhtml(page_num: int, width: int, height: int, alt_text: str, lang: str
         f' lang="{_esc(lang)}" xml:lang="{_esc(lang)}">\n'
         "<head>\n"
         '  <meta charset="utf-8"/>\n'
-        f"  <title>Page {page_num}</title>\n"
+        f"  <title>{_esc(slug)}</title>\n"
         f'  <meta name="viewport" content="width={width}, height={height}"/>\n'
         f"  <style>{style}</style>\n"
         "</head>\n"
@@ -237,7 +254,7 @@ def merge_epub(
 
     Args:
         story_path: Absolute path to story.json.
-        text_mode:  Resolved text mode ("overlay" or "native"), or None to auto-detect.
+        text_mode:  Resolved text mode ("overlay", "native", or "long"), or None to auto-detect.
         out_dir:    Directory that contains pages/ and where the EPUB is written.
         out:        Explicit EPUB output path (overrides default naming).
 
@@ -248,7 +265,8 @@ def merge_epub(
 
     # Resolve text_mode: arg > story.json field > "native".
     resolved_mode = text_mode or story.get("text_mode", "native")
-    suffix = "-native" if resolved_mode == "native" else ""
+    # Output filename suffix (3-way map; "long" gets its own literal suffix).
+    out_suffix = {"native": "-native", "long": "-long"}.get(resolved_mode, "")
 
     # Output directory mirrors render_book.py logic.
     resolved_out_dir = out_dir if out_dir is not None else story_path.parent
@@ -259,28 +277,78 @@ def merge_epub(
         print("ERROR: No pages found in story.json.", file=sys.stderr)
         sys.exit(1)
 
-    # Collect pages in story.json array order — do NOT glob (glob sweeps in
-    # raw-page-NN.png intermediates and misorders past 99 pages).
-    page_data: list[tuple[int, str, bytes, int, int]] = []  # (page_num, text, png_bytes, w, h)
-    missing: list[int] = []
-    for page in pages:
-        page_num = page["page_num"]
-        png_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
-        if not png_path.exists():
-            missing.append(page_num)
-            continue
-        png_bytes = png_path.read_bytes()
-        w, h = _png_dims(png_bytes, png_path)
-        page_text = page.get("text", "")
-        page_data.append((page_num, page_text, png_bytes, w, h))
+    # Build ordered physical-page descriptors.
+    # Each descriptor: (slug, png_bytes, w, h, alt_text, nav_label_or_None)
+    # slug: internal EPUB identifier, e.g. "page-02" or "page-02-text" (suffix-free inside EPUB).
+    # nav_label_or_None: str = appears in EPUB nav; None = spine-only (text pages in long mode).
+    #
+    # Collect in story.json array order — do NOT glob (glob sweeps in raw-page-NN.png
+    # intermediates and misorders past 99 pages). Keep in sync with merge_pdf.py.
+    phys_pages: list[tuple[str, bytes, int, int, str, str | None]] = []
+    missing: list[str] = []
+    is_first_collected = True  # first non-skipped page gets the title as nav label
+
+    if resolved_mode == "long":
+        # Long mode: per logical page, art page + optional text page; cover is single.
+        for page in pages:
+            page_num = page["page_num"]
+            nn = f"{page_num:02d}"
+            page_text = page.get("text", "")
+
+            if page_num == 1:  # Cover
+                png_path = pages_dir / "page-01-long.png"
+                if not png_path.exists():
+                    missing.append("1 (cover)")
+                    continue
+                pb = png_path.read_bytes()
+                w, h = _png_dims(pb, png_path)
+                nav_label: str | None = story.get("title", "") if is_first_collected else f"Page {page_num}"
+                is_first_collected = False
+                phys_pages.append(("page-01", pb, w, h, page_text, nav_label))
+            else:  # Body page
+                art_path = pages_dir / f"page-{nn}-long.png"
+                if not art_path.exists():
+                    missing.append(str(page_num))
+                    continue
+                pb = art_path.read_bytes()
+                w, h = _png_dims(pb, art_path)
+                nav_label = story.get("title", "") if is_first_collected else f"Page {page_num}"
+                is_first_collected = False
+                # Art page — empty alt (text is on the separate text page).
+                phys_pages.append((f"page-{nn}", pb, w, h, "", nav_label))
+
+                if page_text.strip():
+                    text_path = pages_dir / f"page-{nn}-long-text.png"
+                    if text_path.exists():
+                        tb = text_path.read_bytes()
+                        tw, th = _png_dims(tb, text_path)
+                        # Text page — carries the story text as alt; not in nav.
+                        phys_pages.append((f"page-{nn}-text", tb, tw, th, page_text, None))
+                    else:
+                        missing.append(f"{page_num}-text")
+    else:
+        # Overlay / native: one physical page per logical page.
+        file_suffix = "-native" if resolved_mode == "native" else ""
+        for page in pages:
+            page_num = page["page_num"]
+            png_path = pages_dir / f"page-{page_num:02d}{file_suffix}.png"
+            if not png_path.exists():
+                missing.append(str(page_num))
+                continue
+            pb = png_path.read_bytes()
+            w, h = _png_dims(pb, png_path)
+            page_text = page.get("text", "")
+            nav_label = story.get("title", "") if is_first_collected else f"Page {page_num}"
+            is_first_collected = False
+            phys_pages.append((f"page-{page_num:02d}", pb, w, h, page_text, nav_label))
 
     if missing:
         print(
-            f"Warning: {len(missing)} page(s) not found and skipped: {missing}",
+            f"Warning: {len(missing)} page file(s) not found and skipped: {missing}",
             file=sys.stderr,
         )
 
-    if not page_data:
+    if not phys_pages:
         print(
             f"ERROR: No rendered pages found in {pages_dir}. "
             "Run render_book.py first, then retry.",
@@ -293,17 +361,29 @@ def merge_epub(
         epub_path = out
     else:
         title = story.get("title", "")
-        filename = f"{_slug(title)}{suffix}.epub"
+        filename = f"{_slug(title)}{out_suffix}.epub"
         epub_path = resolved_out_dir / filename
 
     # EPUB metadata.
     title = story.get("title", "")
     lang = story.get("language", "en")
-    slug = _slug(title)
+    slug_str = _slug(title)
     identifier = "urn:uuid:" + str(
-        uuid.uuid5(uuid.NAMESPACE_URL, "urn:storybook:" + slug)
+        uuid.uuid5(uuid.NAMESPACE_URL, "urn:storybook:" + slug_str)
     )
     modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Derive OPF/nav structures from the physical-page list.
+    # cover-image property goes to the first physical page (descriptor index 0).
+    page_descs = [
+        (slug, w, h, idx == 0)
+        for idx, (slug, _pb, w, h, _alt, _label) in enumerate(phys_pages)
+    ]
+    nav_items = [
+        (slug, label)
+        for slug, _pb, _w, _h, _alt, label in phys_pages
+        if label is not None
+    ]
 
     # Build the EPUB zip.  Always rebuild: a stale EPUB after a re-render is
     # worse than a fresh one.
@@ -311,9 +391,6 @@ def merge_epub(
     # ZipInfo date_time=(1980,1,1,0,0,0) makes all entries byte-stable across
     # runs except for the dcterms:modified string in content.opf.
     _DT = (1980, 1, 1, 0, 0, 0)
-
-    page_entries = [(pn, w, h) for pn, _txt, _bytes, w, h in page_data]
-    page_nums = [pn for pn, *_ in page_data]
 
     with zipfile.ZipFile(epub_path, "w") as zf:
         # 1. mimetype — MUST be first entry, STORED (uncompressed), no trailing newline.
@@ -329,24 +406,23 @@ def merge_epub(
         # 3. OEBPS/content.opf
         oi = zipfile.ZipInfo("OEBPS/content.opf", date_time=_DT)
         oi.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(oi, _content_opf(title, lang, identifier, modified, page_entries))
+        zf.writestr(oi, _content_opf(title, lang, identifier, modified, page_descs))
 
         # 4. OEBPS/nav.xhtml
         ni = zipfile.ZipInfo("OEBPS/nav.xhtml", date_time=_DT)
         ni.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(ni, _nav_xhtml(title, page_nums, lang))
+        zf.writestr(ni, _nav_xhtml(title, nav_items, lang))
 
-        # 5 & 6. Per-page XHTML + PNG (internal names are suffix-free — the
-        # on-disk suffix only disambiguates overlay vs native outside the container).
-        for page_num, page_text, png_bytes, w, h in page_data:
-            pid = f"page-{page_num:02d}"
-
-            xi = zipfile.ZipInfo(f"OEBPS/pages/{pid}.xhtml", date_time=_DT)
+        # 5 & 6. Per-physical-page XHTML + PNG.
+        # Internal slugs are suffix-free (e.g. "page-02", "page-02-text") — the
+        # on-disk "-long"/"-native" suffix only disambiguates outside the container.
+        for slug, png_bytes, w, h, alt_text, _label in phys_pages:
+            xi = zipfile.ZipInfo(f"OEBPS/pages/{slug}.xhtml", date_time=_DT)
             xi.compress_type = zipfile.ZIP_DEFLATED
-            zf.writestr(xi, _page_xhtml(page_num, w, h, page_text, lang))
+            zf.writestr(xi, _page_xhtml(slug, w, h, alt_text, lang))
 
             # PNGs are already compressed; store without re-deflating.
-            pi = zipfile.ZipInfo(f"OEBPS/images/{pid}.png", date_time=_DT)
+            pi = zipfile.ZipInfo(f"OEBPS/images/{slug}.png", date_time=_DT)
             pi.compress_type = zipfile.ZIP_STORED
             zf.writestr(pi, png_bytes)
 
@@ -366,12 +442,14 @@ def main() -> None:
     parser.add_argument(
         "--text-mode",
         dest="text_mode",
-        choices=["overlay", "native"],
+        choices=["overlay", "native", "long"],
         default=None,
         help=(
             "Which rendered files to collect. "
             "overlay: pages/page-NN.png. "
             "native: pages/page-NN-native.png. "
+            "long: interleaves pages/page-NN-long.png + pages/page-NN-long-text.png "
+            "per body page; cover is pages/page-01-long.png. "
             "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )

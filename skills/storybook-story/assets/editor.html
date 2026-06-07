@@ -635,6 +635,10 @@ function buildPageCard(page, i) {
         <label>Text colour hint</label>
         <input type="text" id="pg-colorhint-${i}" placeholder="e.g. dark, light">
       </div>
+      <div class="field">
+        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = reuse this page's art, free; set to generate a dedicated background via an extra paid call)</small></label>
+        <input type="text" id="pg-textbgprompt-${i}" placeholder="e.g. a misty forest path at dawn, soft light filtering through leaves">
+      </div>
     </div>`;
 
   // Badge
@@ -660,6 +664,15 @@ function buildPageCard(page, i) {
   hintInp.addEventListener('change', () => {
     if (hintInp.value === '') delete page.text_color_hint;
     else page.text_color_hint = hintInp.value;
+    markDirty(page);
+  });
+
+  // Text page background prompt (long mode only)
+  const bgPromptInp = card.querySelector(`#pg-textbgprompt-${i}`);
+  bgPromptInp.value = page.text_background_prompt || '';
+  bgPromptInp.addEventListener('change', () => {
+    if (bgPromptInp.value === '') delete page.text_background_prompt;
+    else page.text_background_prompt = bgPromptInp.value;
     markDirty(page);
   });
 

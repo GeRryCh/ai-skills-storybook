@@ -278,7 +278,7 @@ def validate_story(
                         errors.append(f"{where}.page_num must be a positive integer")
                     else:
                         nums.append(num)
-                for key in ("text", "image_prompt", "text_color_hint"):
+                for key in ("text", "image_prompt", "text_color_hint", "text_background_prompt"):
                     if key in page and not isinstance(page[key], str):
                         errors.append(f"{where}.{key} must be a string")
                 for key in ("text_placement", "text_align", "font"):
@@ -436,7 +436,7 @@ def make_handler(story_path: Path, schema: dict):
                     continue
                 rendered = any(
                     (pages_dir / f"page-{num:02d}{sfx}.png").exists()
-                    for sfx in ("", "-native")
+                    for sfx in ("", "-native", "-long")
                 )
                 page_status[str(num)] = {"rendered": rendered}
             char_status: dict[str, dict] = {}

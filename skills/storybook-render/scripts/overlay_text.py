@@ -6,13 +6,23 @@
 """
 Overlay story text onto a children's book page image.
 
-Usage (CLI):
+Two modes (select with --text-page):
+
+Band mode (default) — overlay mode / native-mode covers:
   uv run overlay_text.py --image page.png --text "Once upon a time..." \
       --placement bottom --out page-final.png [--font reader|display] [--color dark|light]
 
+Text-page mode (--text-page) — long story mode body pages:
+  uv run overlay_text.py --image art-page.png --text "Long story text..." \
+      --text-page --out page-text.png
+  # With dedicated background cropped to art dims:
+  uv run overlay_text.py --image bg.png --text "..." \
+      --text-page --canvas-from art-page.png --out page-text.png
+
 Importable:
-  from overlay_text import overlay
+  from overlay_text import overlay, text_page
   overlay("page.png", "Once upon a time...", "bottom", "page-final.png")
+  text_page("art.png", "Long text here.", "page-text.png")
 """
 
 from __future__ import annotations
@@ -58,6 +68,19 @@ FEATHER_PX = 14
 # Margin between text box and image edge as fraction of image height.
 # Gives the feather room to fade instead of clipping at the frame.
 EDGE_MARGIN_FRACTION = 0.04
+
+# ---- Text-page mode constants (long story mode) ---------------------------------
+# Used only by text_page(); overlay() and _pick_font_size() are not touched.
+# Preferred panel height as fraction of image height (drives font auto-fit).
+TEXT_PAGE_ZONE_FRACTION = 0.6
+# Hard ceiling: panel never exceeds this fraction of page height (locked ~80%).
+TEXT_PAGE_MAX_BOX_FRACTION = 0.8
+# Font size ceiling for text pages — larger headroom than band mode's MAX_FONT_PX=72.
+TEXT_PAGE_MAX_FONT_PX = 96
+# Auto blur radius = this fraction of image width (resolution-independent).
+TEXT_PAGE_BG_BLUR_FRACTION = 0.02
+# White wash alpha composited over the blurred art background (0 = none, 255 = opaque).
+TEXT_PAGE_BG_WASH_ALPHA = 80
 
 
 def _normalize_family(name: str) -> str:
@@ -277,6 +300,168 @@ def overlay(
     return out_path
 
 
+def text_page(
+    image_path: str | Path,
+    text: str,
+    out_path: str | Path,
+    font: str = "reader",
+    color: str = "dark",
+    box_alpha: int = BOX_ALPHA,
+    feather: int = FEATHER_PX,
+    font_name: str | None = None,
+    align: str = "left",
+    bg_blur: int = -1,
+    bg_wash: int = TEXT_PAGE_BG_WASH_ALPHA,
+    canvas_from: str | Path | None = None,
+) -> Path:
+    """
+    Render a full text page for long story mode.
+
+    The page background is either:
+    - The same art image, blurred + white-washed (default, Pillow-only, free).
+      bg_blur=-1 (auto) = max(6, round(width * TEXT_PAGE_BG_BLUR_FRACTION)).
+    - A dedicated background image (when canvas_from is set): image_path is the
+      background to display; it is scale-to-cover + center-cropped to match the
+      canvas_from image's dimensions. No blur/wash is applied (the bg is purpose-made).
+
+    Text sits on a vertically centered, feathered semi-transparent panel.
+
+    This function uses its own font-fit loop and geometry — it does NOT touch
+    overlay() or _pick_font_size(), so band-mode behavior cannot regress.
+
+    Args:
+        image_path: The art image (or background image when canvas_from is set).
+        text: Story text. Empty string = plain background, no panel.
+        out_path: Destination path.
+        font: role 'reader' or 'display'.
+        color: 'dark' or 'light'.
+        box_alpha: Panel opacity 0-255.
+        feather: Edge blur radius in px.
+        font_name: Explicit font family; resolved via bundled asset -> system font -> fallback.
+        align: 'left' or 'center'.
+        bg_blur: GaussianBlur radius for own-art mode; -1 = auto from width.
+        bg_wash: White-wash alpha over blurred art (0-255).
+        canvas_from: When set, open this image to get target (W, H); scale-crop image_path to fit.
+
+    Returns:
+        Path to written file.
+    """
+    out_path = Path(out_path)
+    image_path = Path(image_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    img = Image.open(image_path).convert("RGBA")
+    w, h = img.size
+
+    if canvas_from is not None:
+        # Dedicated background: get target dims from canvas_from, then scale-to-cover
+        # + center-crop image_path to those dims so text page always matches art page.
+        ref = Image.open(canvas_from)
+        tw, th = ref.size
+        scale = max(tw / w, th / h)
+        new_w = math.ceil(w * scale)
+        new_h = math.ceil(h * scale)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        x0 = (new_w - tw) // 2
+        y0 = (new_h - th) // 2
+        img = img.crop((x0, y0, x0 + tw, y0 + th))
+        w, h = tw, th
+    else:
+        # Own-art default: blur + white wash for legibility.
+        auto_blur = max(6, round(w * TEXT_PAGE_BG_BLUR_FRACTION))
+        blur_radius = auto_blur if bg_blur < 0 else bg_blur
+        img = img.filter(ImageFilter.GaussianBlur(blur_radius))
+        wash = Image.new("RGBA", (w, h), (255, 255, 255, bg_wash))
+        img = Image.alpha_composite(img, wash)
+
+    if not text.strip():
+        img.convert("RGB").save(out_path)
+        return out_path
+
+    # Symmetric vertical padding for centered panel (band mode uses asymmetric 40/56).
+    v_pad = (V_PAD_TOP + V_PAD_BOTTOM) // 2  # ~48
+
+    font_ref = _resolve_font_ref(font, font_name)
+    max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
+    h_pad = int(w * H_PAD_FRACTION)
+    word_count = len(text.split())
+
+    # Independent font-fit loop using TEXT_PAGE_* values (does not call _pick_font_size).
+    zone_h = h * TEXT_PAGE_ZONE_FRACTION
+    cap_h = h * TEXT_PAGE_MAX_BOX_FRACTION
+
+    def _fits_tp(size: int, limit: float) -> bool:
+        f = _load_font(font_ref, size)
+        dummy = Image.new("RGBA", (w, h))
+        draw = ImageDraw.Draw(dummy)
+        lines = _word_wrap("X " * word_count, f, max_text_w, draw)
+        line_h = draw.textbbox((0, 0), "Ag", font=f)[3] + 8
+        total_h = len(lines) * line_h + 2 * v_pad
+        return total_h <= limit
+
+    font_size = None
+    for size in range(TEXT_PAGE_MAX_FONT_PX, MIN_FONT_PX - 1, -2):
+        if _fits_tp(size, zone_h):
+            font_size = size
+            break
+    if font_size is None:
+        for size in range(MIN_FONT_PX, ABS_MIN_FONT_PX - 1, -2):
+            if _fits_tp(size, cap_h):
+                font_size = size
+                break
+    if font_size is None:
+        font_size = ABS_MIN_FONT_PX
+
+    pil_font = _load_font(font_ref, font_size)
+    measure = ImageDraw.Draw(img)
+    lines = _word_wrap(text, pil_font, max_text_w, measure)
+    line_bbox = measure.textbbox((0, 0), "Ag", font=pil_font)
+    line_h = line_bbox[3] - line_bbox[1] + 8
+    text_block_h = len(lines) * line_h
+    box_h = text_block_h + 2 * v_pad
+    max_box_h = int(h * TEXT_PAGE_MAX_BOX_FRACTION)
+    box_h = min(box_h, max_box_h)
+
+    # Centered panel geometry (all four corners rounded — panel floats in the center).
+    box_x0 = h_pad - H_INNER_PAD
+    box_x1 = w - h_pad + H_INNER_PAD
+    box_y0 = (h - box_h) // 2
+    box_y1 = box_y0 + box_h
+
+    # Same feathered mask + composite recipe as overlay().
+    mask = Image.new("L", (w, h), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle(
+        [box_x0, box_y0, box_x1, box_y1], radius=BOX_RADIUS, fill=box_alpha
+    )
+    if feather > 0:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather))
+
+    panel = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    panel.putalpha(mask)
+    img = Image.alpha_composite(img, panel)
+
+    # Sharp text layer.
+    text_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    text_draw = ImageDraw.Draw(text_layer)
+    text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
+    text_y = box_y0 + v_pad
+    for line in lines:
+        if align == "center":
+            line_w = text_draw.textlength(line, font=pil_font)
+            x = int((w - line_w) / 2)
+        else:
+            x = h_pad
+        text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
+        text_y += line_h
+        if text_y > box_y1 - v_pad:
+            break
+
+    composed = Image.alpha_composite(img, text_layer)
+    composed.convert("RGB").save(out_path)
+    return out_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Overlay story text onto a page image.")
     parser.add_argument("--image", required=True, help="Source image path")
@@ -295,13 +480,36 @@ def main() -> None:
                         help=f"Panel opacity 0-255 (default {BOX_ALPHA}; lower = more transparent)")
     parser.add_argument("--feather", type=int, default=FEATHER_PX,
                         help=f"Edge blur radius in px (default {FEATHER_PX}; 0 = hard edge)")
+    # Long story mode — text-page rendering.
+    parser.add_argument("--text-page", action="store_true",
+                        help="Render a text-only page (long story mode): centered panel over a "
+                             "blurred/washed copy of the art (or a dedicated background when "
+                             "--canvas-from is set). Ignores --placement.")
+    parser.add_argument("--bg-blur", type=int, default=-1,
+                        help="GaussianBlur radius for own-art background (--text-page mode only). "
+                             "-1 = auto (2%% of image width).")
+    parser.add_argument("--bg-wash", type=int, default=TEXT_PAGE_BG_WASH_ALPHA,
+                        help=f"White-wash alpha over blurred art 0-255 (default {TEXT_PAGE_BG_WASH_ALPHA}; "
+                             "--text-page + own-art mode only).")
+    parser.add_argument("--canvas-from", default=None, metavar="PATH",
+                        help="(--text-page only) Open this image to get target W×H; scale-crop "
+                             "--image to those dims so text page matches art page dimensions. "
+                             "Use when --image is a dedicated background.")
     args = parser.parse_args()
 
-    result = overlay(
-        args.image, args.text, args.placement, args.out, args.font, args.color,
-        box_alpha=args.box_alpha, feather=args.feather, font_name=args.font_name,
-        align=args.align,
-    )
+    if args.text_page:
+        result = text_page(
+            args.image, args.text, args.out, args.font, args.color,
+            box_alpha=args.box_alpha, feather=args.feather, font_name=args.font_name,
+            align=args.align, bg_blur=args.bg_blur, bg_wash=args.bg_wash,
+            canvas_from=args.canvas_from,
+        )
+    else:
+        result = overlay(
+            args.image, args.text, args.placement, args.out, args.font, args.color,
+            box_alpha=args.box_alpha, feather=args.feather, font_name=args.font_name,
+            align=args.align,
+        )
     print(f"Saved: {result}")
 
 

@@ -26,11 +26,16 @@ directory (default: the user's cwd, e.g. this worktree root):
    character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the characters listed in that page's `characters` field
-   (per-page selection, cap 4 for the flash model), then overlays text. Output:
-   `pages/page-NN.png` (overlay) or `pages/page-NN-native.png` (native). After a full
-   render, automatically assembles all pages into book file(s) per the `saved_formats`
-   field in `story.json` (default: all formats — both PDF and EPUB). Assembly is done
-   via `merge_pdf.py` and/or `merge_epub.py` at no extra API cost.
+   (per-page selection, cap 4 for the flash model), then overlays text. Three text modes:
+   - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
+   - `native`: `pages/page-NN-native.png` (model bakes text into art)
+   - `long`: `pages/page-NN-long.png` (full-bleed art, no text) + `pages/page-NN-long-text.png`
+     (separate text page, Pillow-only, free by default). Cover (page 1) stays combined
+     (`pages/page-01-long.png`). **Cost invariant: default long mode = same cost as other
+     modes (1 paid call per logical page). Text pages are free Pillow work. Only pages with
+     optional `text_background_prompt` add 1 extra paid call for a dedicated text-page bg.**
+   After a full render, assembles book file(s) via `merge_pdf.py` / `merge_epub.py` at no
+   extra API cost. Long mode outputs `{title}-long.pdf` / `{title}-long.epub`.
 
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
@@ -203,7 +208,7 @@ returns an error and a Reload button rather than silently clobbering the new con
 
 When a task is complete, smoke-test the change against the **pip-storm fixture** in
 `tests/` before declaring done. The fixture ships committed artifacts (a reference image,
-a style sheet, and pre-rendered overlay + native pages under
+a style sheet, and pre-rendered overlay + native + long pages under
 `tests/fixtures/pip-storm/`) so the no-API paths can be exercised for free:
 
 ```bash
@@ -229,21 +234,32 @@ uv run skills/storybook-render/scripts/overlay_text.py \
   --image tests/fixtures/pip-storm/pages/page-01.png \
   --text "Once upon a time..." --placement bottom --out /tmp/smoke.png
 
-# No API cost — re-merge the committed fixture pages into a PDF
-uv run skills/storybook-render/scripts/merge_pdf.py \
-  --story tests/fixtures/pip-storm/story.json
-uv run skills/storybook-render/scripts/merge_pdf.py \
-  --story tests/fixtures/pip-storm/story.json --text-mode native
+# No API cost — exercise text-page mode (long mode) against a committed raw page
+uv run skills/storybook-render/scripts/overlay_text.py \
+  --image tests/fixtures/pip-storm/pages/raw-page-02.png \
+  --text "Pip loved sunny days in the meadow." \
+  --text-page --out /tmp/smoke-textpage.png
 
-# No API cost — re-merge the committed fixture pages into a fixed-layout EPUB3
+# No API cost — re-merge the committed fixture pages into a PDF (all three modes)
+uv run skills/storybook-render/scripts/merge_pdf.py \
+  --story tests/fixtures/pip-storm/story.json
+uv run skills/storybook-render/scripts/merge_pdf.py \
+  --story tests/fixtures/pip-storm/story.json --text-mode native
+uv run skills/storybook-render/scripts/merge_pdf.py \
+  --story tests/fixtures/pip-storm/story.json --text-mode long
+
+# No API cost — re-merge into a fixed-layout EPUB3 (all three modes)
 uv run skills/storybook-render/scripts/merge_epub.py \
   --story tests/fixtures/pip-storm/story.json
 uv run skills/storybook-render/scripts/merge_epub.py \
   --story tests/fixtures/pip-storm/story.json --text-mode native
+uv run skills/storybook-render/scripts/merge_epub.py \
+  --story tests/fixtures/pip-storm/story.json --text-mode long
 ```
 
-Prefer these zero-cost checks; they cover overlay, PDF merge, EPUB assembly, font resolution, and
-per-page selection logic without an image API call. Only fall back to the paid
+Prefer these zero-cost checks; they cover overlay, text-page composition, PDF merge, EPUB
+assembly, font resolution, and per-page selection logic without an image API call. Only fall
+back to the paid
 `tests/regen.sh` (~10 image calls, needs `GEMINI_API_KEY`) when a change actually
 touches the Gemini API call paths and must be verified end-to-end. When editing a paid
 script, re-run a single proof first (`render_book.py --only N` /

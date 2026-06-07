@@ -7,19 +7,25 @@
 Merge all rendered page images for a storybook into a single PDF.
 
 Reads the ordered page list from story.json and collects the final rendered
-PNGs from {out_dir}/pages/. Works for both text modes:
-  - overlay (default): reads pages/page-NN.png
-  - native:            reads pages/page-NN-native.png
+PNGs from {out_dir}/pages/. Works for all three text modes:
+  - overlay: reads pages/page-NN.png
+  - native:  reads pages/page-NN-native.png
+  - long:    interleaves art and text pages — pages/page-NN-long.png followed by
+             pages/page-NN-long-text.png (when the page has text); cover (page 1)
+             is a single page/page-01-long.png.
 
-Output: {out_dir}/{slug(title)}.pdf   (overlay mode)
+Output: {out_dir}/{slug(title)}.pdf         (overlay mode)
         {out_dir}/{slug(title)}-native.pdf  (native mode)
+        {out_dir}/{slug(title)}-long.pdf    (long mode)
 or whatever path is given via --out.
 
 Emits MEDIA: <pdf_path> on success (consistent with render_book.py convention).
 Designed to run standalone — no image API cost, no OpenRouter calls.
 
+Keep collection logic in sync with merge_epub.py.
+
 Usage:
-  uv run merge_pdf.py --story /path/to/story.json [--text-mode overlay|native]
+  uv run merge_pdf.py --story /path/to/story.json [--text-mode overlay|native|long]
                       [--out-dir DIR] [--out my-book.pdf]
 """
 
@@ -82,7 +88,7 @@ def merge_pdf(
 
     Args:
         story_path: Absolute path to story.json.
-        text_mode:  Resolved text mode ("overlay" or "native"), or None to auto-detect.
+        text_mode:  Resolved text mode ("overlay", "native", or "long"), or None to auto-detect.
         out_dir:    Directory that contains pages/ and where the PDF is written.
         out:        Explicit PDF output path (overrides default naming).
 
@@ -95,9 +101,10 @@ def merge_pdf(
 
     # Resolve text_mode: arg > story.json field > "native".
     resolved_mode = text_mode or story.get("text_mode", "native")
-    suffix = "-native" if resolved_mode == "native" else ""
+    # Output filename suffix (3-way map; "long" gets its own literal suffix).
+    out_suffix = {"native": "-native", "long": "-long"}.get(resolved_mode, "")
 
-    # Output directory mirrors render_book.py:395 logic.
+    # Output directory mirrors render_book.py logic.
     resolved_out_dir = out_dir if out_dir is not None else story_path.parent
     pages_dir = resolved_out_dir / "pages"
 
@@ -106,21 +113,50 @@ def merge_pdf(
         print("ERROR: No pages found in story.json.", file=sys.stderr)
         sys.exit(1)
 
-    # Collect pages in story.json array order — do NOT glob (glob sweeps in
+    # Collect physical pages in reading order — do NOT glob (glob sweeps in
     # raw-page-NN.png intermediates and misorders past 99 pages).
+    # Keep collection logic in sync with merge_epub.py.
     page_bytes_list: list[bytes] = []
-    missing: list[int] = []
-    for page in pages:
-        page_num = page["page_num"]
-        png_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
-        if not png_path.exists():
-            missing.append(page_num)
-            continue
-        page_bytes_list.append(_to_rgb_png_bytes(png_path))
+    missing: list[str] = []
+
+    if resolved_mode == "long":
+        # Long mode: per logical page, collect art page then text page (if any).
+        # Cover (page 1) is a single combined page.
+        for page in pages:
+            page_num = page["page_num"]
+            nn = f"{page_num:02d}"
+            if page_num == 1:
+                png_path = pages_dir / "page-01-long.png"
+                if not png_path.exists():
+                    missing.append("1 (cover)")
+                    continue
+                page_bytes_list.append(_to_rgb_png_bytes(png_path))
+            else:
+                art_path = pages_dir / f"page-{nn}-long.png"
+                if not art_path.exists():
+                    missing.append(str(page_num))
+                    continue
+                page_bytes_list.append(_to_rgb_png_bytes(art_path))
+                if page.get("text", "").strip():
+                    text_path = pages_dir / f"page-{nn}-long-text.png"
+                    if text_path.exists():
+                        page_bytes_list.append(_to_rgb_png_bytes(text_path))
+                    else:
+                        missing.append(f"{page_num}-text")
+    else:
+        # Overlay / native: one physical page per logical page.
+        suffix = "-native" if resolved_mode == "native" else ""
+        for page in pages:
+            page_num = page["page_num"]
+            png_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
+            if not png_path.exists():
+                missing.append(str(page_num))
+                continue
+            page_bytes_list.append(_to_rgb_png_bytes(png_path))
 
     if missing:
         print(
-            f"Warning: {len(missing)} page(s) not found and skipped: {missing}",
+            f"Warning: {len(missing)} page file(s) not found and skipped: {missing}",
             file=sys.stderr,
         )
 
@@ -137,7 +173,7 @@ def merge_pdf(
         pdf_path = out
     else:
         title = story.get("title", "")
-        filename = f"{_slug(title)}{suffix}.pdf"
+        filename = f"{_slug(title)}{out_suffix}.pdf"
         pdf_path = resolved_out_dir / filename
 
     # img2pdf embeds each PNG as FlateDecode (lossless) — no JPEG encoder needed.
@@ -157,12 +193,14 @@ def main() -> None:
     parser.add_argument(
         "--text-mode",
         dest="text_mode",
-        choices=["overlay", "native"],
+        choices=["overlay", "native", "long"],
         default=None,
         help=(
             "Which rendered files to collect. "
-            "overlay: pages/page-NN.png (default). "
+            "overlay: pages/page-NN.png. "
             "native: pages/page-NN-native.png. "
+            "long: interleaves pages/page-NN-long.png + pages/page-NN-long-text.png "
+            "per body page; cover is pages/page-01-long.png. "
             "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )

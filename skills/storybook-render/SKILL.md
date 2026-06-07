@@ -46,14 +46,23 @@ uv run {skillDir}/scripts/render_book.py \
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
 Output:
-- `{out_dir}/pages/page-01.png` … `page-NN.png` (overlay mode)
-- `{out_dir}/pages/page-01-native.png` … (native mode)
-- `{out_dir}/{title}.pdf` or `{out_dir}/{title}-native.pdf` — assembled after a full run (per `saved_formats`)
-- `{out_dir}/{title}.epub` or `{out_dir}/{title}-native.epub` — assembled after a full run (per `saved_formats`)
+
+| Mode | Art file | Text file | Book files |
+|------|----------|-----------|------------|
+| overlay | `pages/page-NN.png` | (same file) | `{title}.pdf`, `{title}.epub` |
+| native | `pages/page-NN-native.png` | (same file) | `{title}-native.pdf`, `{title}-native.epub` |
+| long | `pages/page-NN-long.png` | `pages/page-NN-long-text.png` | `{title}-long.pdf`, `{title}-long.epub` |
+
+In long mode the cover (page 1) is a single combined page — `pages/page-01-long.png`. Body pages with empty `text` emit an art-only page (no text page generated).
 
 Each final file is printed as `MEDIA: <path>` so the IDE can display it inline.
 
-To re-render a page after editing its `image_prompt`, delete `pages/page-NN.png` (and `pages/raw-page-NN.png`) then run with `--only N`.
+**Re-rendering individual artifacts (long mode):**
+- To force-regen the art image: `rm pages/page-NN-long.png` (also `rm pages/raw-page-NN-long.png` for the cover raw), then re-run.
+- To force-regen only the text page (Pillow-only, free, no key needed): `rm pages/page-NN-long-text.png` then re-run.
+- To force-regen the dedicated text-bg (only if `text_background_prompt` set): `rm pages/page-NN-long-bg.png` then re-run.
+
+For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png` for overlay), then `--only N`.
 
 ---
 
@@ -65,25 +74,29 @@ and EPUB). Files sit next to `story.json`, named after the book title:
 
 - Overlay mode → `{out_dir}/{title}.pdf` and/or `{out_dir}/{title}.epub`
 - Native mode  → `{out_dir}/{title}-native.pdf` and/or `{out_dir}/{title}-native.epub`
+- Long mode    → `{out_dir}/{title}-long.pdf` and/or `{out_dir}/{title}-long.epub`
 
-The EPUB is fixed-layout EPUB3 (pre-paginated): one full-bleed page image per spread,
-viewport = image dimensions, page text carried as `<img>` alt attribute. Works for both
-overlay and native text modes.
+The EPUB is fixed-layout EPUB3 (pre-paginated): one full-bleed image per physical page,
+viewport = image dimensions, page text carried as `<img>` alt attribute. In long mode,
+the EPUB nav only lists art pages (one entry per logical story page); text pages follow
+each art page in the spine but don't add nav entries.
 
 To rebuild from already-rendered pages (no render cost):
 
 ```bash
 # PDF:
 uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json
-# native mode:
+# native / long mode:
 uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --text-mode native
+uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --text-mode long
 # explicit output path:
 uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --out my-book.pdf
 
 # EPUB:
 uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json
-# native mode:
+# native / long mode:
 uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --text-mode native
+uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --text-mode long
 # explicit output path:
 uv run {skillDir}/scripts/merge_epub.py --story {out_dir}/story.json --out my-book.epub
 ```
@@ -122,25 +135,36 @@ Ad-hoc test: `overlay_text.py --font display --font-name "Arial"` (the `--font` 
 
 ---
 
-## Quick overlay test (no API cost)
-
-To verify Pillow + font before any image generation:
+## Quick overlay / text-page test (no API cost)
 
 ```bash
+# Band mode (overlay/native covers):
 uv run {skillDir}/scripts/overlay_text.py \
   --image /path/to/any.jpg \
   --text "Once upon a time there was a brave little hedgehog." \
   --placement bottom \
   --out /tmp/test-overlay.png
+
+# Text-page mode (long mode body pages):
+uv run {skillDir}/scripts/overlay_text.py \
+  --image /path/to/any.jpg \
+  --text "Long story text that belongs on its own page." \
+  --text-page \
+  --out /tmp/test-textpage.png
 ```
 
-**Text-panel blending:** the text sits on a soft, feathered white panel that blends into the illustration (no hard edge). A `bottom` panel is anchored flush to the image bottom (full-bleed, no gap); a `top` panel keeps a 4%-of-image-height margin so its feather fades instead of clipping. Tune with:
-- `--box-alpha N` — panel opacity 0–255 (default `205`; lower = more transparent, higher = more legible over busy art)
+**Band mode (overlay/native):** text sits on a soft, feathered white panel anchored to the top or bottom. Tune with:
+- `--box-alpha N` — panel opacity 0–255 (default `205`)
 - `--feather N` — edge blur radius in px (default `14`; `0` = hard edge)
-- `--align left|center` — horizontal text alignment (default `left`); driven per page by `text_align` in `story.json`. Use `center` for cover/title pages.
+- `--align left|center` — horizontal text alignment (default `left`)
 
-These default sensibly in `render_book.py`; only pass them when overriding for a specific image.
+**Text-page mode (`--text-page`, long mode):** the art image is blurred and white-washed to form the background; story text sits on a vertically centered, feathered panel. Tune with:
+- `--bg-blur N` — blur radius (default = auto 2% of image width)
+- `--bg-wash N` — white-wash alpha 0–255 (default `80`)
+- `--canvas-from PATH` — when `--image` is a dedicated generated background, crop it to the dims of this art image
 
-**Sizing:** font size auto-fits — it shrinks from 72px toward a 22px floor so the text fills the comfortable ~¼ safe zone. The panel may grow past that zone for long pages but is hard-capped at ⅓ of the page height; if text won't fit ⅓ even at the 22px floor, the font shrinks below the floor (down to a 12px hard minimum) so it still fits rather than clipping.
+**Sizing (band mode):** font shrinks from 72px toward a 22px floor; panel capped at ⅓ of page height.
 
-Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display).
+**Sizing (text-page mode):** font shrinks from 96px toward a 22px floor; panel capped at ~80% of page height — large enough for ~80–200 words per logical page.
+
+Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display), `text_background_prompt` (long mode only — optional dedicated text-page background, +1 paid call).

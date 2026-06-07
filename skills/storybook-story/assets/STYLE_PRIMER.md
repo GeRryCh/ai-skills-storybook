@@ -2,12 +2,14 @@
 
 ## Age → word count guide
 
-| Age band | Total words | Words per spread | Font size hint |
-|----------|------------|------------------|----------------|
-| 3–5      | 300–600    | 25–50            | large (~18 pt+)|
-| 5–8      | 500–1000   | 40–80            | standard (~16 pt+)|
+| Age band | Total words | Words per spread (native/overlay) | Words per spread (long mode) | Font size hint |
+|----------|-----------|------------------------------------|-------------------------------|----------------|
+| 3–5      | 300–600    | 25–50            | 60–100   | large (~18 pt+)|
+| 5–8      | 500–1000   | 40–80            | 80–200   | standard (~16 pt+)|
 
 Default 8 spreads. Spread 1 = cover (text: title + author only, image_prompt: full cover scene). Spreads 2–7 = story body. Spread 8 = closing/back cover (short wrap, 1 sentence max).
+
+**Long mode word counts:** the text-only page has a centered panel that can grow to ~80% of the page height and starts from a 96px font ceiling, so it comfortably carries 80–200 words per logical page. Use `text_mode: "long"` for chapter-book-style stories or longer prose that would be cramped in a ¼-page band.
 
 ## Text placement
 
