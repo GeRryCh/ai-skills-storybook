@@ -53,6 +53,13 @@ Gather these from the user (ask once if not provided):
 4. **Analyze any supplied photos** (see Source-photo analysis below) before authoring the cast.
 5. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
 6. Write `{out_dir}/story.json` following the schema exactly.
+7. **Validate `story.json` against the schema** — run the validator and fix any errors before continuing:
+
+```bash
+uv run {skillDir}/scripts/validate_story.py --story {out_dir}/story.json
+```
+
+Exits 0 when clean. On errors (exit 2), fix `story.json` and re-run until clean. Surface any warnings to the user; they never block but may point to missing files or duplicate names worth reviewing.
 
 ### Source-photo analysis (BEFORE authoring the cast)
 
@@ -311,7 +318,7 @@ Per-page `text_placement` defaults to `"floating"` (native mode). Override to `"
 
 ---
 
-After writing `story.json`, tell the user:
+After writing `story.json` and confirming `validate_story.py` exits 0, tell the user (include any warnings from the validator so they can address them):
 
 ```
 story.json written to: {out_dir}/story.json

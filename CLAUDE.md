@@ -17,7 +17,7 @@ directory (default: the user's cwd, e.g. this worktree root):
 1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), crops
    multi-person photos to one file per person via `scripts/crop_character.py` (Pillow only,
    no API), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
-   (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). **Has a hard approval gate** — it must stop
+   (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
 2. **storybook-stylesheet** (paid, 1 image call per character) — generates one
    `style-sheet-{slug}.png` per eligible cast entry from the `cast` array (characters and objects always; kind=location entries with ref_image are skipped — the real-place photo is used directly at render time), writes each
@@ -250,6 +250,14 @@ image, style sheet) and `tests/fixtures/pip-storm-long/` (the long-mode fixture:
 art pages, shared text-page background `pages/text-bg-long.png`, text pages, long books):
 
 ```bash
+# No API cost — validate all committed fixtures (must all exit 0)
+uv run skills/storybook-story/scripts/validate_story.py \
+  --story tests/fixtures/pip-storm/story.json
+uv run skills/storybook-story/scripts/validate_story.py \
+  --story tests/fixtures/pip-storm-long/story.json
+uv run skills/storybook-story/scripts/validate_story.py \
+  --story tests/fixtures/gazelle-valley/story.json
+
 # No API cost — crop the committed fixture ref image (happy path + overwrite loop)
 uv run skills/storybook-story/scripts/crop_character.py \
   --image tests/fixtures/pip-storm/refs/pip-ref.png \
