@@ -87,6 +87,7 @@ def _schema_enums(schema: dict) -> dict[str, list]:
         "text_placement": page["text_placement"]["enum"],
         "text_align": page["text_align"]["enum"],
         "font": page["font"]["enum"],
+        "kind": top["cast"]["items"]["properties"]["kind"]["enum"],
     }
 
 
@@ -95,7 +96,7 @@ def _known_keys(schema: dict) -> dict[str, set]:
     return {
         "top": set(top.keys()),
         "style_guide": set(top["style_guide"]["properties"].keys()),
-        "character": set(top["characters"]["items"]["properties"].keys()),
+        "cast_entry": set(top["cast"]["items"]["properties"].keys()),
         "fonts": set(top["fonts"]["properties"].keys()),
         "page": set(top["pages"]["items"]["properties"].keys()),
     }
@@ -134,6 +135,34 @@ def validate_story(
 
     if not isinstance(story, dict):
         return ["story.json root must be a JSON object"], []
+
+    # --- legacy pre-PER-34 keys: hard errors with migration guidance -----------
+    if "characters" in story:
+        errors.append(
+            "'characters' was renamed to 'cast' (PER-34) — rename the key; "
+            "entry shape is unchanged (optional 'kind' field added)"
+        )
+    if "locations" in story:
+        errors.append(
+            "'locations' was removed (PER-34) — move each place into 'cast' "
+            "with \"kind\": \"location\" (keep ref_image and source_url; fold "
+            "'description' into 'appearance')"
+        )
+    if isinstance(story.get("pages"), list):
+        for _pi, _p in enumerate(story["pages"]):
+            if isinstance(_p, dict):
+                if "characters" in _p:
+                    errors.append(
+                        f"pages[{_pi}].characters was renamed to pages[{_pi}].cast (PER-34)"
+                    )
+                if "location" in _p:
+                    errors.append(
+                        f"pages[{_pi}].location was removed (PER-34) — append the place "
+                        f"name to pages[{_pi}].cast instead"
+                    )
+    if errors:
+        # Return early: remaining validation will KeyError on the old keys.
+        return errors, warnings
 
     def warn_unknown(obj: dict, known_set: set, where: str) -> None:
         for k in obj:
@@ -206,28 +235,33 @@ def validate_story(
                 f"{enums['saved_formats']}"
             )
 
-    # --- characters ----------------------------------------------------------
+    # --- cast ----------------------------------------------------------------
     cast_names: list[str] = []
-    chars = story.get("characters")
-    if chars is not None:
-        if not isinstance(chars, list) or not chars:
-            errors.append("'characters' must be a non-empty array")
+    cast = story.get("cast")
+    if cast is not None:
+        if not isinstance(cast, list) or not cast:
+            errors.append("'cast' must be a non-empty array")
         else:
-            for i, char in enumerate(chars):
-                where = f"characters[{i}]"
-                if not isinstance(char, dict):
+            for i, entry in enumerate(cast):
+                where = f"cast[{i}]"
+                if not isinstance(entry, dict):
                     errors.append(f"{where} must be an object")
                     continue
-                warn_unknown(char, known["character"], where)
+                warn_unknown(entry, known["cast_entry"], where)
                 for req in ("name", "appearance"):
-                    if not isinstance(char.get(req), str):
+                    if not isinstance(entry.get(req), str):
                         errors.append(f"{where} missing string field '{req}'")
-                name = char.get("name")
+                name = entry.get("name")
                 if isinstance(name, str):
                     if name in cast_names:
-                        warnings.append(f"duplicate character name '{name}'")
+                        warnings.append(f"duplicate cast name '{name}'")
                     cast_names.append(name)
-                refs = char.get("ref_image")
+                kind = entry.get("kind")
+                if kind is not None and kind not in enums["kind"]:
+                    errors.append(
+                        f"{where}.kind must be one of {enums['kind']} (got {kind!r})"
+                    )
+                refs = entry.get("ref_image")
                 if refs is not None and not (
                     isinstance(refs, str)
                     or (
@@ -243,43 +277,18 @@ def validate_story(
                 if len(ref_list) > 5:
                     warnings.append(
                         f"{where} has {len(ref_list)} ref images; "
-                        "only the first 5 are used (Gemini character-lane limit)"
+                        "only the first 5 are used (Gemini reference-image limit)"
                     )
                 for r in ref_list:
                     if not resolve_story_rel(r, story_dir).exists():
                         warnings.append(f"{where}.ref_image not found on disk: {r}")
-                sheet = char.get("style_sheet")
+                sheet = entry.get("style_sheet")
                 if sheet is not None:
                     if not isinstance(sheet, str):
                         errors.append(f"{where}.style_sheet must be a string")
                     elif not resolve_story_rel(sheet, story_dir).exists():
                         warnings.append(
                             f"{where}.style_sheet not found on disk: {sheet}"
-                        )
-
-    # --- locations (optional) -----------------------------------------------
-    loc_names: list[str] = []
-    locations = story.get("locations")
-    if locations is not None:
-        if not isinstance(locations, list):
-            errors.append("'locations' must be an array")
-        else:
-            for i, loc in enumerate(locations):
-                where = f"locations[{i}]"
-                if not isinstance(loc, dict):
-                    errors.append(f"{where} must be an object")
-                    continue
-                for req in ("name", "ref_image"):
-                    if not isinstance(loc.get(req), str):
-                        errors.append(f"{where} missing string field '{req}'")
-                name = loc.get("name")
-                if isinstance(name, str):
-                    loc_names.append(name)
-                ref_img = loc.get("ref_image")
-                if isinstance(ref_img, str) and ref_img:
-                    if not resolve_story_rel(ref_img, story_dir).exists():
-                        warnings.append(
-                            f"{where}.ref_image not found on disk: {ref_img}"
                         )
 
     # --- pages ----------------------------------------------------------------
@@ -314,31 +323,20 @@ def validate_story(
                             f"{where}.{key} must be one of {enums[key]} "
                             f"(got {page[key]!r})"
                         )
-                pc = page.get("characters")
+                pc = page.get("cast")
                 if pc is not None:
                     if not isinstance(pc, list) or not all(
                         isinstance(n, str) for n in pc
                     ):
-                        errors.append(f"{where}.characters must be an array of strings")
+                        errors.append(f"{where}.cast must be an array of strings")
                     else:
                         for n in pc:
                             if n not in cast_names:
                                 errors.append(
-                                    f"{where}.characters: '{n}' is not in the cast "
+                                    f"{where}.cast: '{n}' is not in the cast "
                                     f"({cast_names}) — names must match "
-                                    "characters[].name exactly"
+                                    "cast[].name exactly"
                                 )
-                page_loc = page.get("location")
-                if page_loc is not None:
-                    if not isinstance(page_loc, str):
-                        errors.append(f"{where}.location must be a string")
-                    elif loc_names and page_loc not in loc_names:
-                        # Warning (not error): render degrades gracefully (warn + skip)
-                        # when a location is missing, so blocking a save would be hostile.
-                        warnings.append(
-                            f"{where}.location: '{page_loc}' is not in locations "
-                            f"({loc_names}) — must match locations[].name exactly"
-                        )
             if nums and sorted(nums) != list(range(1, len(nums) + 1)):
                 warnings.append(
                     f"page_num sequence is not contiguous 1..{len(nums)}: {nums}"
@@ -477,17 +475,17 @@ def make_handler(story_path: Path, schema: dict):
                     for sfx in ("", "-native", "-long")
                 )
                 page_status[str(num)] = {"rendered": rendered}
-            char_status: dict[str, dict] = {}
-            for char in story.get("characters", []):
-                name, sheet = char.get("name"), char.get("style_sheet")
+            cast_status: dict[str, dict] = {}
+            for entry in story.get("cast", []):
+                name, sheet = entry.get("name"), entry.get("style_sheet")
                 if isinstance(name, str) and isinstance(sheet, str):
-                    char_status[name] = {
+                    cast_status[name] = {
                         "style_sheet_exists": resolve_story_rel(
                             sheet, story_dir
                         ).exists()
                     }
             self._send_json(
-                200, {"ok": True, "pages": page_status, "characters": char_status}
+                200, {"ok": True, "pages": page_status, "cast": cast_status}
             )
 
         def _get_img(self, url) -> None:
@@ -599,9 +597,36 @@ def main() -> None:
         sys.exit(2)
     try:
         with story_path.open(encoding="utf-8") as f:
-            json.load(f)
+            doc = json.load(f)
     except json.JSONDecodeError as e:
         print(f"ERROR: {story_path} is not valid JSON: {e}", file=sys.stderr)
+        sys.exit(2)
+    # Fail fast on pre-PER-34 schema: the editor UI cannot bind legacy keys.
+    legacy_keys_found: list[str] = []
+    if "characters" in doc:
+        legacy_keys_found.append('top-level "characters"')
+    if "locations" in doc:
+        legacy_keys_found.append('top-level "locations"')
+    if isinstance(doc.get("pages"), list):
+        for _p in doc["pages"]:
+            if isinstance(_p, dict):
+                pn = _p.get("page_num", "?")
+                if "characters" in _p:
+                    legacy_keys_found.append(f'pages[{pn}].characters')
+                if "location" in _p:
+                    legacy_keys_found.append(f'pages[{pn}].location')
+    if legacy_keys_found:
+        print(
+            f"ERROR: story.json uses the pre-PER-34 schema. "
+            f"Legacy keys found: {', '.join(legacy_keys_found)}\n\n"
+            "Migrate story.json before opening the editor:\n"
+            "  top-level \"characters\"  ->  \"cast\"\n"
+            "  top-level \"locations\"   ->  cast entries with \"kind\": \"location\"\n"
+            "  pages[].characters      ->  pages[].cast\n"
+            "  pages[].location        ->  append the place name to pages[].cast\n"
+            "See skills/storybook-story/assets/story_schema.json.",
+            file=sys.stderr,
+        )
         sys.exit(2)
     if not EDITOR_PATH.is_file():
         print(f"ERROR: editor asset missing: {EDITOR_PATH}", file=sys.stderr)

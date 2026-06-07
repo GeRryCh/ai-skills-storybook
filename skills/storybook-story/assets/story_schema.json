@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "StoryManifest",
   "type": "object",
-  "required": ["title", "age_band", "style", "style_guide", "characters", "pages"],
+  "required": ["title", "age_band", "style", "style_guide", "cast", "pages"],
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string", "description": "Book title" },
@@ -24,34 +24,30 @@
         "mood": { "type": "string", "description": "Overall mood and rendering vocabulary, e.g. 'cozy, gentle, storybook calm, slightly naive brushwork'." }
       }
     },
-    "characters": {
+    "cast": {
       "type": "array",
-      "description": "Explicit cast. ONE entry per REAL character in the story. Drives the style sheet — the style sheet shows exactly these characters and no others. Never rely on auto-extraction from prose.",
+      "description": "Explicit unified cast: every recurring visual subject in the book — characters, recognisable objects, and named places. ONE entry per REAL subject. Drives Stage 2 (one reference sheet per eligible entry) and Stage 3 (per-page reference selection). Never rely on auto-extraction from prose.",
       "minItems": 1,
       "items": {
         "type": "object",
         "required": ["name", "appearance"],
         "additionalProperties": false,
         "properties": {
-          "name": { "type": "string", "description": "Character name exactly as written in image_prompts" },
-          "appearance": { "type": "string", "description": "Concrete visual description: species, age, hair, ONE specific outfit/clothing, colours, distinguishing features. The outfit named here becomes the character's canonical outfit locked into the style sheet and worn unchanged on every page — name exactly one outfit. More specific = more consistent across pages." },
-          "ref_image": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Optional reference photo(s) for THIS character: a single absolute path, or an array of paths. EVERY referenced image must show ONLY this character — single-person images only. If a source photo contains multiple people, crop it first with scripts/crop_character.py and point ref_image at the per-person crop; never reference the multi-person original. Used for face and hair likeness only; clothing/outfit always comes from 'appearance', not from these photos. Capped at 5 (Gemini 3 Pro Image character-lane limit used by make_style_sheet.py). Crops compose with the array form: e.g. ['ref-mia.png', '/photos/mia-solo.jpg'] (a Stage-1 crop plus a solo photo of the same person). Mapped to this character only — there is no shared global pool." },
-          "style_sheet": { "type": "string", "description": "Path to this character's generated style sheet PNG (filled in by make_style_sheet.py). Used by render_book.py to select per-page reference images." }
-        }
-      }
-    },
-    "locations": {
-      "type": "array",
-      "description": "Optional list of REAL named places (landmarks, cities, specific buildings) used as photo references during page rendering. Stage 1 finds candidates via the Perplexity MCP and downloads/validates them with scripts/fetch_location.py. Generic settings ('a forest', 'the beach') do NOT belong here — those are described in prose only. A page opts in via pages[].location (per-page selection only, so one place's environment never bleeds into pages set elsewhere).",
-      "items": {
-        "type": "object",
-        "required": ["name", "ref_image"],
-        "additionalProperties": false,
-        "properties": {
-          "name": { "type": "string", "description": "Place name exactly as written in pages[].location and mentioned in that page's image_prompt." },
-          "ref_image": { "type": "string", "description": "Path to the downloaded reference photo (loc-{slug}.jpg produced by fetch_location.py). ONE photo per location (plain string, not array). Sent as the LOWEST-priority reference image (after character sheets and the hero photo) within render_book.py's 4-image cap." },
-          "description": { "type": "string", "description": "Optional short visual description of the place (human/editor reference only; not injected into prompts)." },
-          "source_url": { "type": "string", "description": "Optional provenance: the page or direct URL the photo came from (prefer the Wikimedia Commons file page — it carries license and attribution)." }
+          "name": { "type": "string", "description": "Name exactly as written in image_prompts and pages[].cast." },
+          "kind": {
+            "type": "string",
+            "enum": ["character", "object", "location"],
+            "default": "character",
+            "description": "What this entry is. 'character' (default): person or creature — gets a style sheet; the outfit lock applies; eligible to be a page hero (first character-kind entry in pages[].cast additionally contributes its reference photo). 'object': recurring prop, vehicle, or item — gets a reference sheet with multi-angle/detail-close-up prompt. 'location': a named place — when ref_image is set, the real-place photo is the render reference and NO sheet is generated (the photo is sent at render time as lowest-priority reference, PER-38 flow); without ref_image a location reference sheet is generated from 'appearance' (fictional recurring place)."
+          },
+          "appearance": { "type": "string", "description": "Concrete visual description. character: species, age, hair, ONE specific outfit/clothing, colours, distinguishing features — the outfit named here becomes the character's canonical outfit locked into the style sheet and worn unchanged on every page (name exactly one outfit; more specific = more consistent). object: shape, size, colours, materials, distinguishing details. location: terrain/architecture, vegetation, landmarks, atmosphere — feeds the sheet prompt when no ref_image is given." },
+          "ref_image": {
+            "type": ["string", "array"],
+            "items": { "type": "string" },
+            "description": "Optional reference photo(s). kind=character: a single absolute path or an array of paths; EVERY image must show ONLY this character (single-person images only — crop multi-person photos with scripts/crop_character.py first; never reference the original multi-person photo); used for face and hair likeness only — clothing/outfit always comes from 'appearance', not these photos; capped at 5 (Gemini 3 Pro Image character-lane limit). kind=object: photo(s) of the object (single path or array); shape/colour/detail reference; capped at 5. kind=location: ONE real-place photo as a plain string (loc-{slug}.jpg produced by fetch_location.py); when set, no style sheet is generated — the photo is sent at render time; use an array only for multiple angles (cap 5 still applies)."
+          },
+          "style_sheet": { "type": "string", "description": "Path to this entry's generated reference sheet PNG (filled in by make_style_sheet.py). Never set for kind=location entries that carry a ref_image (those use the photo directly)." },
+          "source_url": { "type": "string", "description": "Optional provenance for a downloaded reference photo (prefer the Wikimedia Commons file page — it carries license and attribution). Relevant for kind=location entries whose ref_image was produced by fetch_location.py." }
         }
       }
     },
@@ -101,13 +97,13 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["page_num", "text", "image_prompt", "characters"],
+        "required": ["page_num", "text", "image_prompt", "cast"],
         "additionalProperties": false,
         "properties": {
           "page_num": { "type": "integer", "minimum": 1 },
-          "characters": {
+          "cast": {
             "type": "array",
-            "description": "Names of the characters appearing on this page. MUST match characters[].name exactly. Drives which per-character style sheets are sent as references when rendering this page. Use an empty array [] for wordless or character-free pages.",
+            "description": "Names of the cast entries appearing on this page — characters, objects, and locations in ONE flat list, any mix and multiplicity (e.g. ['Pip', 'Red Umbrella', 'Gazelle Valley']). MUST match cast[].name exactly. Drives which reference images are sent when rendering this page. The FIRST entry whose kind is 'character' (or kind is absent, defaulting to character) is the page HERO — it additionally contributes its first ref_image photo for facial likeness; author the hero/child first among the characters. Objects and locations follow after characters. Use [] for scenery-only or subject-free pages.",
             "items": { "type": "string" }
           },
           "text": {
@@ -144,10 +140,6 @@
           "text_background_prompt": {
             "type": "string",
             "description": "Long mode only. When set, this page's text page gets its OWN dedicated background (pages/page-NN-long-bg.png) generated from this description via ONE extra paid Gemini call, instead of the book's shared background (the book style block is injected; no character references are sent; a low-detail central area is reserved for text). Omit to use the shared book-wide background at no extra cost. Ignored in overlay/native modes and on the cover or empty-text pages. If set on an empty-text page a warning is logged and no text page is generated."
-          },
-          "location": {
-            "type": "string",
-            "description": "Optional name of ONE location from the top-level locations array whose reference photo is sent (lowest priority) when rendering this page. Must match locations[].name exactly. Set only on pages physically set at that place — never book-wide — so the place's environment cannot bleed into other pages. On scenery-only pages (characters: []), the location photo is the sole reference image."
           }
         }
       }

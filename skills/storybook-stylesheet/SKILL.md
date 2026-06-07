@@ -7,7 +7,7 @@ description: >
   style sheet", "regenerate the character sheets", "the characters look inconsistent /
   wrong", "redo the style sheet". Produces one style-sheet-{name}.png per character,
   which render_book.py selects per page for consistency. Requires an existing story.json
-  with a 'characters' array. Costs one image API call per character. If no story.json
+  with a 'cast' array. Costs one image API call per eligible cast entry. If no story.json
   exists yet, run storybook-story first.
 metadata:
   requires:
@@ -21,10 +21,10 @@ metadata:
 
 ## Preconditions
 
-- `{out_dir}/story.json` exists and contains a non-empty `characters` array (authored in Stage 1 by **storybook-story**).
+- `{out_dir}/story.json` exists and contains a non-empty `cast` array (authored in Stage 1 by **storybook-story**).
 - `GEMINI_API_KEY` is set; `uv` is installed. The script calls the Gemini image API directly (no sibling skill needed).
 
-If `story.json` is missing, run **storybook-story** first. If the `characters` array is missing, add it to `story.json` before running (sheets are built from that list, never guessed from prose).
+If `story.json` is missing, run **storybook-story** first. If the `cast` array is missing, add it to `story.json` before running (sheets are built from that list, never guessed from prose).
 
 ---
 
@@ -34,15 +34,19 @@ If `story.json` is missing, run **storybook-story** first. If the `characters` a
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-This makes **one Gemini image call per character** to produce individual PNGs
-(`style-sheet-{name}.png`) — one sheet per character, no combined cast sheet. Each sheet
-shows that character alone at multiple angles. Reference images are used as input: only
-that character's own `ref_image` (a single path or an array of paths — **every path must
-be a single-person image**; if the source photo was a group photo, use the per-person crop
-produced in Stage 1, not the original), capped at 5 (the Gemini 3 Pro Image character-lane
-limit). There is no shared global pool — refs are mapped per character in Stage 1, so one
-character's photo never bleeds into another's sheet. The script writes each character's
-`style_sheet` path back into the `characters` array in `story.json`.
+This makes **one Gemini image call per eligible cast entry** to produce individual PNGs
+(`style-sheet-{name}.png`) — one sheet per entry, no combined cast sheet. Eligibility:
+characters (`kind` absent or `"character"`) and objects (`kind: "object"`) always get a
+sheet; `kind: "location"` entries with a `ref_image` are skipped (the real-place photo is
+the render reference, no sheet generated); `kind: "location"` entries without a `ref_image`
+generate a sheet from their `appearance`. Each sheet shows that cast member alone at
+multiple angles. Reference images are used as input: only that entry's own `ref_image` (a
+single path or an array of paths — **every path must be a single-person image**; if the
+source photo was a group photo, use the per-person crop produced in Stage 1, not the
+original), capped at 5 (the Gemini 3 Pro Image character-lane limit). There is no shared
+global pool — refs are mapped per entry in Stage 1, so one character's photo never bleeds
+into another's sheet. The script writes each entry's `style_sheet` path back into the
+`cast` array in `story.json`.
 
 **Outfit lock.** Each sheet renders the character in exactly one canonical outfit —
 taken from the character's `appearance` description, never from the reference photos
@@ -71,7 +75,7 @@ Each sheet anchors that character on every page it appears — a wrong sheet poi
 pages.
 
 If a sheet is wrong:
-1. Fix that character's entry in the `characters` array in `story.json` (sharpen
+1. Fix that character's entry in the `cast` array in `story.json` (sharpen
    `appearance`, set/update `ref_image`).
    - If the likeness anchored onto the wrong person or the crop clipped the subject,
      fix the crop first: re-run `crop_character.py` with an adjusted `--box` (it
@@ -89,6 +93,6 @@ Once approved:
 
 ```
 All character sheets approved → ready for Stage 3.
-Next: storybook-render generates each page, sending only the sheets for the characters
-      listed in that page's 'characters' field.
+Next: storybook-render generates each page, sending only the sheets for the cast members
+      listed in that page's 'cast' field.
 ```

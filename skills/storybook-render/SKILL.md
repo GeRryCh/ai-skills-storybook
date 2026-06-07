@@ -108,14 +108,14 @@ Missing pages emit a warning and are skipped; the output file is still built fro
 
 ## Location photo references
 
-If `story.json` defines a top-level `locations` array and a page sets `"location"`, that
-place's `ref_image` photo is sent as an additional reference image with the **lowest**
-priority within the 4-image cap:
+If `story.json` has `cast` entries with `kind: "location"` and a page lists one of those
+names in its `pages[].cast` array, that place's `ref_image` photo is sent as an additional
+reference image with the **lowest** priority within the 4-image cap:
 
-> hero sheet → hero photo → remaining cast sheets → **location photo**
+> hero sheet → hero photo → remaining character sheets → object refs → **location photo**
 
 Anything past the cap is logged (never silently dropped). On scenery-only pages
-(`"characters": []`) the location photo is the sole reference image.
+(`"cast": []`) the location photo is the sole reference image.
 
 Each reference is sent with a short identifying note in the Gemini call so the model knows
 a location photo is the setting, not a character. Unknown locations and missing files

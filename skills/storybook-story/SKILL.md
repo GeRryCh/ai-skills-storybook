@@ -97,12 +97,15 @@ use `-2`/`-3` suffixes (`ref-mia-2.png`). Crop filenames must be unique within t
 
 **The original multi-person photo must never appear in any character's `ref_image`.**
 
-### Cast — the `characters` array (drives consistency)
+### Cast — the `cast` array (drives consistency)
 
-You MUST author an explicit `characters` array. Stage 2's style sheet is built from
-this list and nothing else — it shows exactly these characters and no others.
+You MUST author an explicit `cast` array. Stage 2's style sheet is built from
+this list and nothing else — it shows exactly these cast members and no others.
 
-- ONE entry per **real** character. Do not add scene words, places, or pronouns.
+Each entry carries an optional `"kind"` field: `"character"` (default when absent),
+`"object"` (a significant prop or vehicle), or `"location"` (a named real place).
+
+- ONE entry per **real** character, object, or named place. Do not add scene words or pronouns.
 - Each entry: `name` (exactly as written in `image_prompt`s), `appearance`
   (concrete: species, age, hair, **one specific outfit**, colours, distinguishing
   features — more specific = more consistent), and optional `ref_image` (photo
@@ -202,23 +205,22 @@ If the image is wrong, pick another candidate URL and re-run.
 
 #### Writing to story.json
 
-Add an entry to the top-level `locations` array:
+Add an entry to the top-level `cast` array with `"kind": "location"`:
 
 ```json
-"locations": [
-  {
-    "name": "Eiffel Tower",
-    "ref_image": "loc-eiffel-tower.jpg",
-    "description": "iron lattice tower on the Champ de Mars, Paris",
-    "source_url": "https://commons.wikimedia.org/wiki/File:Tour_Eiffel_Wikimedia_Commons.jpg"
-  }
-]
+{
+  "name": "Eiffel Tower",
+  "kind": "location",
+  "appearance": "iron lattice tower on the Champ de Mars, Paris",
+  "ref_image": "loc-eiffel-tower.jpg",
+  "source_url": "https://commons.wikimedia.org/wiki/File:Tour_Eiffel_Wikimedia_Commons.jpg"
+}
 ```
 
-Then set `"location": "Eiffel Tower"` on the pages **physically set at that place only**
-— never book-wide. This per-page selection is mandatory: without it, the place's
-environment would bleed into every page of the book (see docs/future-explorations.md,
-PER-33).
+Then add `"Eiffel Tower"` to the `pages[].cast` array of every page **physically set at
+that place only** — never book-wide. This per-page selection is mandatory: without it,
+the place's environment would bleed into every page of the book (see
+docs/future-explorations.md, PER-33).
 
 The page's `image_prompt` must also **name the place in prose** (e.g. "...under the
 Eiffel Tower...") so the render model knows the setting even in the text part of the prompt.
@@ -227,10 +229,10 @@ Eiffel Tower...") so the render model knows the setting even in the text part of
 
 The location photo is the **lowest-priority** reference image within Stage 3's 4-image cap:
 
-> hero sheet → hero photo → remaining cast sheets → location photo
+> hero sheet → hero photo → remaining character sheets → object refs → location photo
 
-On pages with 3 or more characters, the location photo may be dropped from the cap (it
-will be logged — never silently dropped). On scenery-only pages (`characters: []`) the
+On pages with 3 or more cast members, the location photo may be dropped from the cap (it
+will be logged — never silently dropped). On scenery-only pages (`cast: []`) the
 location photo is the sole reference image.
 
 ---
@@ -256,13 +258,13 @@ medium → palette → line → lighting → mood) and inject it verbatim into e
 - **Pages 2 to N-1**: story body. Spread word counts guided by age (see STYLE_PRIMER).
 - **Page N**: closing spread. One short sentence or just title/end.
 
-### Per-page `characters` field (required)
+### Per-page `cast` field (required)
 
-Every page MUST have a `characters` array listing the names of all characters that appear
-on that page. Names must match `characters[].name` exactly. Use `[]` for wordless or
+Every page MUST have a `cast` array listing the names of all cast members that appear
+on that page. Names must match `cast[].name` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
-**Order matters: put the page hero first.** The first name is treated as the hero, and Stage
+**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero, and Stage
 3 additionally feeds that character's first `ref_image` (a solo photo or a Stage-1 crop)
 into the render to lock its facial likeness. List the protagonist (e.g. the child the book is
 about) first on every page they appear; with a 4-image cap (flash model), a fifth reference
@@ -271,17 +273,17 @@ sheet + hero photo + both supporting sheets without dropping anything.
 
 Example:
 ```json
-{ "page_num": 3, "characters": ["Pip", "Mira"], "text": "...", ... }
+{ "page_num": 3, "cast": ["Pip", "Mira"], "text": "...", ... }
 ```
 
-This drives Stage 3: `render_book.py` sends only those characters' style sheets as
+This drives Stage 3: `render_book.py` sends only those cast members' style sheets as
 reference images when generating that page — the model never sees character sheets for
-characters not on the page.
+cast members not on the page.
 
 ### image_prompt rules
 
 Every `image_prompt` MUST:
-- Name every character that appears on that page (use the exact names from the `characters` array).
+- Name every character that appears on that page (use the exact names from the `cast` array).
 - State the art style.
 - NOT contain the actual story text — the script renders it (baked into the illustration in native mode, Pillow-overlaid in overlay mode).
 - NOT contain text-position or safe-zone language — the script appends those transparently from `text_placement`.
@@ -316,7 +318,7 @@ story.json written to: {out_dir}/story.json
 
 Please review and edit the text, image prompts, and character descriptions, then
 tell me when to proceed. Open the file in any editor — change 'text' freely, keep
-'page_num' intact, and make 'characters[].appearance' as specific as you can.
+'page_num' intact, and make 'cast[].appearance' as specific as you can.
 Or say "open the editor" for a visual form instead of raw JSON.
 
 Next: storybook-stylesheet (Stage 2) builds the character style sheet.

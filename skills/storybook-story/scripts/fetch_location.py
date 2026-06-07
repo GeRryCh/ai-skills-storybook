@@ -8,8 +8,8 @@ Download and validate a real-place reference photo for story locations.
 
 Stage 1 finds a suitable image URL via the Perplexity MCP (preferred:
 Wikimedia Commons freely-licensed photos), then calls this script to
-download and verify it before adding the path to story.json's `locations`
-array.
+download and verify it before adding the path as `ref_image` on a cast
+entry with `"kind": "location"` in story.json.
 
 Usage:
   uv run fetch_location.py \

@@ -20,8 +20,8 @@ STYLESHEET_SCRIPT="$REPO_ROOT/skills/storybook-stylesheet/scripts/make_style_she
 RENDER_SCRIPT="$REPO_ROOT/skills/storybook-render/scripts/render_book.py"
 
 # NOTE: tests/fixtures/pip-storm/refs/loc-major-oak.jpg is a committed placeholder
-# for the Major Oak location reference (PER-38). It is NOT regenerated here — it is
-# a synthetic image created once to enable offline collect_input_images tests. To
+# for the Major Oak cast entry (kind=location, PER-34/38). It is NOT regenerated here —
+# it is a synthetic image created once to enable offline collect_input_images tests. To
 # replace it with a real photo: uv run skills/storybook-story/scripts/fetch_location.py
 # --url "https://commons.wikimedia.org/wiki/Special:FilePath/<MajorOakFile>" --out
 # tests/fixtures/pip-storm/refs/loc-major-oak.jpg --max-edge 512
@@ -42,16 +42,15 @@ echo "=== Step 4: native pages (stage 3, text_mode=native) ==="
 
 echo ""
 echo "=== Step 5: normalize story.json paths before committing ==="
-echo "make_style_sheet.py rewrites characters[].style_sheet to an absolute path."
+echo "make_style_sheet.py rewrites cast[].style_sheet to an absolute path."
 echo "Edit story.json manually (or run the python snippet below) to restore relative paths:"
 echo ""
 echo "  python3 -c \""
 echo "import json, pathlib"
 echo "p = pathlib.Path('$FIXTURE_DIR/story.json')"
 echo "s = json.loads(p.read_text())"
-echo "s['characters'][0]['style_sheet'] = 'style-sheet-pip.png'"
-echo "s['characters'][0]['ref_image'] = 'refs/pip-ref.png'"
-echo "s['character_refs'] = ['refs/pip-ref.png']"
+echo "s['cast'][0]['style_sheet'] = 'style-sheet.png'"
+echo "s['cast'][0]['ref_image'] = ['refs/pip-ref.png']"
 echo "p.write_text(json.dumps(s, indent=2, ensure_ascii=False) + '\n')"
 echo "\""
 echo ""

@@ -16,16 +16,16 @@ directory (default: the user's cwd, e.g. this worktree root):
 
 1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), crops
    multi-person photos to one file per person via `scripts/crop_character.py` (Pillow only,
-   no API), then writes `story.json`: per-page `text`, `image_prompt`, per-page `characters`
-   cast list, and a global `characters` array. **Has a hard approval gate** — it must stop
+   no API), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
+   (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
 2. **storybook-stylesheet** (paid, 1 image call per character) — generates one
-   `style-sheet-{name}.png` per character from the `characters` array, writes each
-   character's `style_sheet` path back into `story.json`. **Approval gate**: show all
+   `style-sheet-{slug}.png` per eligible cast entry from the `cast` array (characters and objects always; kind=location entries with ref_image are skipped — the real-place photo is used directly at render time), writes each
+   entry's `style_sheet` path back into `story.json`. **Approval gate**: show all
    sheets, get confirmation before rendering — a wrong sheet poisons every page that
    character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
-   using only the style sheets for the characters listed in that page's `characters` field
+   using only the style sheets for the cast entries listed in that page's `cast` field
    (per-page selection, cap 4 for the flash model), then overlays text. Three text modes:
    - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
    - `native`: `pages/page-NN-native.png` (model bakes text into art)
@@ -52,6 +52,8 @@ the book-wide consistency mechanism (each page is a separate stateless call). Bo
 **refuse to run** (`require_style_guide()`, exit 2) when it is missing or empty — breaking
 change for pre-existing `story.json` files; add the field to render old books. The `style`
 string remains as a short human label only.
+
+Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`, `locations`, `pages[].characters`, `pages[].location`) with `exit 2` and a migration message — no shim, clean break.
 
 ## Critical external dependency
 
@@ -126,12 +128,12 @@ first. Preserve this behaviour — it makes partial-failure re-runs cheap.
 
 ## Key design decision: explicit cast, never prose-scraped
 
-The `characters` array in `story.json` is authored explicitly and is the **only** source for
+The `cast` array in `story.json` is authored explicitly and is the **only** source for
 the style sheets. An earlier regex that scraped characters from prose minted phantom
 characters (a fish "Deep" from "deep twilight sky", a girl "She" from "She holds a rabbit")
 and poisoned every page. Do not reintroduce auto-extraction. See the docstring on
-`get_characters()` in `make_style_sheet.py`. Reference images come only from that
-character's own `ref_image` (a single path or an array of paths), capped at 5 (Gemini 3
+`get_cast()` in `make_style_sheet.py`. Reference images come only from that
+entry's own `ref_image` (a single path or an array of paths), capped at 5 (Gemini 3
 Pro Image character-lane limit). There is no shared global pool — the cast-to-photo mapping
 is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 
@@ -147,17 +149,15 @@ overwrites silently — free to iterate) → `rm style-sheet-{slug}.png` → re-
 Cross-session note: crop provenance is not stored in `story.json` (intentional — same rule
 as `style_sheet`). To redo a crop in a new session you need the original source photo again.
 
-Each page also carries an explicit `characters` list (`pages[].characters`) naming which
+Each page also carries an explicit `cast` list (`pages[].cast`) naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
-this to send only the relevant per-character style sheets — the model never sees sheets
-for characters not on the page. The **first** name in `pages[].characters` is the page
-**hero**: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
+this to send only the relevant per-cast-entry style sheets — the model never sees sheets
+for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
 crop), so the render anchors the hero's facial likeness on the real photo, not only on the
-(lossy) style sheet. **Convention: author the hero/child first in each page's cast list.**
-Priority into the 4-image cap (flash) is hero sheet → hero photo → remaining characters'
-sheets in order; anything past the cap is logged, never silently dropped.
+(lossy) style sheet. **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
+Priority into the 4-image cap (flash) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped.
 
-**Outfit lock (single canonical outfit per character).** `characters[].appearance` must
+**Outfit lock (single canonical outfit per character).** For kind=character entries, `appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
 `ref_image` photos (which may show the character in multiple outfits). Stage 3 takes
 clothing from the sheet, not the hero photo. This locks one outfit per character across
@@ -166,58 +166,34 @@ style-sheet PNG, and re-run `make_style_sheet.py`.
 
 ## Location photo references (PER-38)
 
-Real named places (landmarks, cities, named buildings) can contribute a photo reference
-during page rendering — e.g. "the Eiffel Tower" prompts a search for a real photo.
+Real named places can contribute a photo reference during page rendering. They are now part of the unified **`cast`** array as entries with `kind: "location"` rather than a separate `locations[]` array.
 
-**Stage 1 (in-session, free):** the agent detects real named places in the story, calls
-`perplexity_search` to find a Wikimedia Commons freely-licensed photo, builds a
-deterministic download URL (`Special:FilePath/<File-title>?width=1600`), and runs
-`fetch_location.py` to download and validate it. If the Perplexity MCP is absent,
-locations are skipped with a user-facing message — Stage 1 never fails over this.
+**Schema:** add a cast entry with `kind: "location"`, `name`, `appearance` (place description), and `ref_image` (path to downloaded photo — produces a `kind: "location"` sheet-less entry). Optional `source_url` stores provenance. Pages opt in by listing the place name in `pages[].cast`.
 
-**`fetch_location.py`** (`skills/storybook-story/scripts/fetch_location.py`): PEP-723,
-Pillow + stdlib `urllib`. Validates HTTP status, `content-type: image/*`, decodes with
-Pillow, checks min edge (≥512px default), downscales to max edge (≤1536px default), mode-
-normalises to RGB, saves as JPEG. Prints `MEDIA: {out}` for inline preview. Zero-cost
-smoke test:
+**Per-page selection is mandatory** to prevent environment bleed (PER-33 lesson: a location photo used book-wide bleeds the place's environment into every page, including pages set elsewhere). Only list the place name on pages physically set there.
 
-```bash
-uv run skills/storybook-story/scripts/fetch_location.py \
-  --url "https://commons.wikimedia.org/wiki/Special:FilePath/Tour_Eiffel_Wikimedia_Commons.jpg?width=1600" \
-  --out /tmp/smoke-loc.jpg
-```
+**Stage 1 (in-session, free):** the agent detects real named places in the story, calls `perplexity_search` to find a Wikimedia Commons freely-licensed photo, builds a deterministic download URL, and runs `fetch_location.py` to download and validate it. The resulting path goes into the cast entry's `ref_image` field. If the Perplexity MCP is absent, locations are skipped with a user-facing message — Stage 1 never fails over this.
 
-**Schema fields:** optional top-level `locations` array (`[{name, ref_image, description?,
-source_url?}]`) + optional `pages[].location` string. `ref_image` is a plain string (one
-path; no array). Declared in `story_schema.json` — `additionalProperties: false` at both
-levels means declarations are required for the editor not to warn. `pages[].location` must
-match a `locations[].name` exactly. Per-page selection is mandatory to prevent environment
-bleed (PER-33 lesson: a location photo used book-wide bleeds the place's environment into
-every page, including pages set elsewhere).
+**`fetch_location.py`** (`skills/storybook-story/scripts/fetch_location.py`): PEP-723, Pillow + stdlib `urllib`. Validates HTTP status, `content-type: image/*`, decodes with Pillow, checks min edge (≥512px default), downscales to max edge (≤1536px default), mode-normalises to RGB, saves as JPEG. Prints `MEDIA: {out}` for inline preview.
+
+**Stage 2 policy:** `make_style_sheet.py` **skips** sheet generation for `kind=location` entries that carry a `ref_image` (the real-place photo is the render reference; no style sheet generated). Generates a location reference sheet only when no `ref_image` is set (fictional recurring place, from `appearance`).
 
 **Cap priority in `collect_input_images` (render_book.py):**
 
-> hero sheet → hero photo → remaining cast sheets → **location photo (lowest)**
+> hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → **location refs (lowest, first to drop)**
 
-The location photo is appended last in the candidates list and is the first to drop from the
-4-image cap. Drops are logged, never silent. On scenery-only pages (`characters: []`) with a
-`location` set, the location photo is the sole reference image. Unknown location names and
-missing files degrade to warnings + skip, never a render failure.
+The location reference is appended last and is the first to be dropped when the 4-image cap is reached. Drops are logged, never silent. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
 
-**Labeled-interleaved contents (`run_nano_banana`):** `collect_input_images` now returns
-`(label, path)` pairs (it already built labels, then discarded them). Each reference image
-is preceded in the Gemini `contents` list by a short text part: `"Next image: {label}."`.
-This tells the model whether each image is a character style sheet, a character photograph,
-or a location photograph. The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each
-kind. Keep label wording in sync with the system prompt's "kind" vocabulary:
+**Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds. Keep label wording in sync with the system prompt's "kind" vocabulary:
 
-- `"character style sheet for {name}"` → "defines design, outfit, art style"
-- `"real photograph of the character {name} (facial likeness reference)"` → "face only, outfit from sheet"
-- `"real photograph of the location {loc} (setting reference)"` → "setting, not a character, render in book style"
+- `"character style sheet for {name}"` → defines design, outfit, art style
+- `"real photograph of the character {name} (facial likeness reference)"` → face only, outfit from sheet
+- `"object reference sheet for {name}"` → defines object design, colours, proportions
+- `"real photograph of the object {name} (appearance reference)"` → shape/materials/details reference
+- `"location reference sheet for {name}"` → defines place's look in book style
+- `"real photograph of the location {name} (setting reference)"` → setting, rendered in book style
 
-`STYLE_ANCHOR` contains `"of a character"` in the photo-matching sentence (added in PER-38)
-to prevent the anchor from instructing the model to extract a face from a landmark photo on
-scenery-only pages.
+`STYLE_ANCHOR` contains `"of a character"` in the photo-matching sentence to prevent the anchor from instructing the model to extract a face from a landmark photo on scenery-only pages.
 
 ## Text overlay (`overlay_text.py`)
 

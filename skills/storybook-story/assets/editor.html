@@ -83,6 +83,7 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 
 .hero-badge{background:#818cf8;color:#fff;font-size:10px;padding:0 5px;border-radius:8px;
   font-weight:700;margin-left:4px}
+.kind-badge { display:inline-block; font-size:9px; font-weight:700; padding:1px 5px; border-radius:9px; margin-left:4px; background:#94a3b8; color:#fff; vertical-align:middle; letter-spacing:.5px; }
 
 /* ── page cast ordered list ───────────────────────────────────────────── */
 .cast-list{margin-bottom:6px}
@@ -158,10 +159,11 @@ async function init() {
     ]);
     story  = await storyResp.json();
     schema = await schemaResp.json();
+    window._schema = schema;
     storyMtime = storyResp.headers.get('X-Story-Mtime');
     const status = await statusResp.json();
     renderStatus   = status.pages || {};
-    charStatusData = status.characters || {};
+    charStatusData = status.cast || {};
   } catch (e) {
     document.getElementById('main').innerHTML =
       `<p style="color:red">Failed to load: ${e.message}</p>`;
@@ -430,16 +432,16 @@ function renderRefRows(container, char) {
 function renderCast() {
   const sec = document.getElementById('cast-body');
   sec.innerHTML = '';
-  (story.characters || []).forEach((char, i) => {
+  (story.cast || []).forEach((char, i) => {
     sec.appendChild(buildCharCard(char, i));
   });
   const addBtn = document.createElement('button');
   addBtn.className = 'btn-add';
   addBtn.style.marginTop = '8px';
-  addBtn.textContent = '+ Add character';
+  addBtn.textContent = '+ Add cast member';
   addBtn.addEventListener('click', () => {
-    if (!story.characters) story.characters = [];
-    story.characters.push({ name: '', appearance: '' });
+    if (!story.cast) story.cast = [];
+    story.cast.push({ name: '', appearance: '' });
     renderCast();
     markDirty(null);
   });
@@ -451,7 +453,7 @@ function buildCharCard(char, i) {
   card.className = 'card';
   card.innerHTML = `
     <div class="card-header" onclick="toggleCard(this)">
-      <span id="char-title-${i}">${esc(char.name || '(no name)')}</span>
+      <span id="char-title-${i}">${esc(char.name || '(no name)')}${char.kind && char.kind !== 'character' ? ' <span class="kind-badge">' + char.kind.toUpperCase().slice(0,3) + '</span>' : ''}</span>
       <span class="spacer"></span>
       <button class="btn-sm btn-danger" onclick="deleteChar(event,${i})">Delete</button>
       <span class="toggle">▼</span>
@@ -464,6 +466,10 @@ function buildCharCard(char, i) {
       <div class="field">
         <label>Appearance (include exactly one outfit — it locks for the whole book)</label>
         <textarea rows="3" id="char-appearance-${i}">${esc(char.appearance||'')}</textarea>
+      </div>
+      <div class="field">
+        <label>Kind</label>
+        <select id="char-kind-${i}"></select>
       </div>
       <div class="field">
         <label>Reference images (absolute paths or relative to story.json)</label>
@@ -485,9 +491,9 @@ function buildCharCard(char, i) {
     // Propagate rename to all pages' cast lists
     if (oldName && oldName !== newName) {
       (story.pages || []).forEach(page => {
-        const idx = page.characters ? page.characters.indexOf(oldName) : -1;
+        const idx = page.cast ? page.cast.indexOf(oldName) : -1;
         if (idx !== -1) {
-          page.characters[idx] = newName;
+          page.cast[idx] = newName;
           dirtyPages.add(page);
         }
       });
@@ -500,6 +506,24 @@ function buildCharCard(char, i) {
   const appTa = card.querySelector(`#char-appearance-${i}`);
   appTa.addEventListener('change', () => { char.appearance = appTa.value; markDirty(null); });
 
+  const kindSel = card.querySelector(`#char-kind-${i}`);
+  const kindEnum = kindOf => {
+    const schema = window._schema;
+    try { return schema.properties.cast.items.properties.kind.enum; } catch(_) { return ['character','object','location']; }
+  };
+  kindEnum().forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    if ((char.kind || 'character') === v) opt.selected = true;
+    kindSel.appendChild(opt);
+  });
+  kindSel.addEventListener('change', () => {
+    if (kindSel.value === 'character') delete char.kind;
+    else char.kind = kindSel.value;
+    markDirty(null);
+  });
+
   renderRefRows(card.querySelector(`#char-refs-${i}`), char);
   renderSheetPreview(card.querySelector(`#char-sheet-${i}`), char);
   return card;
@@ -509,7 +533,13 @@ function renderSheetPreview(container, char) {
   container.innerHTML = '';
   const sheet = char.style_sheet;
   if (!sheet) {
-    container.innerHTML = '<span style="color:#94a3b8;font-size:12px">Not generated yet (run Stage 2)</span>';
+    const k = char.kind || 'character';
+    const hasPhoto = char.ref_image && (typeof char.ref_image === 'string' ? char.ref_image : char.ref_image.length > 0);
+    if (k === 'location' && hasPhoto) {
+      container.innerHTML = '<span style="color:#94a3b8;font-size:12px">Uses photo reference — no sheet generated</span>';
+    } else {
+      container.innerHTML = '<span style="color:#94a3b8;font-size:12px">Not generated yet (run Stage 2)</span>';
+    }
     return;
   }
   // Check status data
@@ -524,18 +554,18 @@ function renderSheetPreview(container, char) {
 
 function deleteChar(evt, i) {
   evt.stopPropagation();
-  const name = story.characters[i].name;
+  const name = story.cast[i].name;
   const usedOn = (story.pages || []).filter(p =>
-    p.characters && p.characters.includes(name));
+    p.cast && p.cast.includes(name));
   if (usedOn.length > 0) {
     if (!confirm(`"${name}" appears on ${usedOn.length} page(s). Delete anyway (will remove from those pages)?`))
       return;
     usedOn.forEach(p => {
-      p.characters = p.characters.filter(n => n !== name);
+      p.cast = p.cast.filter(n => n !== name);
       dirtyPages.add(p);
     });
   }
-  story.characters.splice(i, 1);
+  story.cast.splice(i, 1);
   renderCast();
   renderPages(); // cast lists on pages change
   markDirty(null);
@@ -559,7 +589,7 @@ function renderPages() {
       text: '',
       image_prompt: '',
       text_placement: 'floating',
-      characters: [],
+      cast: [],
     });
     renderPages();
     markDirty(null);
@@ -614,7 +644,7 @@ function buildPageCard(page, i) {
         </div>
       </div>
       <div class="field">
-        <label>Characters on this page <small style="color:#94a3b8">(first = hero — also contributes reference photo at render)</small></label>
+        <label>Cast on this page <small style="color:#94a3b8">(first character-kind entry = hero — also contributes reference photo at render)</small></label>
         <div id="pg-cast-${i}" class="cast-section"></div>
       </div>
       <div class="grid3">
@@ -684,8 +714,17 @@ function buildPageCard(page, i) {
 // Ordered page cast: selected names as drag-free reorderable list, unselected as + buttons
 function renderPageCast(container, page) {
   container.innerHTML = '';
-  const selected = page.characters || [];
-  const castNames = (story.characters || []).map(c => c.name).filter(Boolean);
+  const selected = page.cast || [];
+  const castNames = (story.cast || []).map(c => c.name).filter(Boolean);
+
+  // Helper: get kind for a cast name
+  const kindOf = name => {
+    const c = (story.cast || []).find(c => c.name === name);
+    return c ? (c.kind || 'character') : 'character';
+  };
+
+  // Hero = first character-kind entry (not literal-first)
+  const heroIdx = selected.findIndex(n => kindOf(n) === 'character');
 
   // Selected list
   const listDiv = document.createElement('div');
@@ -693,32 +732,35 @@ function renderPageCast(container, page) {
   selected.forEach((name, j) => {
     const entry = document.createElement('div');
     entry.className = 'cast-entry';
-    const isHero = j === 0;
+    const isHero = j === heroIdx;
+    const entryKind = kindOf(name);
+    const kindBadge = entryKind !== 'character'
+      ? `<span class="kind-badge" title="${entryKind}">${entryKind.toUpperCase().slice(0,3)}</span>`
+      : '';
     entry.innerHTML =
-      `<span>${esc(name)}${isHero ? '<span class="hero-badge" title="First character also contributes their reference photo at render time">HERO</span>' : ''}</span>` +
+      `<span>${esc(name)}${isHero ? '<span class="hero-badge" title="First character-kind entry also contributes their reference photo at render time">HERO</span>' : ''}${kindBadge}</span>` +
       `${j > 0 ? `<button class="btn-sm" onclick="">↑</button>` : '<span style="width:28px"></span>'}` +
       `${j < selected.length - 1 ? `<button class="btn-sm" onclick="">↓</button>` : '<span style="width:28px"></span>'}` +
       `<button class="btn-sm btn-danger" onclick="">✕</button>`;
     const btns = entry.querySelectorAll('button');
     // ↑
     if (j > 0) btns[0].addEventListener('click', () => {
-      page.characters.splice(j - 1, 0, page.characters.splice(j, 1)[0]);
+      page.cast.splice(j - 1, 0, page.cast.splice(j, 1)[0]);
       markDirty(page);
       renderPageCast(container, page);
     });
     // ↓
-    const downBtn = j < selected.length - 1 ? btns[j > 0 ? 1 : 0] : null;
     if (j < selected.length - 1) {
       const db = j > 0 ? btns[1] : btns[0];
       db.addEventListener('click', () => {
-        page.characters.splice(j + 1, 0, page.characters.splice(j, 1)[0]);
+        page.cast.splice(j + 1, 0, page.cast.splice(j, 1)[0]);
         markDirty(page);
         renderPageCast(container, page);
       });
     }
     // ✕
     btns[btns.length - 1].addEventListener('click', () => {
-      page.characters.splice(j, 1);
+      page.cast.splice(j, 1);
       markDirty(page);
       renderPageCast(container, page);
     });
@@ -736,8 +778,8 @@ function renderPageCast(container, page) {
       btn.className = 'btn-cast-add';
       btn.textContent = '+ ' + name;
       btn.addEventListener('click', () => {
-        if (!page.characters) page.characters = [];
-        page.characters.push(name);
+        if (!page.cast) page.cast = [];
+        page.cast.push(name);
         markDirty(page);
         renderPageCast(container, page);
       });
@@ -979,7 +1021,7 @@ async function triggerSave(auto = false) {
     const sr = await fetch('/api/status');
     const sd = await sr.json();
     renderStatus   = sd.pages || {};
-    charStatusData = sd.characters || {};
+    charStatusData = sd.cast || {};
     renderPages();
   } catch (e) {
     if (!auto) showStatus('error', ['Network error: ' + e.message]);
@@ -1002,11 +1044,11 @@ function clientValidate() {
     if (story[key] !== undefined && !e.includes(story[key]))
       errors.push(`'${key}' must be one of [${e.join(', ')}] (got: ${story[key]})`);
   }
-  const castNames = (story.characters || []).map(c => c.name).filter(Boolean);
+  const castNames = (story.cast || []).map(c => c.name).filter(Boolean);
   (story.pages || []).forEach((page, i) => {
-    (page.characters || []).forEach(n => {
+    (page.cast || []).forEach(n => {
       if (!castNames.includes(n))
-        errors.push(`Page ${page.page_num}: character "${n}" is not in the cast`);
+        errors.push(`Page ${page.page_num}: cast member "${n}" is not in the cast`);
     });
     for (const key of ['text_placement','text_align','font']) {
       const e = enumFor(key);

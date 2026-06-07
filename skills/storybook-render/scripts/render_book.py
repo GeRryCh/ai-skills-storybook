@@ -87,6 +87,13 @@ IMAGE_SYSTEM_PROMPT = (
     "A 'character photograph' supplies that character's facial likeness only — "
     "clothing, outfit, and character design always come from the style sheet, "
     "never from any photograph. "
+    "An 'object reference sheet' defines that object's design, colours, and "
+    "proportions in the book's art style — follow it exactly. "
+    "An 'object photograph' supplies that object's shape, materials, and "
+    "distinguishing details — render it fully in the book's illustration style, "
+    "never photographically. "
+    "A 'location reference sheet' defines that place's look in the book's art "
+    "style — follow it exactly; it is scenery, never a character. "
     "A 'location photograph' shows a real place that is the SETTING of the "
     "scene: reproduce its recognizable architecture, landmarks, and geography, "
     "rendered fully in the book's illustration style — it is scenery, never a "
@@ -112,7 +119,7 @@ FULL_BLEED_ART_DIRECTIVE = (
 # before pages fire (pages only consume it — generating inside render_page would race).
 SHARED_TEXT_BG_NAME = "text-bg-long.png"
 STYLE_ANCHOR = (
-    "Art style and character design must match the provided character reference "
+    "Art style and character design must match the provided reference "
     "sheet(s) exactly. If a reference photograph of a character is also provided, "
     "match that character's facial likeness and identity to the photo, but render "
     "fully in the illustration style of the sheet(s) — never reproduce photographic "
@@ -164,6 +171,50 @@ def _overlay_placement(placement: str) -> str:
 def load_story(path: Path) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+# Keep in sync with the copy in make_style_sheet.py
+# (the two skills share no module; both copies must stay identical).
+LEGACY_KEY_MESSAGE = (
+    "ERROR: story.json uses the pre-PER-34 schema. The cast contract changed "
+    "(breaking, no shim):\n"
+    "  top-level \"characters\"  ->  \"cast\"  (same entry shape; add optional\n"
+    "                                         \"kind\": \"character\"|\"object\"|\"location\",\n"
+    "                                         default character)\n"
+    "  top-level \"locations\"   ->  cast entries with \"kind\": \"location\"\n"
+    "                                (keep ref_image and source_url; fold\n"
+    "                                 \"description\" into \"appearance\")\n"
+    "  pages[].characters      ->  pages[].cast  (ONE flat name list, mixed\n"
+    "                                kinds; hero = first character-kind entry)\n"
+    "  pages[].location        ->  append the place name to that page's\n"
+    "                                \"cast\" list\n"
+    "Migrate story.json (or re-run Stage 1) and re-run. See\n"
+    "skills/storybook-story/assets/story_schema.json."
+)
+
+
+def reject_legacy_keys(story: dict) -> None:
+    """Fail fast (exit 2) on pre-PER-34 story.json files. Breaking rename, no shim."""
+    found: list[str] = []
+    if "characters" in story:
+        found.append('top-level "characters"')
+    if "locations" in story:
+        found.append('top-level "locations"')
+    pages = story.get("pages")
+    if isinstance(pages, list):
+        for p in pages:
+            if isinstance(p, dict):
+                pn = p.get("page_num", "?")
+                if "characters" in p:
+                    found.append(f'pages[{pn}].characters')
+                if "location" in p:
+                    found.append(f'pages[{pn}].location')
+    if found:
+        print(
+            f"Legacy keys found: {', '.join(found)}\n\n{LEGACY_KEY_MESSAGE}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 # Keep in sync with the copies in make_style_sheet.py
@@ -288,18 +339,19 @@ def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
     )
 
 
-def _ref_photos(char: dict) -> list[str]:
-    """This character's own reference photo paths, in order, existing only.
+def _ref_photos(entry: dict) -> list[str]:
+    """This cast entry's own reference photo paths, in order, existing only.
 
-    Each path must be a single-person image — a solo photo or a Stage-1 crop
-    produced by storybook-story's crop_character.py.  Multi-person group photos
-    should have been cropped to per-person files before story.json was written.
+    For kind=character entries, each path must be a single-person image — a solo
+    photo or a Stage-1 crop produced by storybook-story's crop_character.py.
+    Multi-person group photos should have been cropped to per-person files before
+    story.json was written.
 
-    Mirrors collect_ref_images_for_char() in make_style_sheet.py (the two skills share
+    Mirrors collect_ref_images_for_entry() in make_style_sheet.py (the two skills share
     no module): normalize a string-or-list `ref_image` -> dedup keeping order -> drop
     missing files. No cap here; the caller's MAX_INPUT_IMAGES budget governs.
     """
-    raw = char.get("ref_image")
+    raw = entry.get("ref_image")
     if isinstance(raw, str):
         refs = [raw]
     elif isinstance(raw, list):
@@ -321,21 +373,24 @@ def collect_input_images(
 ) -> list[tuple[str, str]]:
     """Per-page reference images for the render, capped at MAX_INPUT_IMAGES (4 for flash).
 
-    Each character listed in page['characters'] contributes its style sheet (names must
-    match story['characters'][].name exactly). The HERO — the first name in
-    page['characters'] — additionally contributes its first `ref_image` (a solo photo or
-    a Stage-1 crop from crop_character.py), so the render anchors the hero's facial
-    likeness on the real photo rather than only the derived (lossy) style sheet.
-    CONVENTION: author the hero/child first in each page's cast list.
+    page['cast'] is ONE flat name list of mixed kinds (names must match
+    story['cast'][].name exactly). Contribution by kind:
+      character — its style sheet; the HERO (first character-kind entry in page
+                  order) additionally contributes its first ref_image photo for
+                  facial likeness. CONVENTION: author the hero/child first.
+      object    — its reference sheet; falls back to its first ref_image photo
+                  when no sheet exists.
+      location  — its reference sheet when one exists (photo-less fictional
+                  place); otherwise its ref_image photo (PER-38 real-place flow).
 
-    Priority order into the budget: hero sheet, hero photo, remaining characters'
-    sheets in cast order, then the page's location photo (lowest priority, from
-    story['locations'] via page['location']). On scenery-only pages (characters: [])
-    with a location set, the location photo is the sole reference image.
-    Anything beyond the cap is named in a log line so nothing is silently dropped.
+    Priority order into the budget: hero sheet → hero photo → remaining character
+    sheets (page order) → object refs (page order) → location refs (page order,
+    lowest, first to drop from the cap). Anything past the cap is named in a log
+    line so nothing is silently dropped.
 
-    Returns a list of (label, path) pairs. Labels are passed as interleaved
-    identification notes in run_nano_banana so the model knows each image's role.
+    Returns (label, path) pairs; labels are interleaved identification notes in
+    run_nano_banana. Label vocabulary must stay in sync with IMAGE_SYSTEM_PROMPT's
+    rules-by-kind.
     """
     def warn(msg: str) -> None:
         if log is not None:
@@ -343,19 +398,33 @@ def collect_input_images(
         else:
             print(f"Warning: {msg}", file=sys.stderr)
 
-    char_index: dict[str, dict] = {
-        c.get("name", ""): c for c in story.get("characters", [])
+    cast_index: dict[str, dict] = {
+        c.get("name", ""): c for c in story.get("cast", [])
     }
-    page_cast: list[str] = page.get("characters", [])
+    page_cast: list[str] = page.get("cast", [])
+
+    # Partition the page cast by kind, preserving page order within each group.
+    characters: list[tuple[str, dict]] = []
+    objects: list[tuple[str, dict]] = []
+    locations: list[tuple[str, dict]] = []
+    for name in page_cast:
+        entry = cast_index.get(name)
+        if entry is None:
+            warn(f"page references unknown cast name {name!r}; skipping.")
+            continue
+        kind = (entry.get("kind") or "character").strip() or "character"
+        if kind == "object":
+            objects.append((name, entry))
+        elif kind == "location":
+            locations.append((name, entry))
+        else:  # character (default)
+            characters.append((name, entry))
 
     # Prioritized (label, path) candidates; trimmed to the cap below.
     candidates: list[tuple[str, str]] = []
-    for i, name in enumerate(page_cast):
-        char = char_index.get(name)
-        if char is None:
-            warn(f"page references unknown character {name!r}; skipping.")
-            continue
-        sheet = char.get("style_sheet", "")
+
+    for i, (name, entry) in enumerate(characters):
+        sheet = entry.get("style_sheet", "")
         if not sheet:
             warn(
                 f"character {name!r} has no style_sheet; skipping. "
@@ -365,35 +434,56 @@ def collect_input_images(
             warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
         else:
             candidates.append((f"character style sheet for {name}", sheet))
-        # Hero (first cast member) also contributes its real photo for face fidelity.
+        # Hero (first character-kind entry in page order) also contributes its
+        # real photo for face fidelity.
         if i == 0:
-            photos = _ref_photos(char)
+            photos = _ref_photos(entry)
             if photos:
                 candidates.append(
                     (f"real photograph of the character {name} (facial likeness reference)", photos[0])
                 )
 
-    # Location photo (lowest priority): sent only on pages that name a real place.
-    loc_name = page.get("location")
-    if loc_name:
-        loc = next(
-            (l for l in story.get("locations", []) if l.get("name") == loc_name),
-            None,
-        )
-        if loc is None:
-            warn(f"page references unknown location {loc_name!r}; skipping.")
+    for name, entry in objects:
+        sheet = entry.get("style_sheet", "")
+        if sheet and Path(sheet).exists():
+            candidates.append((f"object reference sheet for {name}", sheet))
         else:
-            photo = loc.get("ref_image", "")
-            if not photo:
-                warn(f"location {loc_name!r} has no ref_image; skipping.")
-            elif not Path(photo).exists():
+            if sheet:
                 warn(
-                    f"location photo for {loc_name!r} not found on disk "
-                    f"({photo}); skipping."
+                    f"object sheet for {name!r} not found on disk ({sheet}); "
+                    f"falling back to photo."
+                )
+            photos = _ref_photos(entry)
+            if photos:
+                candidates.append(
+                    (f"real photograph of the object {name} (appearance reference)", photos[0])
                 )
             else:
+                warn(
+                    f"object {name!r} has neither a usable style_sheet nor a "
+                    f"ref_image; skipping. Run make_style_sheet.py first."
+                )
+
+    # Location refs — lowest priority, first to drop from the cap.
+    for name, entry in locations:
+        sheet = entry.get("style_sheet", "")
+        if sheet and Path(sheet).exists():
+            candidates.append((f"location reference sheet for {name}", sheet))
+        else:
+            if sheet:
+                warn(
+                    f"location sheet for {name!r} not found on disk ({sheet}); "
+                    f"falling back to photo."
+                )
+            photos = _ref_photos(entry)
+            if photos:
                 candidates.append(
-                    (f"real photograph of the location {loc_name} (setting reference)", photo)
+                    (f"real photograph of the location {name} (setting reference)", photos[0])
+                )
+            else:
+                warn(
+                    f"location {name!r} has neither a style_sheet nor a "
+                    f"ref_image; skipping."
                 )
 
     selected = candidates[:MAX_INPUT_IMAGES]
@@ -487,7 +577,7 @@ async def run_nano_banana(
 
     # Build contents: text prompt, then for each reference image a short
     # identification note followed by the image Part. The note tells the model
-    # what the next image IS (style sheet vs character photo vs location photo);
+    # what the next image IS (sheet vs photograph, per cast kind);
     # the behavioural rules for each kind live in IMAGE_SYSTEM_PROMPT.
     contents: list = [prompt]
     ref_pairs = collect_input_images(story, page, log)
@@ -699,7 +789,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                 if not bg_path.exists():
                     bg_prompt_str = build_text_bg_prompt(story, page)
                     ok = await run_nano_banana(
-                        client, bg_prompt_str, bg_path, story, {"characters": []},
+                        client, bg_prompt_str, bg_path, story, {"cast": []},
                         resolution, log, aspect_ratio,
                     )
                     if not ok or not bg_path.exists():
@@ -794,7 +884,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
             log = ["=== Shared text-page background ==="]
             prompt = build_text_bg_prompt(story)
             ok = await run_nano_banana(
-                client, prompt, shared_bg, story, {"characters": []},
+                client, prompt, shared_bg, story, {"cast": []},
                 resolution, log, aspect_ratio,
             )
             if ok and shared_bg.exists():
@@ -872,6 +962,7 @@ def main() -> None:
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
+    reject_legacy_keys(story)
     require_style_guide(story)
 
     # CLI flag > story.json field > built-in default (all formats).
@@ -898,11 +989,17 @@ def main() -> None:
         print("ERROR: No pages found in story.json", file=sys.stderr)
         sys.exit(1)
 
-    # Warn if no per-character style sheets have been generated yet
-    chars = story.get("characters", [])
-    if chars and not any(c.get("style_sheet") for c in chars):
-        print("Warning: no character style_sheet paths found in story.json.")
-        print("Run make_style_sheet.py first for better character consistency.")
+    # Warn if no style sheets have been generated yet for sheet-eligible cast entries.
+    cast = story.get("cast", [])
+    sheetable = [
+        c for c in cast
+        if not (
+            (c.get("kind") or "character") == "location" and c.get("ref_image")
+        )
+    ]
+    if sheetable and not any(c.get("style_sheet") for c in sheetable):
+        print("Warning: no style_sheet paths found in story.json's cast.")
+        print("Run make_style_sheet.py first for better consistency.")
         print()
 
     # Select pages to render, skipping filtered-out and already-existing ones.

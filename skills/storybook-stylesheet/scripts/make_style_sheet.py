@@ -7,14 +7,21 @@
 # ]
 # ///
 """
-Generate per-character style sheets for a storybook.
+Generate per-cast-entry reference sheets for a storybook.
 
-Reads story.json, calls the Gemini image API once per character to produce
-individual PNGs (style-sheet-{slug}.png), then writes each character's style_sheet
-path back into story.json.
+Reads story.json, calls the Gemini image API once per eligible cast entry to
+produce individual PNGs (style-sheet-{slug}.png), then writes each entry's
+style_sheet path back into story.json.
 
-Idempotent: skips characters whose style-sheet-{slug}.png already exists. To force
-a regenerate for one character, delete that character's file and re-run.
+Eligible entries:
+  kind=character — always generates a sheet (outfit-locked, face/hair likeness).
+  kind=object    — always generates a sheet (multi-angle, distinguishing features).
+  kind=location  — generates a sheet ONLY when no ref_image is set (fictional
+                   recurring place). Entries with ref_image use the real-place
+                   photo directly at render time (PER-38 flow) and are skipped here.
+
+Idempotent: skips entries whose style-sheet-{slug}.png already exists. To force
+a regenerate for one entry, delete that entry's file and re-run.
 
 Requires GEMINI_API_KEY in the environment.
 
@@ -34,15 +41,82 @@ from pathlib import Path
 
 # Gemini image-generation config.
 IMAGE_MODEL = "gemini-3-pro-image"
-MAX_INPUT_IMAGES = 5  # Gemini 3 Pro Image: up to 5 character reference images per call
-IMAGE_SYSTEM_PROMPT = (
+MAX_INPUT_IMAGES = 5  # Gemini 3 Pro Image: up to 5 reference images per call
+
+# Per-kind system prompts: common prefix + kind-specific likeness sentence + tail.
+_IMAGE_SYSTEM_PROMPT_PREFIX = (
     "You are a visionary image-creation artist. Transform the request into a "
     "vivid, concrete, model-ready illustration. Pay attention to composition, "
-    "lighting, color, and visual balance. Preserve the character's facial "
-    "identity and likeness from the provided reference photographs; take the "
-    "outfit and styling from the text prompt, never from the photographs. "
-    "Output only the generated image without additional commentary."
+    "lighting, color, and visual balance. "
 )
+_IMAGE_SYSTEM_PROMPT_TAIL = "Output only the generated image without additional commentary."
+_KIND_LIKENESS = {
+    "character": (
+        "Preserve the character's facial identity and likeness from the provided "
+        "reference photographs; take the outfit and styling from the text prompt, "
+        "never from the photographs. "
+    ),
+    "object": (
+        "Preserve the subject's recognizable shape, structure, materials, and "
+        "distinguishing features from any provided reference photographs, but render "
+        "fully in the requested illustration style — never photographic. "
+    ),
+    "location": (
+        "Preserve the place's recognizable architecture, landmarks, and geography "
+        "from any provided reference photographs, but render fully in the requested "
+        "illustration style — never photographic. "
+    ),
+}
+
+
+def image_system_prompt(kind: str) -> str:
+    """Return the system prompt for a given cast-entry kind."""
+    likeness = _KIND_LIKENESS.get(kind, _KIND_LIKENESS["character"])
+    return _IMAGE_SYSTEM_PROMPT_PREFIX + likeness + _IMAGE_SYSTEM_PROMPT_TAIL
+
+
+# Keep in sync with the copy in render_book.py
+# (the two skills share no module; both copies must stay identical).
+LEGACY_KEY_MESSAGE = (
+    "ERROR: story.json uses the pre-PER-34 schema. The cast contract changed "
+    "(breaking, no shim):\n"
+    "  top-level \"characters\"  ->  \"cast\"  (same entry shape; add optional\n"
+    "                                         \"kind\": \"character\"|\"object\"|\"location\",\n"
+    "                                         default character)\n"
+    "  top-level \"locations\"   ->  cast entries with \"kind\": \"location\"\n"
+    "                                (keep ref_image and source_url; fold\n"
+    "                                 \"description\" into \"appearance\")\n"
+    "  pages[].characters      ->  pages[].cast  (ONE flat name list, mixed\n"
+    "                                kinds; hero = first character-kind entry)\n"
+    "  pages[].location        ->  append the place name to that page's\n"
+    "                                \"cast\" list\n"
+    "Migrate story.json (or re-run Stage 1) and re-run. See\n"
+    "skills/storybook-story/assets/story_schema.json."
+)
+
+
+def reject_legacy_keys(story: dict) -> None:
+    """Fail fast (exit 2) on pre-PER-34 story.json files. Breaking rename, no shim."""
+    found: list[str] = []
+    if "characters" in story:
+        found.append('top-level "characters"')
+    if "locations" in story:
+        found.append('top-level "locations"')
+    pages = story.get("pages")
+    if isinstance(pages, list):
+        for p in pages:
+            if isinstance(p, dict):
+                pn = p.get("page_num", "?")
+                if "characters" in p:
+                    found.append(f'pages[{pn}].characters')
+                if "location" in p:
+                    found.append(f'pages[{pn}].location')
+    if found:
+        print(
+            f"Legacy keys found: {', '.join(found)}\n\n{LEGACY_KEY_MESSAGE}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 def load_story(story_path: Path) -> dict:
@@ -55,23 +129,23 @@ def save_story(story: dict, story_path: Path) -> None:
         json.dump(story, f, indent=2, ensure_ascii=False)
 
 
-def get_characters(story: dict) -> list[dict]:
-    """Return the explicit cast from story['characters'].
+def get_cast(story: dict) -> list[dict]:
+    """Return the explicit cast from story['cast'].
 
     No prose scraping: an earlier regex heuristic minted phantom characters
     (e.g. a fish 'Deep' from 'deep twilight sky', a second girl 'She' from
     'She holds a rabbit') and poisoned every page. The cast must be authored
-    explicitly in story.json as [{name, appearance, ref_image?}], where
-    ref_image is one path or a list of paths mapped to that character.
+    explicitly in story.json as [{name, appearance, kind?, ref_image?}], where
+    ref_image is one path or a list of paths mapped to that entry.
     """
-    chars = story.get("characters")
-    if isinstance(chars, list) and chars:
-        return chars
+    cast = story.get("cast")
+    if isinstance(cast, list) and cast:
+        return cast
     return []
 
 
 def char_slug(name: str, used: set[str]) -> str:
-    """Filesystem-safe slug from a character name. Dedupes with an index suffix."""
+    """Filesystem-safe slug from a cast entry name. Dedupes with an index suffix."""
     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "character"
     candidate = base
     i = 2
@@ -139,58 +213,95 @@ def require_style_guide(story: dict) -> None:
         sys.exit(2)
 
 
-def build_char_prompt(story: dict, character: dict) -> str:
-    """Prompt for one character's individual style sheet."""
+def build_sheet_prompt(story: dict, entry: dict) -> str:
+    """Prompt for one cast entry's individual reference sheet, branched on kind."""
     style = build_style_block(story)
-    name = (character.get("name") or "").strip()
-    appearance = (character.get("appearance") or "").strip()
+    kind = (entry.get("kind") or "character").strip() or "character"
+    name = (entry.get("name") or "").strip()
+    appearance = (entry.get("appearance") or "").strip()
     if name and appearance:
         subject = f"{name} ({appearance})"
     elif name:
         subject = name
     else:
-        subject = "the main character"
-    return (
-        f"Character reference sheet for a children's picture book. "
-        f"Show this one character only: {subject}. "
-        f"Show a full-body view and a close-up of the face, multiple angles, "
-        f"consistent character design across the sheet. "
-        f"If reference photo(s) are provided, match this character's facial features "
-        f"and hair as closely as possible — keep the likeness clearly recognisable. "
-        f"Render in the illustration style (do not composite, paste, trace, or "
-        f"reproduce the photo itself; no photographic elements). "
-        f"Outfit and clothing: use exactly the outfit described above in the character "
-        f"description. If no outfit is described, invent one simple, distinctive outfit "
-        f"that suits the character and book style. "
-        f"IMPORTANT: ignore any clothing or outfit visible in the reference photo(s) — "
-        f"the character must wear the same single canonical outfit on every view of this "
-        f"sheet and on every page of the book. Never copy an outfit from a photograph. "
-        f"Art style: {style}. "
-        f"Background must be a single flat, plain, neutral light colour — empty, "
-        f"no scenery, no objects, no other characters. "
-        f"No text, no labels, no speech bubbles. "
-        f"Clear consistent visual design so this character is recognisable across many pages."
-    )
+        subject = "the main character" if kind == "character" else "the subject"
+
+    if kind == "object":
+        return (
+            f"Object reference sheet for a children's picture book. "
+            f"Show this one object only: {subject}. "
+            f"Show the object from multiple angles, plus a detail close-up of its most "
+            f"distinguishing features, consistent design across the sheet. "
+            f"If reference photo(s) are provided, match the object's shape, proportions, "
+            f"colours, and distinguishing details as closely as possible — keep it clearly "
+            f"recognisable. "
+            f"Render in the illustration style (do not composite, paste, trace, or "
+            f"reproduce the photo itself; no photographic elements). "
+            f"Art style: {style}. "
+            f"Background must be a single flat, plain, neutral light colour — empty, "
+            f"no scenery, no characters, no people. "
+            f"No text, no labels, no speech bubbles. "
+            f"Clear consistent visual design so this object is recognisable across many pages."
+        )
+    elif kind == "location":
+        return (
+            f"Location reference sheet for a children's picture book. "
+            f"Show this one place only: {subject}. "
+            f"Show a wide establishing view and one or two closer views from different "
+            f"angles, plus a detail close-up of its most distinguishing features, "
+            f"consistent design across the sheet. "
+            f"If reference photo(s) are provided, match the place's recognisable "
+            f"architecture, landmarks, and geography as closely as possible. "
+            f"Render in the illustration style (do not composite, paste, trace, or "
+            f"reproduce the photo itself; no photographic elements). "
+            f"Art style: {style}. "
+            f"No people and no characters anywhere in the scene. "
+            f"No text, no labels, no speech bubbles. "
+            f"Clear consistent visual design so this place is recognisable across many pages."
+        )
+    else:  # character (default)
+        return (
+            f"Character reference sheet for a children's picture book. "
+            f"Show this one character only: {subject}. "
+            f"Show a full-body view and a close-up of the face, multiple angles, "
+            f"consistent character design across the sheet. "
+            f"If reference photo(s) are provided, match this character's facial features "
+            f"and hair as closely as possible — keep the likeness clearly recognisable. "
+            f"Render in the illustration style (do not composite, paste, trace, or "
+            f"reproduce the photo itself; no photographic elements). "
+            f"Outfit and clothing: use exactly the outfit described above in the character "
+            f"description. If no outfit is described, invent one simple, distinctive outfit "
+            f"that suits the character and book style. "
+            f"IMPORTANT: ignore any clothing or outfit visible in the reference photo(s) — "
+            f"the character must wear the same single canonical outfit on every view of this "
+            f"sheet and on every page of the book. Never copy an outfit from a photograph. "
+            f"Art style: {style}. "
+            f"Background must be a single flat, plain, neutral light colour — empty, "
+            f"no scenery, no objects, no other characters. "
+            f"No text, no labels, no speech bubbles. "
+            f"Clear consistent visual design so this character is recognisable across many pages."
+        )
 
 
-def collect_ref_images_for_char(character: dict) -> list[str]:
-    """This character's own reference photos, in order, capped at MAX_INPUT_IMAGES.
+def collect_ref_images_for_entry(entry: dict) -> list[str]:
+    """This cast entry's own reference photos, in order, capped at MAX_INPUT_IMAGES.
 
-    `ref_image` accepts a single path (string) or a list of paths.  Every path must be
-    a single-person image — a solo photo or a per-person crop produced in Stage 1 by
-    storybook-story's crop_character.py.  Multi-person group photos should have been
-    cropped before story.json was written; if a group photo slips through here the model
-    cannot know which person's likeness to anchor.
+    `ref_image` accepts a single path (string) or a list of paths.
 
-    Only photos mapped to THIS character are used — there is no shared global pool, so
-    one character's reference photo never bleeds into another character's sheet.
-    The cast-to-photo mapping is fixed in Stage 1 (storybook-story).
+    For kind=character: every path must be a single-person image — a solo photo or a
+    per-person crop produced in Stage 1 by storybook-story's crop_character.py.
+    Multi-person group photos should have been cropped before story.json was written;
+    if a group photo slips through here the model cannot know which person's likeness
+    to anchor.
+
+    Only photos mapped to THIS entry are used — there is no shared global pool, so
+    one entry's reference photo never bleeds into another's sheet. The cast-to-photo
+    mapping is fixed in Stage 1 (storybook-story).
 
     Normalize -> dedup (keep order) -> drop missing files -> cap at MAX_INPUT_IMAGES (5
-    for pro), logging any refs dropped to the cap (mirrors render_book.py's per-page
-    selection log).
+    for pro), logging any refs dropped to the cap.
     """
-    raw = character.get("ref_image")
+    raw = entry.get("ref_image")
     if isinstance(raw, str):
         refs = [raw]
     elif isinstance(raw, list):
@@ -209,14 +320,14 @@ def collect_ref_images_for_char(character: dict) -> list[str]:
     existing = [r for r in ordered if Path(r).exists()]
     for r in ordered:
         if not Path(r).exists():
-            print(f"Warning: character ref not found, skipping: {r}", file=sys.stderr)
+            print(f"Warning: ref not found, skipping: {r}", file=sys.stderr)
 
     if len(existing) > MAX_INPUT_IMAGES:
         dropped = existing[MAX_INPUT_IMAGES:]
-        name = (character.get("name") or "character").strip()
+        name = (entry.get("name") or "entry").strip()
         print(
             f"Warning: {name!r} has {len(existing)} refs; capping at "
-            f"{MAX_INPUT_IMAGES} (character-lane limit). Dropping: {', '.join(dropped)}",
+            f"{MAX_INPUT_IMAGES} (Gemini reference-image limit). Dropping: {', '.join(dropped)}",
             file=sys.stderr,
         )
     return existing[:MAX_INPUT_IMAGES]
@@ -246,6 +357,7 @@ def generate_image(
     out_path: Path,
     resolution: str,
     aspect_ratio: str | None = None,
+    system_prompt: str | None = None,
 ) -> bool:
     """Generate a single image via the Gemini API and write it to out_path."""
     from google import genai
@@ -255,6 +367,9 @@ def generate_image(
     if not api_key:
         print("ERROR: GEMINI_API_KEY is not set in the environment.", file=sys.stderr)
         return False
+
+    if system_prompt is None:
+        system_prompt = image_system_prompt("character")
 
     # Build contents: text prompt + one Part.from_bytes per input image.
     contents: list = [prompt]
@@ -266,7 +381,7 @@ def generate_image(
         contents.append(types.Part.from_bytes(data=p.read_bytes(), mime_type=mime))
 
     config = types.GenerateContentConfig(
-        system_instruction=IMAGE_SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         response_modalities=["TEXT", "IMAGE"],
         image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
     )
@@ -301,7 +416,7 @@ def generate_image(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate per-character style sheets.")
+    parser = argparse.ArgumentParser(description="Generate per-cast-entry reference sheets.")
     parser.add_argument("--story", required=True, help="Path to story.json")
     parser.add_argument("--out-dir", help="Output directory (default: same dir as story.json)")
     parser.add_argument("--resolution", choices=["1K", "2K", "4K"], default=None,
@@ -320,6 +435,7 @@ def main() -> None:
 
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
+    reject_legacy_keys(story)
     require_style_guide(story)
 
     # CLI flag > story.json field > built-in default (2K).
@@ -330,11 +446,12 @@ def main() -> None:
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    characters = get_characters(story)
-    if not characters:
+    cast = get_cast(story)
+    if not cast:
         print(
-            "ERROR: story.json has no 'characters' array. "
-            "Add an explicit characters list before running make_style_sheet.py.",
+            "ERROR: story.json has no 'cast' array. "
+            "Add an explicit cast list (characters, objects, locations) before "
+            "running make_style_sheet.py.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -342,33 +459,56 @@ def main() -> None:
     used_slugs: set[str] = set()
     any_failed = False
 
-    for char in characters:
-        name = (char.get("name") or "").strip()
-        slug = char_slug(name or "character", used_slugs)
+    for entry in cast:
+        name = (entry.get("name") or "").strip()
+        kind = (entry.get("kind") or "character").strip() or "character"
+
+        if kind not in ("character", "object", "location"):
+            print(
+                f"ERROR: cast entry {name!r} has unknown kind {kind!r} "
+                f"(must be 'character', 'object', or 'location').",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        # kind=location with a real-place photo: skip sheet generation.
+        # The photo is sent directly at render time (PER-38 flow).
+        if kind == "location" and entry.get("ref_image"):
+            print(
+                f"Skipping {name!r} (location with photo reference) — the real-place "
+                f"photo is the render reference; no sheet is generated. "
+                f"Remove ref_image to generate a sheet from 'appearance' instead."
+            )
+            continue
+
+        slug = char_slug(name or "entry", used_slugs)
         target = out_dir / f"style-sheet-{slug}.png"
 
         if target.exists():
             print(f"Skipping {name!r} — sheet already exists: {target}")
-            char["style_sheet"] = str(target)
+            entry["style_sheet"] = str(target)
             print(f"MEDIA: {target}")
             continue
 
-        prompt = build_char_prompt(story, char)
-        input_images = collect_ref_images_for_char(char)
-        print(f"\nGenerating sheet for {name!r} -> {target}")
+        prompt = build_sheet_prompt(story, entry)
+        input_images = collect_ref_images_for_entry(entry)
+        print(f"\nGenerating sheet for {name!r} (kind={kind}) -> {target}")
         print(f"Prompt: {prompt}")
 
-        ok = generate_image(prompt, input_images, target, resolution, aspect_ratio)
+        ok = generate_image(
+            prompt, input_images, target, resolution, aspect_ratio,
+            system_prompt=image_system_prompt(kind),
+        )
         if not ok or not target.exists():
             print(f"ERROR: style sheet PNG not produced for {name!r}.", file=sys.stderr)
             any_failed = True
             continue
 
-        char["style_sheet"] = str(target)
+        entry["style_sheet"] = str(target)
         print(f"MEDIA: {target}")
 
     save_story(story, story_path)
-    print("\nstory.json updated with per-character style_sheet paths.")
+    print("\nstory.json updated with per-entry style_sheet paths.")
 
     if any_failed:
         sys.exit(1)
