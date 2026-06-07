@@ -12,7 +12,8 @@ step and no test suite; the scripts are the product.
 ## The pipeline (read this first)
 
 Four skills run in order and hand off a **single file, `story.json`**, in an output
-directory (default: the user's cwd, e.g. this worktree root):
+directory (default: a newly created `{slug(title)}/` folder under the user's cwd;
+an explicitly user-named path is used verbatim):
 
 1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), crops
    multi-person photos to one file per person via `scripts/crop_character.py` (Pillow only,

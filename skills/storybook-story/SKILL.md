@@ -45,7 +45,18 @@ These stay fixed in SKILL.md because they are prose-authored, not scalar knobs t
 | Story idea | required | Core premise, setting, who the book is about |
 | Character look | — | Real photos of child/family, or invented characters? + absolute photo paths if photos supplied (may contain multiple people — see Source-photo analysis) |
 | Number of pages | `8` | Story length; ask alongside `text_mode` — both express length (PER-31) |
-| Output directory | current working directory | Don't ask; surface in the config summary |
+| Output directory | newly created folder `{cwd}/{slug(title)}/` | Don't ask unless the user named a path; surface in the config summary |
+
+### Output directory resolution
+
+The output directory is resolved **once, after the interview** (step 4 below), before any file is written:
+
+- **Default:** `{out_dir} = {cwd}/{slug(title)}/` — a **new folder** named with the proposed working title's slug (same slug rule as `ref-{char-slug}.png` / `{slug(title)}.pdf`: lowercase, non-alphanumerics → hyphens, e.g. `pip-and-the-storm/`). Create it with `mkdir -p` before writing any crop, location photo, or `story.json`. All Stage-1 artifacts land inside.
+- **Explicit user path:** if the user named an output directory in their request or during the interview, use that path verbatim — it IS the dedicated folder; do **not** nest a second `{slug}/` inside it.
+- **Collision:** if the default folder already exists and is non-empty, append `-2` (then `-3`, …). Stage 1 is a fresh entry-point; no resume semantics.
+- **Never** write book files directly into cwd.
+
+All existing `{out_dir}` interpolations in this SKILL.md (`--out {out_dir}/ref-…`, `--out {out_dir}/loc-…`, `{out_dir}/story.json`, etc.) pick up this meaning unchanged.
 
 ### Schema-driven questions — the generic algorithm
 
@@ -65,21 +76,22 @@ The following algorithm covers **scalar book-level knobs** that churn when the s
 1. Read `assets/STYLE_PRIMER.md` (word counts, text placement, safe-zone rule).
 2. Read `assets/story_schema.json` and `assets/story_example.json`.
 3. **Run the Interview** — collect static inputs and core schema choices in one or two structured-question batches. Fold "is this a specific real named place?" into the batch when the story idea mentions a recognizable landmark (see Locations below).
-4. **Analyze any supplied photos** (see Source-photo analysis below) before authoring the cast.
-5. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
-6. Author cast, propose title, author `style_guide` (from the style answer + STYLE_PRIMER).
-7. **Gate 1: Configuration summary — confirm before writing** (see Configuration summary section below). Stop and wait for "go".
-8. Draft page prose and image prompts — word counts per the now-locked `age_band` and `text_mode` (drafting after Gate 1 avoids rework when a summary override changes word-count guidance).
-9. Write `{out_dir}/story.json` following the schema exactly.
-10. **Validate `story.json` against the schema** — run the validator and fix any errors before continuing:
+4. **Propose working title and resolve `{out_dir}`** — derive a candidate title from the story idea (it can be refined at Gate 1) and apply the Output directory resolution rule above: create the new folder with `mkdir -p` now, before any file is written. Show the folder path to the user.
+5. **Analyze any supplied photos** (see Source-photo analysis below) before authoring the cast.
+6. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
+7. Author cast and `style_guide` (from the style answer + STYLE_PRIMER).
+8. **Gate 1: Configuration summary — confirm before writing** (see Configuration summary section below). Stop and wait for "go".
+9. Draft page prose and image prompts — word counts per the now-locked `age_band` and `text_mode` (drafting after Gate 1 avoids rework when a summary override changes word-count guidance).
+10. Write `{out_dir}/story.json` following the schema exactly.
+11. **Validate `story.json` against the schema** — run the validator and fix any errors before continuing:
 
 ```bash
 uv run {skillDir}/scripts/validate_story.py --story {out_dir}/story.json
 ```
 
 Exits 0 when clean. On errors (exit 2), fix `story.json` and re-run until clean. Surface any warnings to the user; they never block but may point to missing files or duplicate names worth reviewing.
-11. Show the Handoff message.
-12. **Gate 2: prose review** — stop and wait for explicit user approval before Stage 2.
+12. Show the Handoff message.
+13. **Gate 2: prose review** — stop and wait for explicit user approval before Stage 2.
 
 ### Source-photo analysis (BEFORE authoring the cast)
 
