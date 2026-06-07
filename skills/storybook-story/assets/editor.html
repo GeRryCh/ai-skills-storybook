@@ -240,6 +240,7 @@ let _regenAllRunning = false; // true while the run is in-flight (flag for card 
 // for every page; cleared only by page reload.
 const editedFields = new Map();   // pageObj → Set<fieldKey>
 let   bookPaidEdit = false;
+let   unsavedChanges = false; // any unsaved edit (page, cast, or book-level)
 // Fields that only affect Pillow post-processing in overlay/long mode —
 // changing only these fields makes the fast "Re-composite (free)" path eligible.
 // (text_background_prompt excluded: needs a paid bg call.)
@@ -290,6 +291,7 @@ async function init() {
 // field: the story.json key that changed (e.g. 'text', 'image_prompt', 'cast').
 // Pass field=null or omit to mark as "unknown change" → conservative paid path.
 function markDirty(pageObj, field) {
+  unsavedChanges = true;
   if (pageObj) {
     dirtyPages.add(pageObj);
     editedPages.add(pageObj);
@@ -332,12 +334,13 @@ function markDirty(pageObj, field) {
   }
 }
 function clearDirty() {
+  unsavedChanges = false;
   dirtyPages.clear();
   document.getElementById('dirty-dot').title = 'Unsaved changes';
   updateDirtyUi();
 }
 function updateDirtyUi() {
-  const has = dirtyPages.size > 0;
+  const has = unsavedChanges;
   document.getElementById('dirty-dot').classList.toggle('visible', has);
 }
 
@@ -1071,6 +1074,7 @@ function renumberPages() {
     const newNum = i + 1;
     if (page.page_num !== newNum) {
       page.page_num = newNum;
+      unsavedChanges = true;
       dirtyPages.add(page);
       // page_num change is a render-affecting edit (page reorder)
       if (!editedFields.has(page)) editedFields.set(page, new Set());
@@ -1389,9 +1393,9 @@ async function _clickSelectVersion(num, versionId) {
 // On server 422 (prerequisite missing), offers a paid re-render fallback.
 async function doRecomposite(num) {
   // Flush pending save so render_book.py reads the latest text fields.
-  if (dirtyPages.size > 0) {
+  if (unsavedChanges) {
     await triggerSave(false);
-    if (dirtyPages.size > 0) {
+    if (unsavedChanges) {
       alert('Please save your changes first, then try re-compositing.');
       return;
     }
@@ -1435,9 +1439,9 @@ async function doRegenerate(num) {
   if (!confirm(msg)) return;
 
   // Flush pending auto-save so render_book.py reads the latest image_prompt.
-  if (dirtyPages.size > 0) {
+  if (unsavedChanges) {
     await triggerSave(false);
-    if (dirtyPages.size > 0) {
+    if (unsavedChanges) {
       alert('Please save your changes first, then try regenerating.');
       return;
     }
@@ -1509,9 +1513,9 @@ async function runConsolidate() {
 
   // Flush unsaved edits so the scripts read the latest story.json (including
   // any saved_formats change made inside this modal before clicking Run).
-  if (dirtyPages.size > 0) {
+  if (unsavedChanges) {
     await triggerSave(false);
-    if (dirtyPages.size > 0) {
+    if (unsavedChanges) {
       alert('Please save your changes first, then try consolidating.');
       return;
     }
@@ -1745,7 +1749,7 @@ function renderAll() {
 // 409 is always loud and pauses all future auto-saves until the page is reloaded.
 async function triggerSave(auto = false) {
   // Nothing to save — timer may fire after a manual save beat it
-  if (auto && dirtyPages.size === 0) return;
+  if (auto && !unsavedChanges) return;
 
   const btn = document.getElementById('btn-save');
 
@@ -1879,7 +1883,7 @@ document.addEventListener('keydown', e => {
 
 // ── Dirty guard ────────────────────────────────────────────────────────────
 window.addEventListener('beforeunload', e => {
-  if (dirtyPages.size > 0) {
+  if (unsavedChanges) {
     e.preventDefault();
     e.returnValue = '';
   }
