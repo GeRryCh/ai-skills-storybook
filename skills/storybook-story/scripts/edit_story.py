@@ -163,6 +163,7 @@ def _schema_enums(schema: dict) -> dict[str, list]:
         "text_placement": page["text_placement"]["enum"],
         "text_align": page["text_align"]["enum"],
         "font": page["font"]["enum"],
+        "text_color_hint": page["text_color_hint"]["enum"],
         "kind": top["cast"]["items"]["properties"]["kind"]["enum"],
     }
 
@@ -447,10 +448,10 @@ def validate_story(
                         errors.append(f"{where}.page_num must be a positive integer")
                     else:
                         nums.append(num)
-                for key in ("text", "image_prompt", "text_color_hint", "text_background_prompt"):
+                for key in ("text", "image_prompt", "text_background_prompt"):
                     if key in page and not isinstance(page[key], str):
                         errors.append(f"{where}.{key} must be a string")
-                for key in ("text_placement", "text_align", "font", "model", "text_mode"):
+                for key in ("text_placement", "text_align", "font", "text_color_hint", "model", "text_mode"):
                     if key in page and page[key] not in enums[key]:
                         errors.append(
                             f"{where}.{key} must be one of {enums[key]} "

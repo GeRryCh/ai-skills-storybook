@@ -207,7 +207,9 @@ def overlay(
         placement: 'top' or 'bottom'.
         out_path: Destination path.
         font: role 'reader' or 'display' — selects the bundled fallback font.
-        color: 'dark' (near-black text) or 'light' (near-white text).
+        color: 'dark' (near-black text on light panel) or 'light' (near-white text on dark
+            panel). The semi-transparent panel behind the text adapts its base colour to
+            match so the text stays legible.
         font_name: optional explicit family name (e.g. 'Arial'); resolved via bundled
             asset -> system font -> bundled role fallback. None = use the role font.
         align: 'left' (default) or 'center' — horizontal alignment of each text line.
@@ -275,7 +277,8 @@ def overlay(
     if feather > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(feather))
 
-    panel = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    panel_rgb = (255, 255, 255) if color == "dark" else (30, 30, 30)
+    panel = Image.new("RGBA", (w, h), panel_rgb + (0,))
     panel.putalpha(mask)
     img = Image.alpha_composite(img, panel)
 
@@ -330,7 +333,8 @@ def text_page(
         text: Story text. Empty string = plain background, no panel.
         out_path: Destination path.
         font: role 'reader' or 'display'.
-        color: 'dark' or 'light'.
+        color: 'dark' (near-black text on light panel) or 'light' (near-white text on dark
+            panel). The semi-transparent panel behind the text adapts its base colour.
         box_alpha: Panel opacity 0-255.
         feather: Edge blur radius in px.
         font_name: Explicit font family; resolved via bundled asset -> system font -> fallback.
@@ -423,7 +427,8 @@ def text_page(
     if feather > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(feather))
 
-    panel = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    panel_rgb = (255, 255, 255) if color == "dark" else (30, 30, 30)
+    panel = Image.new("RGBA", (w, h), panel_rgb + (0,))
     panel.putalpha(mask)
     img = Image.alpha_composite(img, panel)
 

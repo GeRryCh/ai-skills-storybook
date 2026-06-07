@@ -136,7 +136,8 @@
           },
           "text_color_hint": {
             "type": "string",
-            "description": "Optional hint for text color, e.g. 'dark' or 'light'. Default: dark.",
+            "enum": ["dark", "light"],
+            "description": "Optional text colour scheme. 'dark': near-black ink on a light semi-transparent panel (overlay/long) or warm dark ink baked in (native). 'light': near-white ink on a dark panel (overlay/long) or cream-white ink with a dark backdrop area (native). Default: dark.",
             "default": "dark"
           },
           "text_align": {

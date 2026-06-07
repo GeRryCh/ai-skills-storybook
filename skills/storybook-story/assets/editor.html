@@ -876,8 +876,8 @@ function buildPageCard(page, i) {
         </div>
       </div>
       <div class="field" style="max-width:260px">
-        <label>Text colour hint</label>
-        <input type="text" id="pg-colorhint-${i}" placeholder="e.g. dark, light">
+        <label>Text colour</label>
+        <select id="pg-colorhint-${i}"></select>
       </div>
       <div class="field" data-dep="page-text-bg">
         <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
@@ -922,14 +922,9 @@ function buildPageCard(page, i) {
   bindEnum(card.querySelector(`#pg-model-${i}`), page, 'model',
     enumFor('model'), { optional: true, page, defaultVal: story.model || defaultFor('model') });
 
-  // Color hint
-  const hintInp = card.querySelector(`#pg-colorhint-${i}`);
-  hintInp.value = page.text_color_hint || '';
-  hintInp.addEventListener('change', () => {
-    if (hintInp.value === '') delete page.text_color_hint;
-    else page.text_color_hint = hintInp.value;
-    markDirty(page, 'text_color_hint');
-  });
+  // Color hint — enum dropdown matching established sentinel-inherit pattern (PER-52)
+  bindEnum(card.querySelector(`#pg-colorhint-${i}`), page, 'text_color_hint',
+    enumFor('text_color_hint'), { optional: true, page });
 
   // Text page background prompt (long mode only)
   const bgPromptInp = card.querySelector(`#pg-textbgprompt-${i}`);

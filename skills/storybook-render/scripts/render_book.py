@@ -120,7 +120,7 @@ IMAGE_SYSTEM_PROMPT = (
 
 TEXT_SAFE_ZONE_DIRECTIVE = (
     "Leave the {placement} quarter of the image as a soft, "
-    "low-detail, lightly-toned area suitable for overlaying text. "
+    "low-detail, {tone} area suitable for overlaying text. "
     "Do not place any narrative text in the image."
 )
 
@@ -146,16 +146,32 @@ STYLE_ANCHOR = (
     "unchanged across every page of the book."
 )
 
+# Ink-and-contrast clause spliced into NATIVE_TEXT_DIRECTIVE.
+# dark: near-black ink on the model's habitual lightly-toned safe area — default, high contrast.
+# light: cream-white ink, but the model must also provide a suitably DARK backdrop so the light
+#   ink stays legible (without the backdrop instruction the model defaults to a light patch, which
+#   strands light ink on a light field and is invisible).
+_INK_CLAUSE = {
+    "dark": (
+        "warm dark ink, crisp and highly legible against the soft low-detail background"
+    ),
+    "light": (
+        "soft warm cream-white ink, crisp and highly legible against a darker, low-detail "
+        "area of the scene (use a subtle dark tone behind the text, never a light field)"
+    ),
+}
+
 # Used in --text-mode native: tells the model to render text into the illustration.
 # One fixed, detailed letterform descriptor reused verbatim on every page so the
 # lettering style stays consistent book-wide (each page is a separate stateless call
 # with no seed). {font_ref} names a target font family when story.fonts configures one;
 # the descriptor adjectives must stay coherent with that family (rounded sans here).
+# {ink_clause} carries both ink color and required backdrop (see _INK_CLAUSE above).
 NATIVE_TEXT_DIRECTIVE = (
     "Render this exact story text as part of the illustration, {placement_clause}. "
     "Letter it in a clean, rounded, child-friendly "
-    "style{font_ref}: even weight, steady baseline, generous letter spacing, warm dark ink, "
-    "crisp and highly legible against the soft low-detail background — and keep this exact "
+    "style{font_ref}: even weight, steady baseline, generous letter spacing, {ink_clause} — "
+    "and keep this exact "
     "lettering style identical on every page of the book. Preserve the text's natural "
     "reading direction. Reproduce every word, comma, quotation mark, and dash exactly as "
     'written — no changes, no omissions, no extra text: "{text}"'
@@ -337,8 +353,11 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
         font_role = page.get("font", "reader")
         family = (story.get("fonts") or {}).get(font_role)
         font_ref = f", styled after the {family} typeface" if family else ""
+        color = page.get("text_color_hint", "dark")
+        ink_clause = _INK_CLAUSE.get(color, _INK_CLAUSE["dark"])
         native = NATIVE_TEXT_DIRECTIVE.format(
-            placement_clause=_placement_clause(placement), text=text, font_ref=font_ref
+            placement_clause=_placement_clause(placement), text=text,
+            font_ref=font_ref, ink_clause=ink_clause,
         )
         return f"{base}. {anchor}. {native}"
 
@@ -350,8 +369,13 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
         return f"{base}. {anchor}. {FULL_BLEED_ART_DIRECTIVE}"
 
     # overlay (default): unchanged behaviour. "floating" is native-only -> bottom here.
+    # tone: light hint → request a dark text-safe zone so the white panel blends cleanly.
     base = page["image_prompt"].rstrip(". ")
-    safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(placement=_overlay_placement(placement))
+    color = page.get("text_color_hint", "dark")
+    tone = "darkly-toned" if color == "light" else "lightly-toned"
+    safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(
+        placement=_overlay_placement(placement), tone=tone
+    )
     return f"{base}. {safe_zone}. {anchor}"
 
 

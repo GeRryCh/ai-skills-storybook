@@ -266,8 +266,10 @@ render remains backward-compatible via the photo fallback for books never re-she
 
 ## Text overlay (`overlay_text.py`)
 
-Pillow composites text on a feathered, semi-transparent rounded white panel that blends into
-the art (no hard edge). A `bottom` panel anchors flush to the image bottom (full-bleed); a
+Pillow composites text on a feathered, semi-transparent panel that blends into the art (no hard
+edge). Panel base colour follows `text_color_hint` (`dark` → white panel `(255,255,255)`,
+`light` → near-black panel `(30,30,30)`); text colour is near-black on dark, near-white on light.
+`dark` behaviour is byte-identical to pre-PER-52 output. A `bottom` panel anchors flush to the image bottom (full-bleed); a
 `top` panel keeps a 4%-height margin. Font size auto-shrinks (72px → 22px floor) to fit the
 comfortable 25% zone; the panel may grow past it but is hard-capped at 1/3 of page height. If
 text won't fit 1/3 even at the 22px floor, the font shrinks below it (down to a 12px hard min)
@@ -284,8 +286,11 @@ titles), selected per page via the `font` field in `story.json` (default `reader
 one-time warning. So system fonts (Arial, etc.) need no manual install, and unknown names
 never crash the render. Tunables are module constants near the top (`BOX_ALPHA`,
 `FEATHER_PX`, padding, font px range) exposed as `--box-alpha` / `--feather` flags. The render
-script never bakes story text into the generated image — every `image_prompt` reserves a
-low-detail safe zone for this overlay.
+script never bakes story text into the generated image (overlay mode) — every `image_prompt` reserves a
+low-detail safe zone for this overlay. In native mode, `NATIVE_TEXT_DIRECTIVE` in `render_book.py`
+instructs the model to letter text into the art; `text_color_hint` is spliced into it as `{ink_clause}`,
+selecting warm dark ink (with a lightly-toned backdrop) for `dark` or cream-white ink (with an
+explicitly forced dark-toned backdrop area) for `light`.
 
 ## Local visual editor (`edit_story.py`)
 
