@@ -53,14 +53,15 @@ Output:
 | native | `pages/page-NN-native.png` | (same file) | `{title}-native.pdf`, `{title}-native.epub` |
 | long | `pages/page-NN-long.png` | `pages/page-NN-long-text.png` | `{title}-long.pdf`, `{title}-long.epub` |
 
-In long mode the cover (page 1) is a single combined page — `pages/page-01-long.png`. Body pages with empty `text` emit an art-only page (no text page generated).
+In long mode the cover (page 1) is a single combined page — `pages/page-01-long.png`. Body pages with empty `text` emit an art-only page (no text page generated). Text pages sit on ONE shared model-generated background per book — `pages/text-bg-long.png` (+1 paid call total, generated once before the pages fire; it reserves a low-detail central area for the text panel). A page with `text_background_prompt` gets its own dedicated background instead (`pages/page-NN-long-bg.png`, +1 call for that page). Cost: N art calls + 1 shared-bg call.
 
 Each final file is printed as `MEDIA: <path>` so the IDE can display it inline.
 
 **Re-rendering individual artifacts (long mode):**
 - To force-regen the art image: `rm pages/page-NN-long.png` (also `rm pages/raw-page-NN-long.png` for the cover raw), then re-run.
-- To force-regen only the text page (Pillow-only, free, no key needed): `rm pages/page-NN-long-text.png` then re-run.
-- To force-regen the dedicated text-bg (only if `text_background_prompt` set): `rm pages/page-NN-long-bg.png` then re-run.
+- To force-regen only the text page (Pillow-only, free, no key needed as long as the background PNG exists): `rm pages/page-NN-long-text.png` then re-run.
+- To force-regen the shared text-page background (+1 paid call): `rm pages/text-bg-long.png pages/page-NN-long-text.png` (all text pages that should pick it up), then re-run.
+- To force-regen a per-page dedicated bg (only if `text_background_prompt` set): `rm pages/page-NN-long-bg.png pages/page-NN-long-text.png` then re-run.
 
 For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png` for overlay), then `--only N`.
 
@@ -107,7 +108,7 @@ Missing pages emit a warning and are skipped; the output file is still built fro
 
 ## Cost & failure notes
 
-- Each page = one Gemini image call. 8 pages = 8 calls.
+- Each page = one Gemini image call. 8 pages = 8 calls. Long mode adds 1 call for the shared text-page background (8 pages = 9 calls), plus 1 per page that sets `text_background_prompt`.
 - **Strongly suggest** a 2-page proof run first: `--only 2` then `--only 3`.
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
 - API errors: check `GEMINI_API_KEY` is set, `uv` installed, and Gemini account has credits.
@@ -145,9 +146,9 @@ uv run {skillDir}/scripts/overlay_text.py \
   --placement bottom \
   --out /tmp/test-overlay.png
 
-# Text-page mode (long mode body pages):
+# Text-page mode (long mode body pages — --image is the text-page background):
 uv run {skillDir}/scripts/overlay_text.py \
-  --image /path/to/any.jpg \
+  --image /path/to/text-bg.png \
   --text "Long story text that belongs on its own page." \
   --text-page \
   --out /tmp/test-textpage.png
@@ -158,13 +159,11 @@ uv run {skillDir}/scripts/overlay_text.py \
 - `--feather N` — edge blur radius in px (default `14`; `0` = hard edge)
 - `--align left|center` — horizontal text alignment (default `left`)
 
-**Text-page mode (`--text-page`, long mode):** the art image is blurred and white-washed to form the background; story text sits on a vertically centered, feathered panel. Tune with:
-- `--bg-blur N` — blur radius (default = auto 2% of image width)
-- `--bg-wash N` — white-wash alpha 0–255 (default `80`)
-- `--canvas-from PATH` — when `--image` is a dedicated generated background, crop it to the dims of this art image
+**Text-page mode (`--text-page`, long mode):** `--image` is a purpose-made background (the render stage generates it with a reserved central text section); it is used as-is — no blur, no wash. Story text sits on a vertically centered, feathered panel. Tune with:
+- `--canvas-from PATH` — scale-to-cover + center-crop `--image` to the dims of this art image, so the text page matches its art page
 
 **Sizing (band mode):** font shrinks from 72px toward a 22px floor; panel capped at ⅓ of page height.
 
 **Sizing (text-page mode):** font shrinks from 96px toward a 22px floor; panel capped at ~80% of page height — large enough for ~80–200 words per logical page.
 
-Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display), `text_background_prompt` (long mode only — optional dedicated text-page background, +1 paid call).
+Per-page `story.json` text fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light), `text_align` (left/center), `font` (reader/display), `text_background_prompt` (long mode only — per-page dedicated text-page background overriding the shared one, +1 paid call). Top-level `text_background_prompt` customizes the shared book-wide text-page background.

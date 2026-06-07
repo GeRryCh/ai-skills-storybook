@@ -636,7 +636,7 @@ function buildPageCard(page, i) {
         <input type="text" id="pg-colorhint-${i}" placeholder="e.g. dark, light">
       </div>
       <div class="field">
-        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = reuse this page's art, free; set to generate a dedicated background via an extra paid call)</small></label>
+        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
         <input type="text" id="pg-textbgprompt-${i}" placeholder="e.g. a misty forest path at dawn, soft light filtering through leaves">
       </div>
     </div>`;
@@ -652,7 +652,7 @@ function buildPageCard(page, i) {
 
   // Selects
   bindEnum(card.querySelector(`#pg-placement-${i}`), page, 'text_placement',
-    enumFor('text_placement'), { page });
+    enumFor('text_placement'), { optional: true, page });
   bindEnum(card.querySelector(`#pg-align-${i}`), page, 'text_align',
     enumFor('text_align'), { optional: true, page });
   bindEnum(card.querySelector(`#pg-font-${i}`), page, 'font',
@@ -822,6 +822,10 @@ function renderBook() {
       <div class="field"><label>Language (BCP-47, e.g. en, de, en-GB)</label><input type="text" id="book-language"></div>
       <div></div>
     </div>
+    <div class="field">
+      <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
+      <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
+    </div>
     <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
       <legend style="font-size:12px;font-weight:600;color:#475569;padding:0 6px">fonts (optional — leave blank to use bundled Andika / Patrick Hand)</legend>
       <div class="grid2">
@@ -849,6 +853,7 @@ function renderBook() {
   bindText(b.querySelector('#sg-lighting'), sg, 'lighting', {optional: true});
   bindText(b.querySelector('#sg-mood'),     sg, 'mood',   {optional: true});
   bindText(b.querySelector('#book-language'), story, 'language', {optional: true});
+  bindText(b.querySelector('#book-textbgprompt'), story, 'text_background_prompt', {optional: true});
 
   // Enums
   bindEnum(b.querySelector('#book-age-band'), story, 'age_band', enumFor('age_band'));

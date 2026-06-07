@@ -3,6 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "google-genai",
+#     "Pillow",
 # ]
 # ///
 """
@@ -221,6 +222,24 @@ def collect_ref_images_for_char(character: dict) -> list[str]:
     return existing[:MAX_INPUT_IMAGES]
 
 
+def _ensure_png(data: bytes) -> bytes:
+    """Transcode image bytes to PNG when they aren't already.
+
+    The Gemini API may return JPEG inline data; the .png file contract (and
+    every downstream consumer) requires real PNG bytes, so convert at the
+    save site. Keep in sync with the copy in render_book.py.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(data)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def generate_image(
     prompt: str,
     input_images: list[str],
@@ -274,7 +293,7 @@ def generate_image(
         return False
 
     try:
-        out_path.write_bytes(image_data)
+        out_path.write_bytes(_ensure_png(image_data))
     except Exception as e:
         print(f"ERROR: failed to write image: {e}", file=sys.stderr)
         return False

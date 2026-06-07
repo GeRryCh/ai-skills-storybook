@@ -30,10 +30,16 @@ directory (default: the user's cwd, e.g. this worktree root):
    - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
    - `native`: `pages/page-NN-native.png` (model bakes text into art)
    - `long`: `pages/page-NN-long.png` (full-bleed art, no text) + `pages/page-NN-long-text.png`
-     (separate text page, Pillow-only, free by default). Cover (page 1) stays combined
-     (`pages/page-01-long.png`). **Cost invariant: default long mode = same cost as other
-     modes (1 paid call per logical page). Text pages are free Pillow work. Only pages with
-     optional `text_background_prompt` add 1 extra paid call for a dedicated text-page bg.**
+     (separate text page: feathered panel over a background image, Pillow-composited).
+     Cover (page 1) stays combined (`pages/page-01-long.png`). Text pages sit on **one
+     shared model-generated background per book** (`pages/text-bg-long.png`, generated
+     once in `render_all` *before* pages fire — generating it inside the concurrent
+     `render_page` would race), prompted with a reserved low-detail central text area
+     and no characters; top-level `text_background_prompt` customizes it. A page-level
+     `text_background_prompt` gives that page its own dedicated bg instead
+     (`pages/page-NN-long-bg.png`, +1 paid call). **Cost: N art calls + 1 shared-bg
+     call. Text-page composition itself is free Pillow work (rebuildable without an
+     API key while the bg PNG exists).**
    After a full render, assembles book file(s) via `merge_pdf.py` / `merge_epub.py` at no
    extra API cost. Long mode outputs `{title}-long.pdf` / `{title}-long.epub`.
 
@@ -207,9 +213,10 @@ returns an error and a Reload button rather than silently clobbering the new con
 ## Smoke-testing changes (do this on task completion)
 
 When a task is complete, smoke-test the change against the **pip-storm fixture** in
-`tests/` before declaring done. The fixture ships committed artifacts (a reference image,
-a style sheet, and pre-rendered overlay + native + long pages under
-`tests/fixtures/pip-storm/`) so the no-API paths can be exercised for free:
+`tests/` before declaring done. Two fixtures ship committed artifacts so the no-API paths
+can be exercised for free: `tests/fixtures/pip-storm/` (overlay + native pages, reference
+image, style sheet) and `tests/fixtures/pip-storm-long/` (the long-mode fixture: full-bleed
+art pages, shared text-page background `pages/text-bg-long.png`, text pages, long books):
 
 ```bash
 # No API cost — crop the committed fixture ref image (happy path + overwrite loop)
@@ -234,9 +241,9 @@ uv run skills/storybook-render/scripts/overlay_text.py \
   --image tests/fixtures/pip-storm/pages/page-01.png \
   --text "Once upon a time..." --placement bottom --out /tmp/smoke.png
 
-# No API cost — exercise text-page mode (long mode) against a committed raw page
+# No API cost — exercise text-page mode (long mode) against the committed shared bg
 uv run skills/storybook-render/scripts/overlay_text.py \
-  --image tests/fixtures/pip-storm/pages/raw-page-02.png \
+  --image tests/fixtures/pip-storm-long/pages/text-bg-long.png \
   --text "Pip loved sunny days in the meadow." \
   --text-page --out /tmp/smoke-textpage.png
 
@@ -246,7 +253,7 @@ uv run skills/storybook-render/scripts/merge_pdf.py \
 uv run skills/storybook-render/scripts/merge_pdf.py \
   --story tests/fixtures/pip-storm/story.json --text-mode native
 uv run skills/storybook-render/scripts/merge_pdf.py \
-  --story tests/fixtures/pip-storm/story.json --text-mode long
+  --story tests/fixtures/pip-storm-long/story.json --text-mode long
 
 # No API cost — re-merge into a fixed-layout EPUB3 (all three modes)
 uv run skills/storybook-render/scripts/merge_epub.py \
@@ -254,7 +261,7 @@ uv run skills/storybook-render/scripts/merge_epub.py \
 uv run skills/storybook-render/scripts/merge_epub.py \
   --story tests/fixtures/pip-storm/story.json --text-mode native
 uv run skills/storybook-render/scripts/merge_epub.py \
-  --story tests/fixtures/pip-storm/story.json --text-mode long
+  --story tests/fixtures/pip-storm-long/story.json --text-mode long
 ```
 
 Prefer these zero-cost checks; they cover overlay, text-page composition, PDF merge, EPUB

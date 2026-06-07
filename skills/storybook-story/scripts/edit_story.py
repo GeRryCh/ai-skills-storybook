@@ -185,6 +185,8 @@ def validate_story(
             )
     if "language" in story and not isinstance(story["language"], str):
         errors.append("'language' must be a string")
+    if "text_background_prompt" in story and not isinstance(story["text_background_prompt"], str):
+        errors.append("'text_background_prompt' must be a string")
     fonts = story.get("fonts")
     if fonts is not None:
         if not isinstance(fonts, dict):

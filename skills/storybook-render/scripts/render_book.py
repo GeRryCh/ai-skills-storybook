@@ -3,6 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "google-genai",
+#     "Pillow",
 # ]
 # ///
 """
@@ -34,8 +35,11 @@ Text modes:
   native  — model bakes text into illustration → pages/page-NN-native.png
   long    — full-bleed art (no text) + separate text page → pages/page-NN-long.png +
             pages/page-NN-long-text.png. Cover (page 1) stays combined (overlay-style).
-            Default cost = same as other modes (1 paid call per logical page). Pages with
-            optional text_background_prompt add 1 extra paid call for that page's text bg.
+            Text pages sit on ONE shared model-generated background per book
+            (pages/text-bg-long.png — generated once, before pages fire, +1 paid call
+            total); a page with text_background_prompt gets its own dedicated bg instead
+            (pages/page-NN-long-bg.png, +1 call for that page). Text-page composition
+            itself is free Pillow work. Cost: N art calls + 1 shared bg call.
 
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
@@ -95,6 +99,9 @@ FULL_BLEED_ART_DIRECTIVE = (
     "with no reserved text area. Do not render any words, letters, captions, or typography "
     "anywhere in the image."
 )
+# Long mode: one shared text-page background per book, generated once in render_all
+# before pages fire (pages only consume it — generating inside render_page would race).
+SHARED_TEXT_BG_NAME = "text-bg-long.png"
 STYLE_ANCHOR = (
     "Art style and character design must match the provided character reference "
     "sheet(s) exactly. If a reference photograph is also provided, match that "
@@ -240,19 +247,31 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
     return f"{base}. {safe_zone}. {anchor}"
 
 
-def build_text_bg_prompt(page: dict, story: dict) -> str:
-    """Prompt for a dedicated text-page background (long mode, text_background_prompt set).
+def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
+    """Prompt for a text-page background (long mode).
 
-    No character references are sent for this call, so STYLE_ANCHOR is not used.
-    The style block is injected verbatim for book-wide visual consistency.
+    One shared background per book by default (pages/text-bg-long.png); a page with
+    text_background_prompt set gets its own dedicated background instead. No character
+    references are sent for this call, so STYLE_ANCHOR is not used. The style block is
+    injected verbatim for book-wide visual consistency.
+
+    Description precedence: page-level text_background_prompt (when page is given) ->
+    top-level text_background_prompt -> generic default.
     """
     style = build_style_block(story)
-    bg_desc = page.get("text_background_prompt", "").rstrip(". ")
+    bg_desc = ""
+    if page is not None:
+        bg_desc = page.get("text_background_prompt", "").rstrip(". ")
+    if not bg_desc:
+        bg_desc = story.get("text_background_prompt", "").rstrip(". ")
+    if not bg_desc:
+        bg_desc = "A soft decorative background for the story's text pages"
     return (
         f"{bg_desc}. "
         "Render a soft, low-detail, calm full-bleed decorative background — "
         "no characters, no faces, no lettering, no typography anywhere in the image. "
-        "Use the full canvas from edge to edge. "
+        "Use the full canvas from edge to edge, and reserve a large, especially "
+        "low-detail, lightly-toned central area where story text will be placed. "
         f"Art style: {style}. "
         "Preserve this exact palette, lighting, line treatment, and rendering style "
         "unchanged across every page of the book."
@@ -394,6 +413,25 @@ class _LazyClient:
         return self._client
 
 
+def _ensure_png(data: bytes) -> bytes:
+    """Transcode image bytes to PNG when they aren't already.
+
+    The Gemini API may return JPEG inline data; every downstream consumer
+    (merge_epub.py's IHDR parser, the EPUB image/png media-type, the .png file
+    contract) requires real PNG bytes, so convert at the save site.
+    Keep in sync with the copy in make_style_sheet.py.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(data)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 async def run_nano_banana(
     client: _LazyClient,
     prompt: str,
@@ -463,7 +501,7 @@ async def run_nano_banana(
         return False
 
     try:
-        raw_path.write_bytes(image_data)
+        raw_path.write_bytes(_ensure_png(image_data))
     except Exception as e:
         log.append(f"  ERROR: failed to write image: {e}")
         return False
@@ -604,36 +642,34 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         font_name = (story.get("fonts") or {}).get(font)
         align = page.get("text_align", "left")
         text_path = pages_dir / f"page-{nn}-long-text.png"
-        text_bg_prompt = page.get("text_background_prompt", "")
 
-        if text_bg_prompt:
-            # Dedicated background (+1 paid call, idempotent on bg_path).
-            bg_path = pages_dir / f"page-{nn}-long-bg.png"
-            if not bg_path.exists():
-                bg_prompt_str = build_text_bg_prompt(page, story)
-                ok = await run_nano_banana(
-                    client, bg_prompt_str, bg_path, story, {"characters": []},
-                    resolution, log, aspect_ratio,
-                )
-                if not ok or not bg_path.exists():
-                    log.append(f"  ERROR: text bg generation failed for page {page_num}")
+        if not text_path.exists():
+            if page.get("text_background_prompt", ""):
+                # Per-page override: dedicated background (+1 paid call, idempotent on bg_path).
+                bg_path = pages_dir / f"page-{nn}-long-bg.png"
+                if not bg_path.exists():
+                    bg_prompt_str = build_text_bg_prompt(story, page)
+                    ok = await run_nano_banana(
+                        client, bg_prompt_str, bg_path, story, {"characters": []},
+                        resolution, log, aspect_ratio,
+                    )
+                    if not ok or not bg_path.exists():
+                        log.append(f"  ERROR: text bg generation failed for page {page_num}")
+                        print("\n" + "\n".join(log))
+                        return False
+            else:
+                # Default: the book-wide shared background, generated once in render_all.
+                bg_path = pages_dir / SHARED_TEXT_BG_NAME
+                if not bg_path.exists():
+                    log.append(f"  ERROR: shared text-page background missing ({bg_path}); its generation failed earlier — re-run to retry")
                     print("\n" + "\n".join(log))
                     return False
-            if not text_path.exists():
-                # bg_path is the source image; canvas_from=art_path locks the dims.
-                ok = await run_text_page(bg_path, page_text, color, font, font_name, align, text_path, art_path, log)
-                if not ok or not text_path.exists():
-                    log.append(f"  ERROR: text page failed for page {page_num}")
-                    print("\n" + "\n".join(log))
-                    return False
-        else:
-            # Default: blur own art (Pillow-only, free).
-            if not text_path.exists():
-                ok = await run_text_page(art_path, page_text, color, font, font_name, align, text_path, None, log)
-                if not ok or not text_path.exists():
-                    log.append(f"  ERROR: text page failed for page {page_num}")
-                    print("\n" + "\n".join(log))
-                    return False
+            # bg_path is the source image; canvas_from=art_path locks the dims.
+            ok = await run_text_page(bg_path, page_text, color, font, font_name, align, text_path, art_path, log)
+            if not ok or not text_path.exists():
+                log.append(f"  ERROR: text page failed for page {page_num}")
+                print("\n" + "\n".join(log))
+                return False
 
         log.append(f"  Done: {art_path}, {text_path}")
         log.append(f"MEDIA: {art_path}")
@@ -691,6 +727,36 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     so runs that only rebuild free artifacts (e.g. text pages in long mode) need no key.
     """
     client = _LazyClient()
+
+    # Long mode: the shared text-page background is one per book — generate it once,
+    # sequentially, BEFORE the pages fire (pages only consume it; generating it inside
+    # render_page would race across concurrent pages). Only when some todo page will
+    # actually need it: a body page with text, no per-page override, text page missing.
+    if text_mode == "long":
+        shared_bg = pages_dir / SHARED_TEXT_BG_NAME
+        needs_shared_bg = not shared_bg.exists() and any(
+            p["page_num"] != 1
+            and p.get("text", "").strip()
+            and not p.get("text_background_prompt", "")
+            and not (pages_dir / f"page-{p['page_num']:02d}-long-text.png").exists()
+            for p in todo
+        )
+        if needs_shared_bg:
+            log = ["=== Shared text-page background ==="]
+            prompt = build_text_bg_prompt(story)
+            ok = await run_nano_banana(
+                client, prompt, shared_bg, story, {"characters": []},
+                resolution, log, aspect_ratio,
+            )
+            if ok and shared_bg.exists():
+                log.append(f"  Done: {shared_bg}")
+                log.append(f"MEDIA: {shared_bg}")
+            else:
+                # Don't abort: art pages can still render; their text pages will fail
+                # with a clear message, and a re-run retries the bg cheaply.
+                log.append("  ERROR: shared text-page background generation failed; text pages will fail this run")
+            print("\n" + "\n".join(log))
+
     print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
     results = await asyncio.gather(
         *(render_page(client, page, story, pages_dir, resolution, text_mode, aspect_ratio) for page in todo)
@@ -729,8 +795,10 @@ def main() -> None:
             "native: ask the model to render story text directly into the illustration "
             "(output goes to page-NN-native.png). "
             "long: full-bleed art + separate text page per body page (page-NN-long.png + "
-            "page-NN-long-text.png); cover stays combined (overlay-style). Same default "
-            "cost as other modes; pages with text_background_prompt add 1 extra paid call. "
+            "page-NN-long-text.png); cover stays combined (overlay-style). Text pages "
+            "share one model-generated background per book (text-bg-long.png, +1 paid "
+            "call total); a page with text_background_prompt gets a dedicated bg instead "
+            "(+1 call for that page). "
             "If omitted, uses story.json's top-level 'text_mode' (default native)."
         ),
     )

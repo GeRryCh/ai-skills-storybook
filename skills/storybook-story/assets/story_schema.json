@@ -43,8 +43,12 @@
     "text_mode": {
       "type": "string",
       "enum": ["overlay", "native", "long"],
-      "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. 'long': each body page becomes two physical pages — (1) full-bleed art with no text (pages/page-NN-long.png), (2) a separate text-only page with the story text on a centered, feathered semi-transparent panel over a blurred/washed copy of the art (pages/page-NN-long-text.png). Cover (page 1) stays a single combined overlay-style page. Default cost = same as other modes (1 paid call per logical page); pages with optional 'text_background_prompt' add 1 extra paid call for a dedicated text-page background. render_book.py's --text-mode flag overrides this per run.",
+      "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. 'long': each body page becomes two physical pages — (1) full-bleed art with no text (pages/page-NN-long.png), (2) a separate text-only page with the story text on a centered, feathered semi-transparent panel over ONE shared model-generated background reused book-wide (pages/text-bg-long.png; designed with a reserved low-detail central text area). Cover (page 1) stays a single combined overlay-style page. Cost = N art calls + 1 shared-background call; a page with 'text_background_prompt' gets its own dedicated background instead (+1 call for that page). render_book.py's --text-mode flag overrides this per run.",
       "default": "native"
+    },
+    "text_background_prompt": {
+      "type": "string",
+      "description": "Long mode only. Optional custom scene description for the book's shared text-page background (pages/text-bg-long.png — one model-generated image reused on every text page; the book style block is injected, no character references are sent, and a low-detail central area is reserved for text). Omit for a generic style-matched decorative background. Ignored in overlay/native modes."
     },
     "language": {
       "type": "string",
@@ -82,7 +86,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["page_num", "text", "image_prompt", "text_placement", "characters"],
+        "required": ["page_num", "text", "image_prompt", "characters"],
         "additionalProperties": false,
         "properties": {
           "page_num": { "type": "integer", "minimum": 1 },
@@ -102,7 +106,7 @@
           "text_placement": {
             "type": "string",
             "enum": ["top", "bottom", "floating"],
-            "description": "Where text lands on the image. 'floating' (default, native mode only): the image model picks the most visually pleasing placement; the overlay path degrades this to 'bottom'. 'top'/'bottom': pin text to a fixed band.",
+            "description": "Optional. Where text lands on the image. 'floating' (default, native mode only): the image model picks the most visually pleasing placement; the overlay path degrades this to 'bottom'. 'top'/'bottom': pin text to a fixed band. Unused on long-mode body pages (text goes to its own page); still honored for the long-mode cover.",
             "default": "floating"
           },
           "text_color_hint": {
@@ -124,7 +128,7 @@
           },
           "text_background_prompt": {
             "type": "string",
-            "description": "Long mode only. When set, generates a dedicated background image for this page's text page via ONE extra paid Gemini call (the book style block is injected; no character references are sent). Omit to derive the background from this page's own illustration — blurred and lightened — at no extra cost. Ignored in overlay/native modes and on the cover or empty-text pages. If set on an empty-text page a warning is logged and no text page is generated."
+            "description": "Long mode only. When set, this page's text page gets its OWN dedicated background (pages/page-NN-long-bg.png) generated from this description via ONE extra paid Gemini call, instead of the book's shared background (the book style block is injected; no character references are sent; a low-detail central area is reserved for text). Omit to use the shared book-wide background at no extra cost. Ignored in overlay/native modes and on the cover or empty-text pages. If set on an empty-text page a warning is logged and no text page is generated."
           }
         }
       }
