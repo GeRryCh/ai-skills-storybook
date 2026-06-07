@@ -243,6 +243,17 @@ def _page_xhtml(slug: str, width: int, height: int, alt_text: str, lang: str) ->
 # Core assembler
 # ---------------------------------------------------------------------------
 
+def _page_text_mode(story: dict, page: dict, cli_mode: str | None) -> str:
+    """Resolve the effective text mode for one page.
+
+    Precedence: CLI --text-mode > page 'text_mode' field > story top-level 'text_mode' > "native".
+    Keep in sync with resolve_text_mode() in render_book.py and _page_text_mode() in merge_pdf.py
+    (the skills share no module; all three copies must stay identical).
+    """
+    page_mode = page.get("text_mode")
+    return cli_mode or page_mode or story.get("text_mode") or "native"
+
+
 def merge_epub(
     story_path: Path,
     text_mode: str | None,
@@ -254,7 +265,7 @@ def merge_epub(
 
     Args:
         story_path: Absolute path to story.json.
-        text_mode:  Resolved text mode ("overlay", "native", or "long"), or None to auto-detect.
+        text_mode:  CLI override applied to every page, or None to use per-page/book-level story fields.
         out_dir:    Directory that contains pages/ and where the EPUB is written.
         out:        Explicit EPUB output path (overrides default naming).
 
@@ -263,9 +274,10 @@ def merge_epub(
     """
     story = _load_story(story_path)
 
-    # Resolve text_mode: arg > story.json field > "native".
+    # Output filename suffix reflects the book-level mode (CLI > story field > "native").
+    # Per-page text_mode fields are honored for file selection below, but the output
+    # filename uses the book-wide resolved mode so it stays predictable and stable.
     resolved_mode = text_mode or story.get("text_mode", "native")
-    # Output filename suffix (3-way map; "long" gets its own literal suffix).
     out_suffix = {"native": "-native", "long": "-long"}.get(resolved_mode, "")
 
     # Output directory mirrors render_book.py logic.
@@ -284,17 +296,19 @@ def merge_epub(
     #
     # Collect in story.json array order — do NOT glob (glob sweeps in raw-page-NN.png
     # intermediates and misorders past 99 pages). Keep in sync with merge_pdf.py.
+    # Each page's effective mode is resolved individually (CLI > page field > story field > native).
     phys_pages: list[tuple[str, bytes, int, int, str, str | None]] = []
     missing: list[str] = []
     is_first_collected = True  # first non-skipped page gets the title as nav label
 
-    if resolved_mode == "long":
-        # Long mode: per logical page, art page + optional text page; cover is single.
-        for page in pages:
-            page_num = page["page_num"]
-            nn = f"{page_num:02d}"
-            page_text = page.get("text", "")
+    for page in pages:
+        page_num = page["page_num"]
+        nn = f"{page_num:02d}"
+        page_text = page.get("text", "")
+        page_mode = _page_text_mode(story, page, text_mode)
 
+        if page_mode == "long":
+            # Long mode: art page + optional text page; cover (page 1) is a single combined page.
             if page_num == 1:  # Cover
                 png_path = pages_dir / "page-01-long.png"
                 if not png_path.exists():
@@ -326,18 +340,15 @@ def merge_epub(
                         phys_pages.append((f"page-{nn}-text", tb, tw, th, page_text, None))
                     else:
                         missing.append(f"{page_num}-text")
-    else:
-        # Overlay / native: one physical page per logical page.
-        file_suffix = "-native" if resolved_mode == "native" else ""
-        for page in pages:
-            page_num = page["page_num"]
+        else:
+            # Overlay / native: one physical page per logical page.
+            file_suffix = "-native" if page_mode == "native" else ""
             png_path = pages_dir / f"page-{page_num:02d}{file_suffix}.png"
             if not png_path.exists():
                 missing.append(str(page_num))
                 continue
             pb = png_path.read_bytes()
             w, h = _png_dims(pb, png_path)
-            page_text = page.get("text", "")
             nav_label = story.get("title", "") if is_first_collected else f"Page {page_num}"
             is_first_collected = False
             phys_pages.append((f"page-{page_num:02d}", pb, w, h, page_text, nav_label))

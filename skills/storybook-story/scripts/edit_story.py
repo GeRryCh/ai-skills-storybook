@@ -300,6 +300,17 @@ def validate_story(
         errors.append("'language' must be a string")
     if "text_background_prompt" in story and not isinstance(story["text_background_prompt"], str):
         errors.append("'text_background_prompt' must be a string")
+    elif "text_background_prompt" in story and isinstance(story.get("text_background_prompt"), str):
+        # Warn when no page's effective mode is long — the shared bg will never be used.
+        pages_list = story.get("pages") or []
+        any_long = any(
+            (p.get("text_mode") or story.get("text_mode") or "native") == "long"
+            for p in pages_list
+        ) if pages_list else (story.get("text_mode") or "native") == "long"
+        if not any_long:
+            warnings.append(
+                "'text_background_prompt' has no effect — no page's effective text mode is 'long'"
+            )
     fonts = story.get("fonts")
     if fonts is not None:
         if not isinstance(fonts, dict):
@@ -403,12 +414,19 @@ def validate_story(
                 for key in ("text", "image_prompt", "text_color_hint", "text_background_prompt"):
                     if key in page and not isinstance(page[key], str):
                         errors.append(f"{where}.{key} must be a string")
-                for key in ("text_placement", "text_align", "font", "model"):
+                for key in ("text_placement", "text_align", "font", "model", "text_mode"):
                     if key in page and page[key] not in enums[key]:
                         errors.append(
                             f"{where}.{key} must be one of {enums[key]} "
                             f"(got {page[key]!r})"
                         )
+                # Warn when text_background_prompt is set but effective mode is not long.
+                eff_mode = page.get("text_mode") or story.get("text_mode") or "native"
+                if "text_background_prompt" in page and isinstance(page["text_background_prompt"], str) and eff_mode != "long":
+                    warnings.append(
+                        f"{where}.text_background_prompt has no effect "
+                        f"(effective text mode is '{eff_mode}', not 'long')"
+                    )
                 pc = page.get("cast")
                 if pc is not None:
                     if not isinstance(pc, list) or not all(

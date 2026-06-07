@@ -41,6 +41,10 @@ section>h2 .toggle{margin-left:auto;color:#64748b;font-size:12px}
   outline:none;border-color:#6366f1}
 .field textarea{resize:vertical;min-height:60px}
 .field select.unset{color:#94a3b8}
+/* ── Conditional field relevance (PER-48) ─────────────────────────────── */
+.field.dep-dim{opacity:.5}
+.field.dep-dim:focus-within{opacity:1}
+.dep-note{color:#b45309;font-size:11px;font-weight:400;margin-left:4px}
 .field .row{display:flex;gap:8px;align-items:flex-start}
 .field .row input{flex:1}
 
@@ -341,6 +345,64 @@ function bindEnum(el, obj, key, enumVals, opts = {}) {
     }
     if (opts.onchange) opts.onchange(el.value);
     markDirty(opts.page || null, key);
+  });
+}
+
+// ── Conditional field relevance (PER-48) ──────────────────────────────────
+// Effective text mode for a page: page override → book field → schema default.
+const effMode = (page) =>
+  (page && page.text_mode) || story.text_mode || defaultFor('text_mode') || 'native';
+// True if any page's effective mode is long (shared text-bg is consumed by those pages).
+const anyLong = () => {
+  const ps = story.pages || [];
+  return ps.length ? ps.some(p => effMode(p) === 'long') : effMode(null) === 'long';
+};
+
+// Dependency rules map: data-dep attribute value → { relevant(page), note(page), options? }
+// Each entry controls one field wrapper that carries a matching data-dep attribute.
+const FIELD_DEPS = {
+  // Book-level text_background_prompt — only consumed when some page renders in long mode.
+  'book-text-bg': {
+    relevant: () => anyLong(),
+    note: () => `no effect — no page renders in long mode`,
+  },
+  // Page-level text_background_prompt — only meaningful in long mode.
+  'page-text-bg': {
+    relevant: (page) => effMode(page) === 'long',
+    note: (page) => `no effect — this page renders in ${effMode(page)} mode, not long`,
+  },
+  // Page text_placement — no text band on long-mode body pages; cover is always relevant.
+  'page-placement': {
+    relevant: (page) => effMode(page) !== 'long' || page.page_num === 1,
+    note: () => 'no effect — long-mode body pages have no text band (text goes to its own page)',
+    // 'floating' is only meaningful in native mode; in overlay/long it degrades to bottom.
+    options: { floating: (page) => effMode(page) === 'native' },
+  },
+};
+
+// Apply dependency rules to [data-dep] wrappers inside rootEl.
+// page: the page object for page-scoped rules; null for book-level.
+function applyDeps(rootEl, page) {
+  if (!rootEl) return;
+  rootEl.querySelectorAll('[data-dep]').forEach(wrap => {
+    const rule = FIELD_DEPS[wrap.dataset.dep];
+    if (!rule) return;
+    const ok = rule.relevant(page);
+    wrap.classList.toggle('dep-dim', !ok);
+    const noteEl = wrap.querySelector('.dep-note');
+    if (noteEl) noteEl.textContent = ok ? '' : (' — ' + rule.note(page));
+    if (rule.options) {
+      const sel = wrap.querySelector('select');
+      if (!sel) return;
+      for (const [val, cond] of Object.entries(rule.options)) {
+        const opt = [...sel.options].find(o => o.value === val);
+        if (!opt) continue;
+        const on = cond(page);
+        opt.disabled = !on;
+        // Hard-hide unless it is the currently selected value (avoid silent data loss).
+        opt.hidden = !on && sel.value !== val;
+      }
+    }
   });
 }
 
@@ -730,8 +792,8 @@ function buildPageCard(page, i) {
         <div id="pg-cast-${i}" class="cast-section"></div>
       </div>
       <div class="grid3">
-        <div class="field">
-          <label>Text placement</label>
+        <div class="field" data-dep="page-placement">
+          <label>Text placement<small class="dep-note"></small></label>
           <select id="pg-placement-${i}"></select>
         </div>
         <div class="field">
@@ -747,13 +809,19 @@ function buildPageCard(page, i) {
         <label>Text colour hint</label>
         <input type="text" id="pg-colorhint-${i}" placeholder="e.g. dark, light">
       </div>
-      <div class="field">
-        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
+      <div class="field" data-dep="page-text-bg">
+        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small><small class="dep-note"></small></label>
         <input type="text" id="pg-textbgprompt-${i}" placeholder="e.g. a misty forest path at dawn, soft light filtering through leaves">
       </div>
-      <div class="field" style="max-width:320px">
-        <label>Image model <small style="color:#94a3b8">(retry knob — unset inherits the book model)</small></label>
-        <select id="pg-model-${i}"></select>
+      <div class="grid2">
+        <div class="field">
+          <label>Text mode <small style="color:#94a3b8">(unset = same as book)</small></label>
+          <select id="pg-textmode-${i}"></select>
+        </div>
+        <div class="field">
+          <label>Image model <small style="color:#94a3b8">(unset = same as book)</small></label>
+          <select id="pg-model-${i}"></select>
+        </div>
       </div>
     </div>`;
 
@@ -773,6 +841,12 @@ function buildPageCard(page, i) {
     enumFor('text_align'), { optional: true, page });
   bindEnum(card.querySelector(`#pg-font-${i}`), page, 'font',
     enumFor('font'), { optional: true, page });
+  // Text mode override — sentinel shows the inherited default (page → book → schema default).
+  bindEnum(card.querySelector(`#pg-textmode-${i}`), page, 'text_mode',
+    enumFor('text_mode'), { optional: true, page,
+      defaultVal: story.text_mode || defaultFor('text_mode'),
+      onchange: () => { applyDeps(card, page); applyDeps(document.getElementById('book-body'), null); } });
+
   // Model override — sentinel shows the inherited default (page → book → schema default).
   bindEnum(card.querySelector(`#pg-model-${i}`), page, 'model',
     enumFor('model'), { optional: true, page, defaultVal: story.model || defaultFor('model') });
@@ -797,6 +871,9 @@ function buildPageCard(page, i) {
 
   // Cast
   renderPageCast(card.querySelector(`#pg-cast-${i}`), page);
+
+  // Apply field-dependency rules (PER-48).
+  applyDeps(card, page);
 
   // Preview: if page is rendered or regen is in flight, populate the img area async.
   const _pnum = page.page_num;
@@ -965,8 +1042,8 @@ function renderBook() {
       <div class="field"><label>Language (BCP-47, e.g. en, de, en-GB)</label><input type="text" id="book-language"></div>
       <div class="field"><label>Image model <small style="color:#94a3b8">(page renders only; style sheets always use pro)</small></label><select id="book-model"></select></div>
     </div>
-    <div class="field">
-      <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
+    <div class="field" data-dep="book-text-bg">
+      <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small><small class="dep-note"></small></label>
       <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
     </div>
     <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
@@ -1007,7 +1084,8 @@ function renderBook() {
 
   // Enums
   bindEnum(b.querySelector('#book-age-band'), story, 'age_band', enumFor('age_band'));
-  bindEnum(b.querySelector('#book-text-mode'), story, 'text_mode', enumFor('text_mode'), {optional:true});
+  bindEnum(b.querySelector('#book-text-mode'), story, 'text_mode', enumFor('text_mode'), {optional:true,
+    onchange: () => { applyDeps(b, null); renderPages(); }});
   bindEnum(b.querySelector('#book-resolution'), story, 'resolution', enumFor('resolution'), {optional:true});
   bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true, defaultVal:'model chooses'});
   bindEnum(b.querySelector('#book-model'), story, 'model', enumFor('model'), {optional:true});
@@ -1038,6 +1116,9 @@ function renderBook() {
 
   // Saved formats
   renderSavedFormats(b.querySelector('#sf-container'));
+
+  // Apply field-dependency rules (PER-48).
+  applyDeps(b, null);
 }
 
 // ── Smart-regenerate button logic ──────────────────────────────────────────
@@ -1437,7 +1518,7 @@ function clientValidate() {
       if (!castNames.includes(n))
         errors.push(`Page ${page.page_num}: cast member "${n}" is not in the cast`);
     });
-    for (const key of ['text_placement','text_align','font','model']) {
+    for (const key of ['text_placement','text_align','font','model','text_mode']) {
       const e = enumFor(key);
       if (page[key] !== undefined && e.length && !e.includes(page[key]))
         errors.push(`Page ${page.page_num}: '${key}' invalid value "${page[key]}"`);

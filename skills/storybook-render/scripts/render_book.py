@@ -193,6 +193,24 @@ def resolve_model(
     return cli_model or page_model or story.get("model") or IMAGE_MODEL
 
 
+def resolve_text_mode(
+    story: dict,
+    page: dict | None = None,
+    cli_mode: str | None = None,
+) -> str:
+    """Resolve the effective text mode for one page (or book-wide when page=None).
+
+    Precedence: CLI --text-mode > page 'text_mode' field > story top-level 'text_mode' > "native".
+    page=None skips per-page resolution (used for summary/shared-bg logic where no specific
+    page is in scope).
+
+    Keep in sync with _page_text_mode() in merge_pdf.py and merge_epub.py
+    (the skills share no module; all three copies must stay identical).
+    """
+    page_mode = page.get("text_mode") if page else None
+    return cli_mode or page_mode or story.get("text_mode") or "native"
+
+
 # Keep in sync with the copy in make_style_sheet.py
 # (the two skills share no module; both copies must stay identical).
 LEGACY_KEY_MESSAGE = (
@@ -757,11 +775,13 @@ async def run_text_page(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None, cli_model: str | None = None) -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None) -> bool:
     """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     # Resolve model once: CLI override > page field > story field > default flash.
     model = resolve_model(story, page, cli_model)
+    # Resolve text mode once: CLI override > page field > story field > "native".
+    text_mode = resolve_text_mode(story, page, cli_text_mode)
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
 
@@ -905,7 +925,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, text_mode: str = "native", aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False) -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
@@ -920,15 +940,17 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     # Long mode: the shared text-page background is one per book — generate it once,
     # sequentially, BEFORE the pages fire (pages only consume it; generating it inside
     # render_page would race across concurrent pages). Only when some todo page will
-    # actually need it: a body page with text, no per-page override, text page missing.
-    if text_mode == "long":
+    # actually need it: a body (non-cover) page whose effective mode is long, with text,
+    # no per-page bg override, and text page not yet on disk.
+    long_todo = [p for p in todo if resolve_text_mode(story, p, cli_text_mode) == "long"]
+    if long_todo:
         shared_bg = pages_dir / SHARED_TEXT_BG_NAME
         needs_shared_bg = not shared_bg.exists() and any(
             p["page_num"] != 1
             and p.get("text", "").strip()
             and not p.get("text_background_prompt", "")
             and not (pages_dir / f"page-{p['page_num']:02d}-long-text.png").exists()
-            for p in todo
+            for p in long_todo
         )
         if needs_shared_bg:
             log = ["=== Shared text-page background ==="]
@@ -948,9 +970,10 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
                 log.append("  ERROR: shared text-page background generation failed; text pages will fail this run")
             print("\n" + "\n".join(log))
 
-    print(f"\nRendering {len(todo)} page(s) concurrently ({text_mode} mode)...")
+    modes = sorted({resolve_text_mode(story, p, cli_text_mode) for p in todo}) if todo else [resolve_text_mode(story, None, cli_text_mode)]
+    print(f"\nRendering {len(todo)} page(s) concurrently ({', '.join(modes)} mode(s))...")
     results = await asyncio.gather(
-        *(render_page(client, page, story, pages_dir, resolution, text_mode, aspect_ratio, cli_model=cli_model) for page in todo)
+        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model) for page in todo)
     )
     return sum(1 for ok in results if not ok)
 
@@ -1001,7 +1024,9 @@ def main() -> None:
             "share one model-generated background per book (text-bg-long.png, +1 paid "
             "call total); a page with text_background_prompt gets a dedicated bg instead "
             "(+1 call for that page). "
-            "If omitted, uses story.json's top-level 'text_mode' (default native)."
+            "If omitted, each page uses its own 'text_mode' field (if set), then "
+            "story.json's top-level 'text_mode', then 'native' as the built-in default. "
+            "This flag overrides all page-level and book-level fields for the entire run."
         ),
     )
     parser.add_argument(
@@ -1028,8 +1053,8 @@ def main() -> None:
     resolution = args.resolution or story.get("resolution") or "2K"
     # CLI flag > story.json field > unset (model chooses framing).
     aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or None
-    # text_mode precedence: CLI flag (if given) > story.json top-level > "native".
-    text_mode = args.text_mode or story.get("text_mode", "native")
+    # text_mode: resolved per page via resolve_text_mode(story, page, args.text_mode).
+    # CLI --text-mode overrides all pages; page field > story field > "native" otherwise.
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     pages_dir = out_dir / "pages"
@@ -1054,6 +1079,7 @@ def main() -> None:
         print()
 
     # Select pages to render, skipping filtered-out and already-existing ones.
+    # Text mode is resolved per page: CLI --text-mode > page field > story field > "native".
     # Long mode uses its own skip logic (two physical files per logical page);
     # native/overlay map 1-to-1 via a filename suffix.
     todo: list[dict] = []
@@ -1064,7 +1090,8 @@ def main() -> None:
         if page_num < args.from_page:
             continue
 
-        if text_mode == "long":
+        page_mode = resolve_text_mode(story, page, args.text_mode)
+        if page_mode == "long":
             is_cover = page_num == 1
             art_path = pages_dir / ("page-01-long.png" if is_cover else f"page-{page_num:02d}-long.png")
             if is_cover:
@@ -1084,7 +1111,7 @@ def main() -> None:
                         print(f"MEDIA: {text_path}")
                     continue
         else:
-            suffix = "-native" if text_mode == "native" else ""
+            suffix = "-native" if page_mode == "native" else ""
             final_path = pages_dir / f"page-{page_num:02d}{suffix}.png"
             if final_path.exists():
                 print(f"Page {page_num}: already exists, skipping. ({final_path})")
@@ -1093,7 +1120,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, text_mode, aspect_ratio, cli_model=args.model, composite_only=args.composite_only)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:

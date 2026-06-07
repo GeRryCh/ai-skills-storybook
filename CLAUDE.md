@@ -118,7 +118,8 @@ uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
 `--aspect-ratio RATIO` (override from story.json; unset → model chooses),
-`--text-mode overlay|native|long`, `--model gemini-3.1-flash-image|gemini-3-pro-image`
+`--text-mode overlay|native|long` (override for entire run; precedence: CLI > per-page `text_mode` field > book `text_mode` field > native default; per-page `text_mode` lets individual pages differ from the book default without this flag),
+`--model gemini-3.1-flash-image|gemini-3-pro-image`
 (override per-page/book model for one run; precedence: CLI > page field > story field > flash default),
 `--saved-formats pdf epub|none` (override story.json
 `saved_formats`; default when neither set: all formats),
@@ -258,8 +259,12 @@ launches a tiny local HTTP server (127.0.0.1 only) and opens `assets/editor.html
 the browser. It provides a visual form for `story.json` — book settings, cast with
 photo previews, palette swatches, and a page-by-page editor with hero-ordered cast
 selection, render-status badges, **per-page image preview, generation history browser,
-a regenerate button, and a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
-and hit Regenerate to retry that page on the stronger model without touching the rest). No API cost for browsing/selecting; regenerate triggers one
+a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
+and hit Regenerate to retry that page on the stronger model without touching the rest), and
+**a per-page text mode picker** (unset = same as book; override lets individual pages render in a
+different mode than the book default). Fields that have no effect given the current effective text mode
+are greyed-out (user may still pre-set them); the `floating` placement option is hard-hidden
+when not in native mode. No API cost for browsing/selecting; regenerate triggers one
 paid Gemini call per page.
 
 ```bash

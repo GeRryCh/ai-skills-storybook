@@ -65,7 +65,7 @@ Output naming (`{title}` = slug of the book title from story.json):
 | native  | `{title}-native.pdf`       | `{title}-native.epub`       |
 | long    | `{title}-long.pdf`         | `{title}-long.epub`         |
 
-`--text-mode` defaults to story.json's `text_mode` field (default `native` when unset). Files are written next to `story.json`.
+`--text-mode` overrides every page for this run (default: per-page/book-level story fields, then `native`). Per-page `text_mode` fields in `story.json` are honored for file selection (e.g. one long-mode page in an otherwise native book picks up its `page-NN-long.png` pair while other pages use `page-NN-native.png`). The output filename suffix (`-native`, `-long`, or plain) reflects the book-level mode, not per-page overrides. Files are written next to `story.json`.
 
 Missing pages emit a warning and are skipped; the output file is still built from the rest.
 
