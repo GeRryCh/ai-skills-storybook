@@ -11,16 +11,24 @@ plain stdlib http.server, bound to 127.0.0.1 only. No image API cost, no
 external dependencies, no build step.
 
 Endpoints:
-  GET  /            editor page
-  GET  /api/story   raw story.json bytes (+ X-Story-Mtime / X-Story-Path headers)
-  PUT  /api/story   validated atomic save (409 if file changed on disk meanwhile,
-                    422 with {errors, warnings} when validation blocks the save)
-  GET  /api/schema  assets/story_schema.json — the client derives enum options,
-                    defaults, and required-field sets from it
-  GET  /api/status  per-page rendered flags (pages/page-NN[-native].png exists)
-                    and per-character style_sheet existence
-  GET  /img?path=…  image preview. Absolute paths are served as-is; relative
-                    paths resolve against the story.json directory.
+  GET  /                      editor page
+  GET  /api/story             raw story.json bytes (+ X-Story-Mtime / X-Story-Path headers)
+  PUT  /api/story             validated atomic save (409 if file changed on disk meanwhile,
+                               422 with {errors, warnings} when validation blocks the save)
+  GET  /api/schema            assets/story_schema.json — the client derives enum options,
+                               defaults, and required-field sets from it
+  GET  /api/status            per-page rendered flags (pages/page-NN[-native].png exists)
+                               and per-character style_sheet existence
+  GET  /api/versions?page=N   list generated versions for a page; pure read (no disk mutation).
+                               Returns {ok, versions: [{id, path, mtime, in_use}], regen: {…}}
+  GET  /img?path=…            image preview. Absolute paths are served as-is; relative
+                               paths resolve against the story.json directory.
+  POST /api/page/regenerate   re-render one page (paid Gemini call). Requires GEMINI_API_KEY
+                               in the editor's environment. Spawns uv run render_book.py
+                               --only N in a background thread; returns 200 immediately.
+                               Poll /api/versions to watch progress.
+  POST /api/page/select       copy a history version into the canonical slot (free, no API
+                               call). Sets the "used in book" image for that page.
 
 /img security stance: serving absolute paths outside the book directory is the
 feature — `ref_image` is documented as absolute paths anywhere on disk. There
@@ -34,6 +42,22 @@ json.dump(indent=2, ensure_ascii=False) — the same formatter
 make_style_sheet.py already uses — preserving key order and unknown keys.
 A trailing newline is preserved iff the file on disk had one.
 
+History layout (pages/ next to story.json):
+  pages/
+    page-NN.png                  ← canonical (consolidation input)
+    history/
+      page-NN/
+        YYYYMMDD-HHMMSS/         ← one generation per stamped dir
+          page-NN.png            (whatever artifacts existed are copied here)
+          raw-page-NN.png
+          …
+
+"Used in book" = whichever history entry's preview-file hash matches the
+canonical preview. No manifest; survives CLI renders and pre-feature books.
+Adopt-on-mutate invariant: before any mutating op (regenerate, select) touches
+the canonical slot, the current canonical is copied into history if its hash
+is not already present there. GETs are pure (no disk mutation).
+
 Usage:
   uv run edit_story.py --story /path/to/story.json [--port 8765] [--no-browser]
 """
@@ -41,9 +65,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import mimetypes
 import os
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -61,6 +90,21 @@ EDITOR_PATH = ASSETS_DIR / "editor.html"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 DEFAULT_PORT = 8765
+
+# render_book.py, resolved relative to this file's position in the skills/ tree:
+#   skills/storybook-story/scripts/ → parents[2] = skills/
+#   → skills/storybook-render/scripts/render_book.py
+RENDER_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "storybook-render"
+    / "scripts"
+    / "render_book.py"
+)
+
+# Per-page regeneration job state, shared across all handler threads.
+# Keys: page_num (int). Values: {"status": "running"|"done"|"error", "error": str|None}
+_regen_jobs: dict = {}
+_regen_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +425,273 @@ def save_story(story: dict, story_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Generation history helpers
+# ---------------------------------------------------------------------------
+
+_STAMP_RE = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
+
+
+def _file_hash(p: Path) -> str:
+    """SHA-256 of a file — used to detect duplicate generations."""
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _page_preview_candidates(num: int) -> list[str]:
+    """Ordered list of preview filenames to probe on disk (overlay > native > long)."""
+    nn = f"{num:02d}"
+    return [
+        f"page-{nn}.png",        # overlay
+        f"page-{nn}-native.png", # native
+        f"page-{nn}-long.png",   # long (body or cover)
+    ]
+
+
+def _canonical_artifact_names(num: int) -> list[str]:
+    """All canonical artifact filenames archived and deleted on regenerate.
+
+    This is the union across all text modes (on-disk mode may differ from
+    story.text_mode when --text-mode was overridden at render time).
+    Per-page bg and shared bg are excluded: bg is copied to history for
+    completeness but never deleted (avoids a repeat paid bg call on regen).
+    """
+    nn = f"{num:02d}"
+    return [
+        f"page-{nn}.png",           # overlay final
+        f"raw-page-{nn}.png",       # overlay raw
+        f"page-{nn}-native.png",    # native
+        f"page-{nn}-long.png",      # long body art / long cover final
+        f"raw-page-{nn}-long.png",  # long cover raw (page 1 only)
+        f"page-{nn}-long-text.png", # long body text page
+    ]
+
+
+def _adopt_artifact_names(num: int) -> list[str]:
+    """Canonical artifacts + per-page bg — everything to copy into history."""
+    return _canonical_artifact_names(num) + [f"page-{num:02d}-long-bg.png"]
+
+
+def _history_dir(pages_dir: Path, num: int) -> Path:
+    return pages_dir / "history" / f"page-{num:02d}"
+
+
+def _list_history_entries(pages_dir: Path, num: int) -> list[dict]:
+    """List history entries for page num, newest first.
+
+    Each dict: {"id": stamp_str, "preview_path": Path, "mtime": float}
+    """
+    hdir = _history_dir(pages_dir, num)
+    if not hdir.is_dir():
+        return []
+    entries = []
+    for stamp_dir in sorted(hdir.iterdir(), reverse=True):
+        if not stamp_dir.is_dir() or not _STAMP_RE.match(stamp_dir.name):
+            continue
+        preview: Path | None = None
+        for name in _page_preview_candidates(num):
+            p = stamp_dir / name
+            if p.is_file():
+                preview = p
+                break
+        if preview is None:
+            continue
+        try:
+            mtime = stamp_dir.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        entries.append({"id": stamp_dir.name, "preview_path": preview, "mtime": mtime})
+    return entries
+
+
+def _adopt_canonical(pages_dir: Path, num: int) -> str | None:
+    """Copy the current canonical artifacts into a new history entry.
+
+    Returns the entry id (timestamp dir name) if something was copied, or the
+    id of an existing matching entry if the hash is already in history, or None
+    if nothing exists on disk to adopt. Does NOT delete canonical files.
+
+    Idempotent: two calls with the same canonical file produce one history entry.
+    """
+    # Find the preview file
+    preview_name: str | None = None
+    for name in _page_preview_candidates(num):
+        if (pages_dir / name).is_file():
+            preview_name = name
+            break
+    if preview_name is None:
+        return None
+
+    try:
+        canonical_hash = _file_hash(pages_dir / preview_name)
+    except OSError:
+        return None
+
+    # Check for existing duplicate
+    for entry in _list_history_entries(pages_dir, num):
+        try:
+            if _file_hash(entry["preview_path"]) == canonical_hash:
+                return entry["id"]
+        except OSError:
+            pass
+
+    # Create a new stamped entry
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    hdir = _history_dir(pages_dir, num)
+    target = hdir / stamp
+    suffix = 0
+    while target.exists():
+        suffix += 1
+        target = hdir / f"{stamp}-{suffix}"
+    target.mkdir(parents=True, exist_ok=True)
+
+    for name in _adopt_artifact_names(num):
+        src = pages_dir / name
+        if src.is_file():
+            try:
+                shutil.copy2(src, target / name)
+            except OSError:
+                pass
+
+    return target.name
+
+
+def _restore_from_history(pages_dir: Path, num: int) -> None:
+    """Copy the most recent history entry back to canonical filenames.
+
+    Called on regen failure so the book isn't left with a hole.
+    """
+    entries = _list_history_entries(pages_dir, num)
+    if not entries:
+        return
+    stamp_dir = _history_dir(pages_dir, num) / entries[0]["id"]
+    for name in _canonical_artifact_names(num):
+        src = stamp_dir / name
+        if src.is_file():
+            try:
+                shutil.copy2(src, pages_dir / name)
+            except OSError:
+                pass
+
+
+def _build_versions_payload(
+    pages_dir: Path, story_dir: Path, num: int
+) -> dict:
+    """Build the {versions, regen} dict returned by GET /api/versions."""
+    nn = f"{num:02d}"
+
+    # Canonical preview (if any)
+    canonical_preview_name: str | None = None
+    for name in _page_preview_candidates(num):
+        if (pages_dir / name).is_file():
+            canonical_preview_name = name
+            break
+
+    canonical_hash: str | None = None
+    if canonical_preview_name:
+        try:
+            canonical_hash = _file_hash(pages_dir / canonical_preview_name)
+        except OSError:
+            pass
+
+    hist = _list_history_entries(pages_dir, num)
+    versions = []
+    canonical_found_in_history = False
+
+    for entry in hist:
+        try:
+            h = _file_hash(entry["preview_path"])
+        except OSError:
+            continue
+        in_use = canonical_hash is not None and h == canonical_hash
+        if in_use:
+            canonical_found_in_history = True
+        try:
+            rel = entry["preview_path"].relative_to(story_dir)
+        except ValueError:
+            rel = entry["preview_path"]
+        versions.append(
+            {
+                "id": entry["id"],
+                "path": str(rel),
+                "mtime": entry["mtime"],
+                "in_use": in_use,
+            }
+        )
+
+    # Canonical exists but not yet in history: prepend pseudo-entry
+    if canonical_preview_name and not canonical_found_in_history:
+        try:
+            mtime = (pages_dir / canonical_preview_name).stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        versions.insert(
+            0,
+            {
+                "id": "current",
+                "path": str(Path("pages") / canonical_preview_name),
+                "mtime": mtime,
+                "in_use": True,
+            },
+        )
+
+    with _regen_lock:
+        regen = dict(_regen_jobs.get(num, {"status": None, "error": None}))
+
+    return {"versions": versions, "regen": regen}
+
+
+def _run_regen(story_path: Path, pages_dir: Path, num: int, env: dict) -> None:
+    """Thread target: invoke render_book.py --only N, then update _regen_jobs.
+
+    On success: adopts the new canonical into history, marks done.
+    On failure: restores the previous canonical from history, marks error.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                str(RENDER_SCRIPT),
+                "--story",
+                str(story_path),
+                "--only",
+                str(num),
+            ],
+            cwd=str(story_path.parent),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+        if result.returncode == 0:
+            _adopt_canonical(pages_dir, num)
+            with _regen_lock:
+                _regen_jobs[num] = {"status": "done", "error": None}
+        else:
+            _restore_from_history(pages_dir, num)
+            stderr_tail = (result.stderr or "").strip()[-800:]
+            with _regen_lock:
+                _regen_jobs[num] = {
+                    "status": "error",
+                    "error": stderr_tail or "render failed (no stderr captured)",
+                }
+    except subprocess.TimeoutExpired:
+        _restore_from_history(pages_dir, num)
+        with _regen_lock:
+            _regen_jobs[num] = {
+                "status": "error",
+                "error": "render timed out after 10 minutes",
+            }
+    except Exception as exc:  # noqa: BLE001
+        _restore_from_history(pages_dir, num)
+        with _regen_lock:
+            _regen_jobs[num] = {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
 
@@ -429,6 +740,8 @@ def make_handler(story_path: Path, schema: dict):
                 )
             elif route == "/api/status":
                 self._get_status()
+            elif route == "/api/versions":
+                self._get_versions(url)
             elif route == "/img":
                 self._get_img(url)
             else:
@@ -487,6 +800,17 @@ def make_handler(story_path: Path, schema: dict):
             self._send_json(
                 200, {"ok": True, "pages": page_status, "cast": cast_status}
             )
+
+        def _get_versions(self, url) -> None:
+            qs = parse_qs(url.query)
+            try:
+                num = int(qs.get("page", [""])[0])
+            except (ValueError, IndexError):
+                self._fail(400, "?page= must be a positive integer")
+                return
+            pages_dir = story_dir / "pages"
+            payload = _build_versions_payload(pages_dir, story_dir, num)
+            self._send_json(200, {"ok": True, **payload})
 
         def _get_img(self, url) -> None:
             path_str = parse_qs(url.query).get("path", [""])[0]
@@ -562,7 +886,146 @@ def make_handler(story_path: Path, schema: dict):
                 },
             )
 
-        do_POST = do_PUT
+        def do_POST(self) -> None:  # noqa: N802
+            route = urlparse(self.path).path
+            if route == "/api/story":
+                self.do_PUT()
+            elif route == "/api/page/regenerate":
+                self._post_regenerate()
+            elif route == "/api/page/select":
+                self._post_select()
+            else:
+                self._fail(404, f"no such POST route: {route}")
+
+        # -- POST helpers ------------------------------------------------------
+
+        def _read_json_body(self):
+            """Read and parse the request body as JSON. Returns (obj, error_str)."""
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            if length <= 0:
+                return None, "empty request body"
+            try:
+                return json.loads(self.rfile.read(length).decode("utf-8")), None
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                return None, f"request body is not valid JSON: {e}"
+
+        def _post_regenerate(self) -> None:
+            body, err = self._read_json_body()
+            if err:
+                self._fail(400, err)
+                return
+            try:
+                num = int(body["page_num"])
+            except (KeyError, ValueError, TypeError):
+                self._fail(400, "body must have page_num (integer)")
+                return
+
+            # GEMINI_API_KEY check — regenerate always triggers a paid call.
+            if not os.environ.get("GEMINI_API_KEY"):
+                self._fail(
+                    400,
+                    "GEMINI_API_KEY is not set in the editor's environment. "
+                    "Restart the editor with the key: "
+                    "GEMINI_API_KEY=your_key uv run edit_story.py --story …",
+                )
+                return
+
+            if not RENDER_SCRIPT.is_file():
+                self._fail(500, f"render script not found: {RENDER_SCRIPT}")
+                return
+
+            # Gate: only one regen per page at a time.
+            with _regen_lock:
+                job = _regen_jobs.get(num, {})
+                if job.get("status") == "running":
+                    self._fail(409, f"regeneration already running for page {num}")
+                    return
+                _regen_jobs[num] = {"status": "running", "error": None}
+
+            pages_dir = story_dir / "pages"
+            pages_dir.mkdir(parents=True, exist_ok=True)
+
+            # Adopt existing canonical into history before deleting it.
+            _adopt_canonical(pages_dir, num)
+
+            # Delete canonical artifacts (except bg files — kept to avoid
+            # a repeat paid bg call; render_book.py skips them when present).
+            for name in _canonical_artifact_names(num):
+                p = pages_dir / name
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+            # Spawn background render thread.
+            env = os.environ.copy()
+            t = threading.Thread(
+                target=_run_regen,
+                args=(story_path, pages_dir, num, env),
+                daemon=True,
+            )
+            t.start()
+
+            self._send_json(200, {"ok": True})
+
+        def _post_select(self) -> None:
+            body, err = self._read_json_body()
+            if err:
+                self._fail(400, err)
+                return
+            try:
+                num = int(body["page_num"])
+                version = str(body["version"])
+            except (KeyError, ValueError, TypeError):
+                self._fail(400, "body must have page_num (int) and version (str)")
+                return
+
+            # Gate: select and regen's restore both mutate the canonical slot.
+            with _regen_lock:
+                job = _regen_jobs.get(num, {})
+                if job.get("status") == "running":
+                    self._fail(
+                        409,
+                        f"regeneration is running for page {num} — "
+                        "try again after it completes",
+                    )
+                    return
+
+            pages_dir = story_dir / "pages"
+
+            # "current" pseudo-entry means canonical is already correct — no-op.
+            if version == "current":
+                payload = _build_versions_payload(pages_dir, story_dir, num)
+                self._send_json(200, {"ok": True, **payload})
+                return
+
+            # Validate stamp format (no path traversal).
+            if not _STAMP_RE.match(version):
+                self._fail(400, f"invalid version id: {version!r}")
+                return
+
+            stamp_dir = _history_dir(pages_dir, num) / version
+            if not stamp_dir.is_dir():
+                self._fail(404, f"version {version!r} not found for page {num}")
+                return
+
+            # Adopt current canonical before overwriting it.
+            _adopt_canonical(pages_dir, num)
+
+            # Copy history entry artifacts to canonical names.
+            for name in _canonical_artifact_names(num):
+                src = stamp_dir / name
+                if src.is_file():
+                    try:
+                        shutil.copy2(src, pages_dir / name)
+                    except OSError:
+                        pass
+
+            payload = _build_versions_payload(pages_dir, story_dir, num)
+            self._send_json(200, {"ok": True, **payload})
 
     return EditorHandler
 

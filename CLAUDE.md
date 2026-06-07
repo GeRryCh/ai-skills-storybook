@@ -224,13 +224,18 @@ low-detail safe zone for this overlay.
 launches a tiny local HTTP server (127.0.0.1 only) and opens `assets/editor.html` in
 the browser. It provides a visual form for `story.json` — book settings, cast with
 photo previews, palette swatches, and a page-by-page editor with hero-ordered cast
-selection and render-status badges. No API cost, no dependencies beyond Python ≥ 3.10.
+selection, render-status badges, **per-page image preview, generation history browser,
+and a regenerate button**. No API cost for browsing/selecting; regenerate triggers one
+paid Gemini call per page.
 
 ```bash
 uv run skills/storybook-story/scripts/edit_story.py --story /path/to/story.json
 # headless smoke test:
 uv run skills/storybook-story/scripts/edit_story.py --story /path/to/story.json \
   --no-browser --port 8766
+# regenerate requires GEMINI_API_KEY in the editor's env:
+GEMINI_API_KEY=your_key uv run skills/storybook-story/scripts/edit_story.py \
+  --story /path/to/story.json
 ```
 
 Round-trip contract: the editor preserves unknown keys at all levels and uses the same
@@ -240,6 +245,56 @@ Validates against `story_schema.json` before writing, with separate error (block
 warning (non-blocking) tiers. Includes a 409 conflict guard: if `story.json` changes on
 disk while the editor is open (e.g. Stage 2 writes `style_sheet` paths), the save
 returns an error and a Reload button rather than silently clobbering the new content.
+
+### Image manipulation endpoints (PER-41)
+
+Three new server endpoints power per-page image controls:
+
+- **`GET /api/versions?page=N`** — pure read; lists generated versions for page N as
+  `{versions: [{id, path, mtime, in_use}], regen: {status, error}}`. Newest first.
+  `path` values are story-dir-relative and fed straight to `/img?path=…`.
+- **`POST /api/page/regenerate`** body `{page_num}` — archives the current image into
+  history, deletes the canonical file(s), then spawns `uv run render_book.py --only N`
+  in a background thread. Returns 200 immediately; poll `/api/versions` to watch
+  progress. Requires `GEMINI_API_KEY` in the editor's env (checked on start). On
+  render failure, the previous canonical is restored from history so the book is never
+  left with a hole.
+- **`POST /api/page/select`** body `{page_num, version}` — copies a history entry's
+  artifact set into the canonical slot (the "used in book" image). Free, synchronous.
+  Both this endpoint and regenerate gate on a per-page lock (409 if one is running).
+
+### History layout
+
+```
+{story_dir}/pages/
+  page-03.png                 ← canonical (consolidation input, "used in book")
+  raw-page-03.png
+  history/
+    page-03/
+      20260607-143012/        ← one stamped dir per generation
+        page-03.png           ← whatever artifact set existed is archived here
+        raw-page-03.png
+      20260607-150244/
+        …
+```
+
+"Used in book" identity = SHA-256 of the preview file matched against history entries —
+no manifest, no `story.json` field; survives CLI renders and pre-feature books. The
+canonical file IS the consolidation input; `select` = copy into the canonical slot.
+Merge scripts and render skip-logic are unchanged.
+
+**Adopt-on-mutate invariant:** before any mutating op (regenerate, select) touches the
+canonical slot, the current canonical is copied into history if its hash is not already
+present there. GETs (`/api/versions`) are pure — no disk mutation on read.
+
+**Per-page bg preserved across regens:** `page-NN-long-bg.png` is copied to history for
+completeness but never deleted by regenerate, so `render_book.py`'s
+`if not bg_path.exists()` guard reuses it — no surprise extra paid bg call.
+
+**Known limitations:** history is keyed by `page_num`; reordering/deleting pages in the
+editor does not remap `pages/history/page-NN/` (same drift already exists for the
+canonical files). Editor always assumes `pages/` is beside `story.json` (unchanged
+pre-existing assumption).
 
 ## Interactive interview (x-interview annotations, PER-27)
 

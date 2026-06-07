@@ -115,6 +115,32 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 .sf-toggle-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
 .sf-checks{display:flex;gap:12px;align-items:center}
 .sf-checks label{display:flex;gap:4px;align-items:center;font-size:13px;cursor:pointer}
+
+/* ── page image preview + generation history ──────────────────────────── */
+.pg-preview-wrap{margin-bottom:14px}
+.preview-img-area{margin-bottom:4px}
+.preview-img-wrap{position:relative;display:inline-block;max-width:100%}
+.preview-img{max-width:100%;max-height:300px;border-radius:6px;
+  border:1px solid #e2e8f0;display:block;background:#f8fafc}
+.preview-overlay{position:absolute;top:6px;right:6px}
+.inuse-badge{background:#065f46;color:#d1fae5;font-size:11px;padding:2px 8px;
+  border-radius:10px;font-weight:600;pointer-events:none;white-space:nowrap}
+.btn-use-version{background:#f0fdf4;color:#166534;border:1px solid #86efac;
+  font-size:11px;padding:2px 8px;border-radius:10px;cursor:pointer;font-weight:600;
+  white-space:nowrap}
+.btn-use-version:hover{background:#dcfce7}
+.preview-nav{display:flex;align-items:center;gap:6px;margin-top:4px}
+.ver-counter{font-size:12px;color:#64748b;min-width:38px;text-align:center}
+.regen-error{color:#991b1b;font-size:12px;margin-top:4px;background:#fee2e2;
+  border-radius:4px;padding:4px 8px}
+.regen-error pre{white-space:pre-wrap;word-break:break-all;font-size:11px;
+  margin-top:2px;max-height:100px;overflow:auto}
+.preview-actions{display:flex;align-items:center;gap:8px;margin-top:6px}
+.btn-regen{background:#ede9fe;color:#5b21b6;font-size:12px;padding:4px 10px;
+  border-radius:6px;border:none;font-family:inherit;font-weight:500}
+.btn-regen:hover:not(:disabled){background:#ddd6fe;cursor:pointer}
+.btn-regen:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
+.regen-status-inline{font-size:11px;color:#64748b}
 </style>
 </head>
 <body>
@@ -148,6 +174,9 @@ let autoSaveTimer  = null;  // debounce handle
 let saveInFlight   = false; // one PUT at a time
 let savePending    = false; // markDirty fired while saveInFlight
 let autoSavePaused = false; // set on 409 (concurrent writer); cleared only by reload
+// ── Version-history state ───────────────────────────────────────────────────
+const _pageVersionData = new Map(); // page_num → {versions: [...], viewIdx: int}
+const _regenPolls      = new Map(); // page_num → intervalId
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -633,6 +662,14 @@ function buildPageCard(page, i) {
       <span class="toggle">▼</span>
     </div>
     <div class="card-body open" id="page-body-${i}">
+      <div class="pg-preview-wrap">
+        <div id="pg-preview-${page.page_num}" class="preview-img-area"></div>
+        <div class="preview-actions">
+          <button class="btn-regen" id="btn-regen-${page.page_num}"
+            onclick="doRegenerate(${page.page_num})">↻ Render</button>
+          <span class="regen-status-inline" id="regen-status-${page.page_num}"></span>
+        </div>
+      </div>
       <div class="field">
         <label>Text (story text on this page; empty for wordless/cover)</label>
         <textarea rows="3" id="pg-text-${i}">${esc(page.text||'')}</textarea>
@@ -706,6 +743,20 @@ function buildPageCard(page, i) {
 
   // Cast
   renderPageCast(card.querySelector(`#pg-cast-${i}`), page);
+
+  // Preview: if page is rendered or regen is in flight, populate the img area async.
+  const _pnum = page.page_num;
+  const regenBtn = card.querySelector(`#btn-regen-${_pnum}`);
+  if (_regenPolls.has(_pnum) && regenBtn) {
+    regenBtn.disabled = true;
+    regenBtn.textContent = '↻ Rendering…';
+  } else if (renderStatus[String(_pnum)]?.rendered && regenBtn) {
+    regenBtn.textContent = '↻ Regenerate';
+  }
+  if (renderStatus[String(_pnum)]?.rendered || _regenPolls.has(_pnum)) {
+    fetchVersions(_pnum);
+  }
+
   return card;
 }
 
@@ -927,6 +978,198 @@ function renderBook() {
 
   // Saved formats
   renderSavedFormats(b.querySelector('#sf-container'));
+}
+
+// ── Page image preview + generation history ────────────────────────────────
+
+// Render the preview img-area for a given page_num using cached version data
+// and a (possibly partial) API payload.  Called from fetchVersions and from
+// the arrow / select handlers.
+function _renderVersionUI(num, apiData) {
+  const area = document.getElementById(`pg-preview-${num}`);
+  if (!area) return;
+
+  const vd = _pageVersionData.get(num);
+  const versions = (apiData && apiData.versions) || (vd && vd.versions) || [];
+  const viewIdx  = vd ? vd.viewIdx : 0;
+  const regen    = (apiData && apiData.regen) || {};
+
+  if (versions.length === 0) {
+    area.innerHTML = '';
+    return;
+  }
+
+  const v    = versions[Math.min(viewIdx, versions.length - 1)];
+  const n    = versions.length;
+  const buster = encodeURIComponent(v.mtime || '');
+  const imgSrc = `/img?path=${encodeURIComponent(v.path)}&t=${buster}`;
+
+  area.innerHTML =
+    `<div class="preview-img-wrap">` +
+    `<img class="preview-img" src="${esc(imgSrc)}" alt="Page ${num} v${viewIdx+1}"` +
+    ` onerror="this.alt='image not found on disk'">` +
+    `<div class="preview-overlay">` +
+    (v.in_use
+      ? `<span class="inuse-badge">✓ Used in book</span>`
+      : `<button class="btn-use-version" onclick="_clickSelectVersion(${num}, '${esc(v.id)}')">Use in book</button>`) +
+    `</div></div>` +
+    (n > 1
+      ? `<div class="preview-nav">` +
+        `<button class="btn-sm" ${viewIdx <= 0 ? 'disabled' : ''} onclick="_prevVersion(${num})">‹</button>` +
+        `<span class="ver-counter">${viewIdx + 1} / ${n}</span>` +
+        `<button class="btn-sm" ${viewIdx >= n - 1 ? 'disabled' : ''} onclick="_nextVersion(${num})">›</button>` +
+        `</div>`
+      : '') +
+    (regen.status === 'error'
+      ? `<div class="regen-error">⚠ Render failed:<pre>${esc((regen.error || '').slice(-400))}</pre></div>`
+      : '');
+
+  // Keep regen button in sync
+  const btn      = document.getElementById(`btn-regen-${num}`);
+  const statusEl = document.getElementById(`regen-status-${num}`);
+  if (btn) {
+    if (regen.status === 'running') {
+      btn.disabled    = true;
+      btn.textContent = '↻ Rendering…';
+    } else {
+      btn.disabled    = false;
+      btn.textContent = n > 0 ? '↻ Regenerate' : '↻ Render';
+    }
+  }
+  if (statusEl) {
+    statusEl.textContent = regen.status === 'running' ? 'rendering…' : '';
+  }
+}
+
+// Fetch /api/versions for page_num, cache, and update the UI.
+// Pure — does NOT mutate the canonical slot.
+async function fetchVersions(num) {
+  try {
+    const resp = await fetch(`/api/versions?page=${num}`);
+    const data = await resp.json();
+    if (!data.ok) return;
+
+    const versions = data.versions || [];
+    const prev     = _pageVersionData.get(num);
+    // Preserve the user's current scroll position in the history list.
+    const prevIdx  = prev ? prev.viewIdx : -1;
+    const inUseIdx = versions.findIndex(v => v.in_use);
+    let viewIdx = inUseIdx >= 0 ? inUseIdx : 0;
+    if (prevIdx >= 0 && prevIdx < versions.length) viewIdx = prevIdx;
+    _pageVersionData.set(num, {versions, viewIdx});
+
+    _renderVersionUI(num, data);
+
+    // If a poll is running and the regen just finished, stop polling and
+    // update the page's render badge.
+    const status = data.regen && data.regen.status;
+    if (_regenPolls.has(num) && (status === 'done' || status === 'error')) {
+      stopRegenPoll(num);
+      if (status === 'done') {
+        renderStatus[String(num)] = {rendered: true};
+        const cardIdx = (story.pages || []).findIndex(p => p.page_num === num);
+        if (cardIdx >= 0) {
+          editedPages.delete(story.pages[cardIdx]);
+          const badgeEl = document.querySelector(`[data-page-badge="${cardIdx}"]`);
+          if (badgeEl) updatePageBadge(badgeEl, story.pages[cardIdx]);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('fetchVersions failed for page', num, e);
+  }
+}
+
+function startRegenPoll(num) {
+  stopRegenPoll(num);
+  _regenPolls.set(num, setInterval(() => fetchVersions(num), 2000));
+}
+function stopRegenPoll(num) {
+  if (_regenPolls.has(num)) {
+    clearInterval(_regenPolls.get(num));
+    _regenPolls.delete(num);
+  }
+}
+
+// Arrow navigation through the version list.
+function _prevVersion(num) {
+  const vd = _pageVersionData.get(num);
+  if (!vd || vd.viewIdx <= 0) return;
+  vd.viewIdx--;
+  _renderVersionUI(num, {versions: vd.versions, regen: null});
+}
+function _nextVersion(num) {
+  const vd = _pageVersionData.get(num);
+  if (!vd || vd.viewIdx >= vd.versions.length - 1) return;
+  vd.viewIdx++;
+  _renderVersionUI(num, {versions: vd.versions, regen: null});
+}
+
+// "Use in book" button: POST /api/page/select then refresh UI.
+async function _clickSelectVersion(num, versionId) {
+  try {
+    const resp = await fetch('/api/page/select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({page_num: num, version: versionId}),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      alert('Could not select version: ' + (data.error || 'unknown error'));
+      return;
+    }
+    const versions = data.versions || [];
+    const cur      = _pageVersionData.get(num);
+    // Stay on the same position (now marked in_use).
+    _pageVersionData.set(num, {versions, viewIdx: cur ? cur.viewIdx : 0});
+    _renderVersionUI(num, data);
+  } catch (e) {
+    alert('Network error while selecting version: ' + e.message);
+  }
+}
+
+// Regenerate button handler: confirm → flush save → POST regenerate → poll.
+async function doRegenerate(num) {
+  const n = (story.pages || []).find(p => p.page_num === num);
+  const hasVersions = (_pageVersionData.get(num) || {}).versions?.length > 0;
+  const msg = hasVersions
+    ? `Regenerate page ${num}?\n\nThis generates a new image (one paid Gemini call).\nThe current image will be saved to history.`
+    : `Render page ${num}?\n\nThis generates the image (one paid Gemini call).`;
+  if (!confirm(msg)) return;
+
+  // Flush pending auto-save so render_book.py reads the latest image_prompt.
+  if (dirtyPages.size > 0) {
+    await triggerSave(false);
+    if (dirtyPages.size > 0) {
+      alert('Please save your changes first, then try regenerating.');
+      return;
+    }
+  }
+
+  const btn      = document.getElementById(`btn-regen-${num}`);
+  const statusEl = document.getElementById(`regen-status-${num}`);
+  if (btn)      { btn.disabled = true; btn.textContent = '↻ Rendering…'; }
+  if (statusEl) { statusEl.textContent = 'starting…'; }
+
+  try {
+    const resp = await fetch('/api/page/regenerate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({page_num: num}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (btn)      { btn.disabled = false; btn.textContent = hasVersions ? '↻ Regenerate' : '↻ Render'; }
+      if (statusEl) { statusEl.textContent = ''; }
+      alert('Could not start render:\n\n' + (data.error || resp.statusText));
+      return;
+    }
+    startRegenPoll(num);
+  } catch (e) {
+    if (btn)      { btn.disabled = false; btn.textContent = hasVersions ? '↻ Regenerate' : '↻ Render'; }
+    if (statusEl) { statusEl.textContent = ''; }
+    alert('Network error: ' + e.message);
+  }
 }
 
 // ── Full render ────────────────────────────────────────────────────────────
