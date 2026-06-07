@@ -159,8 +159,11 @@ Never rely on auto-extraction: the cast is never guessed from prose.
 
 When the story mentions a **specific named real place** — a landmark, city, or recognizable
 building (e.g. "the Eiffel Tower", "Sherwood Forest's Major Oak", "the Brandenburg Gate")
-— you can find a real photo of that place and use it as a visual reference during rendering.
-This makes the rendered background resemble the actual location.
+— you can download a few real photos of that place to use as references. Stage 2 turns the
+photos into a `style-sheet-{slug}.png` for the place — the same mechanism as characters and
+objects — and Stage 3 renders pages against that sheet (the raw photos are only a fallback).
+This makes the rendered setting resemble the actual location while staying in the book's art
+style.
 
 **Never use this for generic settings** ("a forest", "the beach", "grandma's kitchen").
 Those are described in prose only. When it is unclear whether a place is real and named, ask
@@ -169,20 +172,23 @@ the user along with the other Stage-1 questions.
 #### Availability check (skip gracefully — never fail Stage 1)
 
 This step needs the Perplexity MCP tools (`perplexity_search` etc.). If they are not
-available in this session, skip locations entirely and tell the user once:
+available in this session, skip the photo-download step and tell the user once:
 
 > "Location photo references skipped — Perplexity MCP not configured; the book renders
-> fine without them, places will be drawn from the prompt text alone."
+> fine without them: the place still gets a Stage-2 reference sheet generated from its
+> 'appearance' description alone."
 
 Never block or fail Stage 1 because of a missing MCP.
 
-#### Searching for a photo (per place)
+#### Searching for photos (per place)
 
 Call `perplexity_search` with a query like `"{place name}" photo site:commons.wikimedia.org`.
 
 Prefer **freely-licensed** sources (Wikimedia Commons CC0/PD/CC-BY, or Unsplash public
-domain). Pick a result that links to a Wikimedia Commons file page and note its `File:`
-title (e.g. `File:Tour_Eiffel_Wikimedia_Commons.jpg`).
+domain). Find **about 3 distinct Commons photos** of the place — prefer different angles or
+views (a wide establishing shot, a closer view, a distinctive detail close-up). Distinct
+views give Stage 2 a stronger anchor than a single photo. For each candidate note its
+`File:` title (e.g. `File:Tour_Eiffel_Wikimedia_Commons.jpg`).
 
 **Avoid** using `perplexity_ask` to obtain direct image URLs — it has been observed to
 return hallucinated URLs that return 404. If you do use it as a last resort, the download
@@ -207,28 +213,43 @@ Optionally query the Commons API for the canonical URL and license info:
 https://commons.wikimedia.org/w/api.php?action=query&titles=File:Tour_Eiffel_Wikimedia_Commons.jpg&prop=imageinfo&iiprop=url|extmetadata&format=json
 ```
 
-#### Downloading and validating
+#### Downloading and validating (per photo)
+
+Run `fetch_location.py` once per photo with a numbered output name:
 
 ```bash
+# Photo 1 — wide establishing view
 uv run {skillDir}/scripts/fetch_location.py \
-  --url "https://commons.wikimedia.org/wiki/Special:FilePath/{File-title}?width=1600" \
-  --out {out_dir}/loc-{slug}.jpg
+  --url "https://commons.wikimedia.org/wiki/Special:FilePath/{File-title-1}?width=1600" \
+  --out {out_dir}/loc-{slug}-1.jpg
+
+# Photo 2 — closer view or different angle
+uv run {skillDir}/scripts/fetch_location.py \
+  --url "https://commons.wikimedia.org/wiki/Special:FilePath/{File-title-2}?width=1600" \
+  --out {out_dir}/loc-{slug}-2.jpg
+
+# Photo 3 — distinctive detail or third angle
+uv run {skillDir}/scripts/fetch_location.py \
+  --url "https://commons.wikimedia.org/wiki/Special:FilePath/{File-title-3}?width=1600" \
+  --out {out_dir}/loc-{slug}-3.jpg
 ```
 
-**Naming convention:** `loc-{slug}.jpg`, where slug is the place name lowercased with
-non-alphanumerics replaced by hyphens — same rule as `ref-{char-slug}.png` for crops.
-Example: `loc-eiffel-tower.jpg`, `loc-major-oak.jpg`.
+**Naming convention:** `loc-{slug}-N.jpg` (numbered), where slug is the place name
+lowercased with non-alphanumerics replaced by hyphens — same rule as `ref-{char-slug}.png`
+for crops. Example: `loc-eiffel-tower-1.jpg`, `loc-eiffel-tower-2.jpg`, `loc-major-oak-1.jpg`.
 
 On a non-zero exit code, read the error message and try the next candidate image. The
 script silently overwrites the output file — iteration is free.
 
-After a successful download, **view the file with the Read tool** and confirm:
+After each successful download, **view the file with the Read tool** and confirm:
 - The image shows the **right place**, recognizably.
 - It is **well-framed** (no extreme close-ups or partial views).
 - It contains **no prominent people** — a person in the frame risks being read as a
   character by the render model. If present, pick another image.
 
-If the image is wrong, pick another candidate URL and re-run.
+**Target 3 accepted photos; accept fewer (minimum 1) when Commons lacks enough suitable
+people-free photos — tell the user how many you found. Never pad with wrong or
+people-heavy photos just to reach 3.**
 
 #### Writing to story.json
 
@@ -239,10 +260,22 @@ Add an entry to the top-level `cast` array with `"kind": "location"`:
   "name": "Eiffel Tower",
   "kind": "location",
   "appearance": "iron lattice tower on the Champ de Mars, Paris",
-  "ref_image": "loc-eiffel-tower.jpg",
-  "source_url": "https://commons.wikimedia.org/wiki/File:Tour_Eiffel_Wikimedia_Commons.jpg"
+  "ref_image": [
+    "loc-eiffel-tower-1.jpg",
+    "loc-eiffel-tower-2.jpg",
+    "loc-eiffel-tower-3.jpg"
+  ],
+  "source_url": [
+    "https://commons.wikimedia.org/wiki/File:Tour_Eiffel_Wikimedia_Commons.jpg",
+    "https://commons.wikimedia.org/wiki/File:Eiffel_Tower_from_Trocadero.jpg",
+    "https://commons.wikimedia.org/wiki/File:Paris_Eiffel_Tower_seen_from_the_Seine.jpg"
+  ]
 }
 ```
+
+`source_url` is an array **parallel to `ref_image`** — one Commons file-page URL per
+downloaded photo, same order (license/attribution provenance). Stage 2 generates
+`style-sheet-eiffel-tower.png` from these photos, exactly as for characters and objects.
 
 Then add `"Eiffel Tower"` to the `pages[].cast` array of every page **physically set at
 that place only** — never book-wide. This per-page selection is mandatory: without it,
@@ -251,19 +284,20 @@ docs/future-explorations.md, PER-33).
 
 The page's `image_prompt` must also **name the place** (e.g. "...under the Eiffel Tower...")
 so the render model knows the setting. Use the place **name only** — do not re-describe
-its appearance in the prompt; the location photo (or sheet) is the reference, and prose
+its appearance in the prompt; the location sheet (or photo) is the reference, and prose
 re-description makes the model deviate from it (same rule as character/object entries,
 see **image_prompt rules** below).
 
 #### Cap note
 
-The location photo is the **lowest-priority** reference image within Stage 3's per-model cap (4 flash default / 5 pro):
+The location reference (its Stage-2 sheet, or the first photo as fallback) is the
+**lowest-priority** reference image within Stage 3's per-model cap (4 flash default / 5 pro):
 
-> hero sheet → hero photo → remaining character sheets → object refs → location photo
+> hero sheet → hero photo → remaining character sheets → object refs → location sheet
 
-On pages with 3 or more cast members, the location photo may be dropped from the cap (it
-will be logged — never silently dropped). On scenery-only pages (`cast: []`) the
-location photo is the sole reference image.
+On pages with 3 or more cast members, the location reference may be dropped from the cap
+(it will be logged — never silently dropped). On pages whose `cast` lists only the place
+(no characters or objects), the location sheet is the sole reference image.
 
 ---
 

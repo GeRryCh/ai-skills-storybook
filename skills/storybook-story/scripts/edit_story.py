@@ -412,6 +412,17 @@ def validate_story(
                         warnings.append(
                             f"{where}.style_sheet not found on disk: {sheet}"
                         )
+                src = entry.get("source_url")
+                if src is not None and not (
+                    isinstance(src, str)
+                    or (
+                        isinstance(src, list)
+                        and all(isinstance(u, str) for u in src)
+                    )
+                ):
+                    errors.append(
+                        f"{where}.source_url must be a string or array of strings"
+                    )
 
     # --- pages ----------------------------------------------------------------
     pages = story.get("pages")

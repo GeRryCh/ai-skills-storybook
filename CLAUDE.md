@@ -19,11 +19,12 @@ directory (default: the user's cwd, e.g. this worktree root):
    no API), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
    (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
-2. **storybook-stylesheet** (paid, 1 image call per character) — generates one
-   `style-sheet-{slug}.png` per eligible cast entry from the `cast` array (characters and objects always; kind=location entries with ref_image are skipped — the real-place photo is used directly at render time), writes each
-   entry's `style_sheet` path back into `story.json`. **Approval gate**: show all
-   sheets, get confirmation before rendering — a wrong sheet poisons every page that
-   character appears on.
+2. **storybook-stylesheet** (paid, 1 image call per cast entry) — generates one
+   `style-sheet-{slug}.png` per cast entry from the `cast` array (characters, objects, and
+   locations all get sheets; location sheets are built from the entry's downloaded real-place
+   photos when present, else from `appearance` — PER-50), writes each entry's `style_sheet`
+   path back into `story.json`. **Approval gate**: show all sheets, get confirmation before
+   rendering — a wrong sheet poisons every page that character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the cast entries listed in that page's `cast` field
    (per-page selection, cap 4 flash default / 5 pro; overridable per page or book via the `model` field or `--model` CLI flag), then overlays text. Three text modes:
@@ -163,8 +164,7 @@ Gemini call with `if not raw_path.exists()`. This means:
 ## Key design decision: explicit cast, never prose-scraped
 
 **`image_prompt` references cast by name only (PER-42).** Every entry in `pages[].cast`
-is reference-backed at render time (character/object → style sheet; location → photo or
-sheet). Repeating a cast member's `appearance` prose in the `image_prompt` makes the
+is reference-backed at render time (character/object → style sheet; location → sheet, photo fallback). Repeating a cast member's `appearance` prose in the `image_prompt` makes the
 render model deviate from the reference; name-only is the stronger, more consistent
 signal. Pose, action, expression, and scene description stay in the prompt — only inherent
 appearance (species, colours, outfit, physical traits) is omitted. Non-cast background
@@ -207,25 +207,54 @@ clothing from the sheet, not the hero photo. This locks one outfit per character
 the whole book. To change a character's outfit, edit `appearance`, delete the existing
 style-sheet PNG, and re-run `make_style_sheet.py`.
 
-## Location photo references (PER-38)
+## Location photo references (PER-38, PER-50)
 
-Real named places can contribute a photo reference during page rendering. They are now part of the unified **`cast`** array as entries with `kind: "location"` rather than a separate `locations[]` array.
+Real named places contribute downloaded photo references that Stage 2 turns into a location
+style sheet. They are part of the unified **`cast`** array as entries with `kind:
+"location"` rather than a separate `locations[]` array.
 
-**Schema:** add a cast entry with `kind: "location"`, `name`, `appearance` (place description), and `ref_image` (path to downloaded photo — produces a `kind: "location"` sheet-less entry). Optional `source_url` stores provenance. Pages opt in by listing the place name in `pages[].cast`.
+**Schema:** add a cast entry with `kind: "location"`, `name`, `appearance` (place
+description), and `ref_image` (ARRAY of downloaded photo paths — target 3 distinct
+angles/views, minimum 1; a plain string is also accepted). Optional `source_url` stores
+provenance — an array parallel to `ref_image` (one Commons file-page URL per photo, same
+order) or a single string. Pages opt in by listing the place name in `pages[].cast`.
 
-**Per-page selection is mandatory** to prevent environment bleed (PER-33 lesson: a location photo used book-wide bleeds the place's environment into every page, including pages set elsewhere). Only list the place name on pages physically set there.
+**Per-page selection is mandatory** to prevent environment bleed (PER-33 lesson: a location
+reference used book-wide bleeds the place's environment into every page, including pages set
+elsewhere). Only list the place name on pages physically set there.
 
-**Stage 1 (in-session, free):** the agent detects real named places in the story, calls `perplexity_search` to find a Wikimedia Commons freely-licensed photo, builds a deterministic download URL, and runs `fetch_location.py` to download and validate it. The resulting path goes into the cast entry's `ref_image` field. If the Perplexity MCP is absent, locations are skipped with a user-facing message — Stage 1 never fails over this.
+**Stage 1 (in-session, free):** the agent detects real named places, calls
+`perplexity_search` to find ~3 distinct Wikimedia Commons freely-licensed photos (different
+angles/views preferred), builds a deterministic download URL per photo, and runs
+`fetch_location.py` once per photo (numbered outputs `loc-{slug}-1.jpg`, `-2.jpg`,
+`-3.jpg`), validating each inline (right place, well-framed, no prominent people). Accept
+1-2 when Commons lacks suitable photos (min 1) and tell the user. The resulting paths go
+into the cast entry's `ref_image` array. If the Perplexity MCP is absent, photo gathering
+is skipped with a user-facing message (the place still gets an appearance-only sheet) —
+Stage 1 never fails over this.
 
-**`fetch_location.py`** (`skills/storybook-story/scripts/fetch_location.py`): PEP-723, Pillow + stdlib `urllib`. Validates HTTP status, `content-type: image/*`, decodes with Pillow, checks min edge (≥512px default), downscales to max edge (≤1536px default), mode-normalises to RGB, saves as JPEG. Prints `MEDIA: {out}` for inline preview.
+**`fetch_location.py`** (`skills/storybook-story/scripts/fetch_location.py`): PEP-723,
+Pillow + stdlib `urllib`. Validates HTTP status, `content-type: image/*`, decodes with
+Pillow, checks min edge (≥512px default), downscales to max edge (≤1536px default),
+mode-normalises to RGB, saves as JPEG. Prints `MEDIA: {out}` for inline preview; invoked
+once per photo (PER-50).
 
-**Stage 2 policy:** `make_style_sheet.py` **skips** sheet generation for `kind=location` entries that carry a `ref_image` (the real-place photo is the render reference; no style sheet generated). Generates a location reference sheet only when no `ref_image` is set (fictional recurring place, from `appearance`).
+**Stage 2 policy (changed in PER-50):** `make_style_sheet.py` generates a sheet for
+**every** location entry — from the real-place photos in `ref_image` when present
+(architecture/landmarks/geography anchored, rendered in the book style), from `appearance`
+alone otherwise (fictional recurring place). The sheet is the render reference; the raw
+photo is only the render-time fallback. Note for pre-PER-50 books: re-running Stage 2 on a
+story whose location carried only a photo makes one extra paid call and writes `style_sheet`;
+render remains backward-compatible via the photo fallback for books never re-sheeted.
 
 **Cap priority in `collect_input_images` (render_book.py):**
 
-> hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → **location refs (lowest, first to drop)**
+> hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → **location refs (sheet, or photo fallback — lowest, first to drop)**
 
-The location reference is appended last and is the first to be dropped when the per-model cap is reached (4 flash default / 5 pro). Drops are logged, never silent. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
+The location reference is appended last and is the first to be dropped when the per-model
+cap is reached (4 flash default / 5 pro). Drops are logged, never silent. On pages whose
+`cast` lists only the place (no characters or objects), the location reference is the sole
+reference image (a page with `cast: []` sends no references at all).
 
 **Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds. Keep label wording in sync with the system prompt's "kind" vocabulary:
 

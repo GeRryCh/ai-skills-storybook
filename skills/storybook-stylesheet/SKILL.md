@@ -34,19 +34,20 @@ If `story.json` is missing, run **storybook-story** first. If the `cast` array i
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-This makes **one Gemini image call per eligible cast entry** to produce individual PNGs
-(`style-sheet-{name}.png`) — one sheet per entry, no combined cast sheet. Eligibility:
-characters (`kind` absent or `"character"`) and objects (`kind: "object"`) always get a
-sheet; `kind: "location"` entries with a `ref_image` are skipped (the real-place photo is
-the render reference, no sheet generated); `kind: "location"` entries without a `ref_image`
-generate a sheet from their `appearance`. Each sheet shows that cast member alone at
-multiple angles. Reference images are used as input: only that entry's own `ref_image` (a
-single path or an array of paths — **every path must be a single-person image**; if the
-source photo was a group photo, use the per-person crop produced in Stage 1, not the
-original), capped at 5 (the Gemini 3 Pro Image character-lane limit). There is no shared
-global pool — refs are mapped per entry in Stage 1, so one character's photo never bleeds
-into another's sheet. The script writes each entry's `style_sheet` path back into the
-`cast` array in `story.json`.
+This makes **one Gemini image call per cast entry** to produce individual PNGs
+(`style-sheet-{name}.png`) — one sheet per entry, no combined cast sheet. **Every cast
+entry gets a sheet**: characters (`kind` absent or `"character"`), objects (`kind:
+"object"`), and locations (`kind: "location"`). Location sheets are generated from the
+entry's downloaded real-place photo(s) in `ref_image` (Stage 1, PER-50) when present —
+preserving the place's recognisable architecture, landmarks, and geography in the book's art
+style — or from `appearance` alone for fictional places. Each sheet shows that cast member
+alone at multiple angles. Reference images are used as input: only that entry's own
+`ref_image` (a single path or an array of paths — **every path must be a single-person
+image** for characters; if the source photo was a group photo, use the per-person crop
+produced in Stage 1, not the original), capped at 5 (the Gemini 3 Pro Image
+character-lane limit). There is no shared global pool — refs are mapped per entry in Stage
+1, so one character's photo never bleeds into another's sheet. The script writes each
+entry's `style_sheet` path back into the `cast` array in `story.json`.
 
 **Outfit lock.** Each sheet renders the character in exactly one canonical outfit —
 taken from the character's `appearance` description, never from the reference photos

@@ -13,12 +13,13 @@ Reads story.json, calls the Gemini image API once per eligible cast entry to
 produce individual PNGs (style-sheet-{slug}.png), then writes each entry's
 style_sheet path back into story.json.
 
-Eligible entries:
-  kind=character — always generates a sheet (outfit-locked, face/hair likeness).
-  kind=object    — always generates a sheet (multi-angle, distinguishing features).
-  kind=location  — generates a sheet ONLY when no ref_image is set (fictional
-                   recurring place). Entries with ref_image use the real-place
-                   photo directly at render time (PER-38 flow) and are skipped here.
+Eligible entries (every cast entry gets a sheet):
+  kind=character — outfit-locked, face/hair likeness from ref_image photos.
+  kind=object    — multi-angle, distinguishing features.
+  kind=location  — generated from the entry's real-place ref_image photo(s)
+                   (downloaded in Stage 1, PER-50) and/or 'appearance'. The
+                   sheet is the render reference; the raw photo remains the
+                   render-time fallback when no sheet exists.
 
 Idempotent: skips entries whose style-sheet-{slug}.png already exists. To force
 a regenerate for one entry, delete that entry's file and re-run.
@@ -546,16 +547,6 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-
-        # kind=location with a real-place photo: skip sheet generation.
-        # The photo is sent directly at render time (PER-38 flow).
-        if kind == "location" and entry.get("ref_image"):
-            print(
-                f"Skipping {name!r} (location with photo reference) — the real-place "
-                f"photo is the render reference; no sheet is generated. "
-                f"Remove ref_image to generate a sheet from 'appearance' instead."
-            )
-            continue
 
         slug = char_slug(name or "entry", used_slugs)
         target = out_dir / f"style-sheet-{slug}.png"

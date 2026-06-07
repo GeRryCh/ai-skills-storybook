@@ -20,8 +20,8 @@
       "name": "Gazelle Valley",
       "kind": "location",
       "appearance": "rocky Jerusalem hillside valley with dry golden scrub, winding dusty paths, wild gazelles roaming freely, and stone neighbourhoods on the surrounding hills",
-      "ref_image": "refs/loc-gazelle-valley.jpg",
-      "source_url": "https://commons.wikimedia.org/wiki/File:Gazelle-Valley-093.jpg"
+      "ref_image": ["refs/loc-gazelle-valley.jpg"],
+      "source_url": ["https://commons.wikimedia.org/wiki/File:Gazelle-Valley-093.jpg"]
     }
   ],
   "text_mode": "overlay",

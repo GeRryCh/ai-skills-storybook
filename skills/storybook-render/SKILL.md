@@ -72,20 +72,23 @@ For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png`
 
 ---
 
-## Location photo references
+## Location references
 
 If `story.json` has `cast` entries with `kind: "location"` and a page lists one of those
-names in its `pages[].cast` array, that place's `ref_image` photo is sent as an additional
-reference image with the **lowest** priority within the per-model cap (4 flash default / 5 pro):
+names in its `pages[].cast` array, that place's Stage-2 reference sheet (`style_sheet`) is
+sent as an additional reference image — the same mechanism as characters and objects. When
+the entry has no sheet (e.g. a book rendered before Stage 2 was re-run with PER-50), the
+first `ref_image` photo is sent as a fallback instead (logged). Location references take
+the **lowest** priority within the per-model cap (4 flash default / 5 pro):
 
-> hero sheet → hero photo → remaining character sheets → object refs → **location photo**
+> hero sheet → hero photo → remaining character sheets → object refs → **location ref (sheet, or photo fallback)**
 
-Anything past the cap is logged (never silently dropped). On scenery-only pages
-(`"cast": []`) the location photo is the sole reference image.
+Anything past the cap is logged (never silently dropped). On pages whose `cast` lists only
+the place (no characters or objects), the location reference is the sole reference image.
 
 Each reference is sent with a short identifying note in the Gemini call so the model knows
-a location photo is the setting, not a character. Unknown locations and missing files
-degrade to a logged warning and skip — they never fail the render.
+a location sheet or photo is the setting, not a character. Unknown locations and missing
+files degrade to a logged warning and skip — they never fail the render.
 
 ---
 

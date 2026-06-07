@@ -420,8 +420,9 @@ def collect_input_images(
                   facial likeness. CONVENTION: author the hero/child first.
       object    — its reference sheet; falls back to its first ref_image photo
                   when no sheet exists.
-      location  — its reference sheet when one exists (photo-less fictional
-                  place); otherwise its ref_image photo (PER-38 real-place flow).
+      location  — its reference sheet (Stage 2 generates one for every location,
+                  from its real-place photos and/or 'appearance' — PER-50); falls
+                  back to its first ref_image photo when no sheet exists yet.
 
     Priority order into the budget: hero sheet → hero photo → remaining character
     sheets (page order) → object refs (page order) → location refs (page order,
@@ -1143,15 +1144,9 @@ def main() -> None:
         print("ERROR: No pages found in story.json", file=sys.stderr)
         sys.exit(1)
 
-    # Warn if no style sheets have been generated yet for sheet-eligible cast entries.
+    # Warn if no style sheets have been generated yet (every cast entry is sheetable).
     cast = story.get("cast", [])
-    sheetable = [
-        c for c in cast
-        if not (
-            (c.get("kind") or "character") == "location" and c.get("ref_image")
-        )
-    ]
-    if sheetable and not any(c.get("style_sheet") for c in sheetable):
+    if cast and not any(c.get("style_sheet") for c in cast):
         print("Warning: no style_sheet paths found in story.json's cast.")
         print("Run make_style_sheet.py first for better consistency.")
         print()

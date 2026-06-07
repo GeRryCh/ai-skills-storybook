@@ -706,13 +706,7 @@ function renderSheetPreview(container, char) {
   container.innerHTML = '';
   const sheet = char.style_sheet;
   if (!sheet) {
-    const k = char.kind || 'character';
-    const hasPhoto = char.ref_image && (typeof char.ref_image === 'string' ? char.ref_image : char.ref_image.length > 0);
-    if (k === 'location' && hasPhoto) {
-      container.innerHTML = '<span style="color:#94a3b8;font-size:12px">Uses photo reference — no sheet generated</span>';
-    } else {
-      container.innerHTML = '<span style="color:#94a3b8;font-size:12px">Not generated yet (run Stage 2)</span>';
-    }
+    container.innerHTML = '<span style="color:#94a3b8;font-size:12px">Not generated yet (run Stage 2)</span>';
     return;
   }
   // Check status data

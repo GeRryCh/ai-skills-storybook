@@ -6,15 +6,16 @@
 """
 Download and validate a real-place reference photo for story locations.
 
-Stage 1 finds a suitable image URL via the Perplexity MCP (preferred:
-Wikimedia Commons freely-licensed photos), then calls this script to
-download and verify it before adding the path as `ref_image` on a cast
-entry with `"kind": "location"` in story.json.
+Stage 1 finds suitable image URLs via the Perplexity MCP (preferred:
+Wikimedia Commons freely-licensed photos), then calls this script once
+per photo to download and verify each one before adding the paths to
+the `ref_image` array of a cast entry with `"kind": "location"` in
+story.json. Target: ~3 distinct angles/views per place (minimum 1).
 
 Usage:
   uv run fetch_location.py \
       --url "https://commons.wikimedia.org/wiki/Special:FilePath/Tour_Eiffel_Wikimedia_Commons.jpg?width=1600" \
-      --out {out_dir}/loc-eiffel-tower.jpg
+      --out {out_dir}/loc-eiffel-tower-1.jpg
 
 Arguments:
   --url URL       Direct image URL (http/https). For Wikimedia Commons, use
@@ -31,9 +32,11 @@ Arguments:
                   Keeps the payload small for the Gemini API call.
   --timeout N     HTTP socket timeout in seconds (default: 30).
 
-Naming convention: loc-{slug}.jpg in the output directory, where slug is the
-place name lowercased with non-alphanumerics replaced by hyphens — same rule
-as ref-{char-slug}.png for character crops.
+Naming convention: loc-{slug}-N.jpg (numbered, N = 1, 2, 3 …) in the output
+directory, where slug is the place name lowercased with non-alphanumerics
+replaced by hyphens — same rule as ref-{char-slug}.png for character crops.
+Stage 1 invokes this script once per photo; all numbered paths go into the
+`ref_image` array of the location cast entry.
 
 After a successful download, view the result with the Read tool to confirm:
   - The image shows the right place.
@@ -93,7 +96,7 @@ def fetch_location(url: str, out_path: str | Path, *, min_edge: int, max_edge: i
     if suffix not in _ALLOWED_SUFFIXES:
         _fail(
             f"--out path must end in .jpg, .jpeg, or .png; got {out_path.suffix!r}.\n"
-            f"  Tip: use loc-{{slug}}.jpg as the naming convention.",
+            f"  Tip: use loc-{{slug}}-N.jpg as the naming convention (numbered per photo).",
             code=2,
         )
 
