@@ -633,15 +633,13 @@ function buildPageCard(page, i) {
       <span class="toggle">▼</span>
     </div>
     <div class="card-body open" id="page-body-${i}">
-      <div class="grid2">
-        <div class="field">
-          <label>Text (story text on this page; empty for wordless/cover)</label>
-          <textarea rows="3" id="pg-text-${i}">${esc(page.text||'')}</textarea>
-        </div>
-        <div class="field">
-          <label>Image prompt (name characters + style; no safe-zone language)</label>
-          <textarea rows="3" id="pg-prompt-${i}">${esc(page.image_prompt||'')}</textarea>
-        </div>
+      <div class="field">
+        <label>Text (story text on this page; empty for wordless/cover)</label>
+        <textarea rows="3" id="pg-text-${i}">${esc(page.text||'')}</textarea>
+      </div>
+      <div class="field">
+        <label>Image prompt (name characters + style; no safe-zone language)</label>
+        <textarea rows="3" id="pg-prompt-${i}">${esc(page.image_prompt||'')}</textarea>
       </div>
       <div class="field">
         <label>Cast on this page <small style="color:#94a3b8">(first character-kind entry = hero — also contributes reference photo at render)</small></label>
