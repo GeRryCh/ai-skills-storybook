@@ -386,6 +386,42 @@ checkbox is run-time-only (never written to story.json; `saved_formats` schema s
 Run flushes unsaved edits first (same dirty-check as the page regenerate button) so scripts
 read the latest story.json.
 
+### Re-generate All Pages button (PER-53)
+
+A **"↻ Re-generate All Pages"** button sits next to the Consolidate Story button below the
+Pages section. It re-renders the entire book in one click — useful after changing book-level
+settings (style_guide, model, text_mode, resolution, aspect_ratio) that make every page stale.
+
+Cost: N paid Gemini calls (one per page), same as clicking per-page Regenerate N times.
+Current images are archived to history before deletion.
+
+**Note:** style sheets are NOT regenerated — re-run Stage 2 first if style_guide changed and
+the sheets need to reflect the new settings.
+
+**Long-mode books:** a second confirm offers to also regenerate the shared text-page background
+(`pages/text-bg-long.png`). Accept → the bg is archived to `pages/history/text-bg-long-<stamp>.png`
+and the next render regenerates it fresh (+1 paid call). Cancel → bg preserved (per-page parity).
+Per-page dedicated backgrounds (`page-NN-long-bg.png`) are also archived+deleted when `fresh_bg=true`.
+
+Two new server endpoints (paid, require `GEMINI_API_KEY`, global regen-all lock):
+
+- **`POST /api/regenerate-all`** body `{fresh_bg: bool}` (optional, default false) — archives and
+  deletes every page's canonical artifacts (bg preserved unless `fresh_bg=true`), then spawns a
+  single `render_book.py` run with no `--only` (pages render concurrently via asyncio; 30 min
+  timeout). Sets `_regen_jobs[num] = "running"` for every page immediately — existing per-page
+  regenerate/recomposite/select endpoints 409 via their existing lock checks; consolidate 409s
+  via its existing `any(running)` check. Returns 200 immediately with `{ok, total}`.
+  409 if regen-all, consolidation, or any per-page regen is already running.
+- **`GET /api/regenerate-all/status`** — returns `{ok, status, error, total, done, pages}`.
+  `done` is computed from file existence (not `_regen_jobs`, which all flip at subprocess exit).
+  `pages` maps each page_num to its `_regen_jobs` entry — used by the client to clear
+  per-page edit state after a successful run.
+
+**Worker sweep:** after the subprocess exits (any exit path), each page is assessed by file
+existence: preview found → adopt into history + mark done; not found → restore from history
+(safe on empty history) + mark error. This keeps paid art that rendered successfully even if
+rc≠0 (partial failure); missing pages are never left as holes.
+
 ### Smart regenerate buttons (PER-47)
 
 The editor tracks which story.json fields changed per page since the last completed render

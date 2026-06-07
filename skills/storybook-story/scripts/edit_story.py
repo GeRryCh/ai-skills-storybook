@@ -137,6 +137,14 @@ _regen_lock = threading.Lock()
 # shape: {"status": "idle"|"running"|"done"|"error", "results": [...]}
 _consolidate_job: dict = {"status": "idle", "results": []}
 
+# Single global regenerate-all job, guarded by _regen_lock. Mutate in place only.
+# shape: {"status": "idle"|"running"|"done"|"error", "error": str|None, "pages": [int]}
+_regen_all_job: dict = {"status": "idle", "error": None, "pages": []}
+
+# Timeout for a full-book render: pages run concurrently, so wall-clock ≈ slowest page
+# plus retries.  30 minutes should be generous even for large books.
+REGEN_ALL_TIMEOUT = 1800
+
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -959,6 +967,73 @@ def _run_consolidate(story_path: Path, formats: list[str], env: dict) -> None:
         _consolidate_job["status"] = "done" if all_ok else "error"
 
 
+def _run_regen_all(
+    story_path: Path,
+    pages_dir: Path,
+    nums: list[int],
+    env: dict,
+) -> None:
+    """Thread target: invoke render_book.py with no --only (all pages concurrently).
+
+    After the subprocess exits (for any reason), sweep every page in nums:
+    - If a preview file exists  → adopt canonical into history, mark done.
+    - Otherwise                 → restore from history (safe on empty history), mark error.
+
+    Deliberate divergence from _run_regen (which restores purely on rc≠0): a long
+    page whose art rendered but whose text page failed still has its preview present,
+    so the sweep marks it done and keeps the paid art — the text page is rebuildable
+    for free via the recomposite button.
+
+    Lock discipline: acquire _regen_lock only to mutate state; never hold it across
+    subprocess.run (the 30-minute timeout would deadlock status polls).
+    """
+    result = None
+    err_tail = ""
+    try:
+        cmd = [
+            "uv",
+            "run",
+            str(RENDER_SCRIPT),
+            "--story",
+            str(story_path),
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=str(story_path.parent),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=REGEN_ALL_TIMEOUT,
+        )
+        stderr_tail = (result.stderr or "").strip()[-800:]
+        stdout_tail = (result.stdout or "").strip()[-800:]
+        err_tail = stderr_tail or stdout_tail or ""
+    except subprocess.TimeoutExpired:
+        err_tail = f"render timed out after {REGEN_ALL_TIMEOUT // 60} minutes"
+    except Exception as exc:  # noqa: BLE001
+        err_tail = str(exc)
+
+    # Uniform outcome sweep: determine per-page success from file existence.
+    for num in nums:
+        candidates = _page_preview_candidates(num)
+        rendered = any((pages_dir / name).is_file() for name in candidates)
+        if rendered:
+            _adopt_canonical(pages_dir, num)
+            with _regen_lock:
+                _regen_jobs[num] = {"status": "done", "error": None}
+        else:
+            _restore_from_history(pages_dir, num)
+            page_err = err_tail or "page failed to render"
+            with _regen_lock:
+                _regen_jobs[num] = {"status": "error", "error": page_err}
+
+    # Aggregate job status.
+    rc = result.returncode if result is not None else -1
+    with _regen_lock:
+        _regen_all_job["status"] = "done" if rc == 0 else "error"
+        _regen_all_job["error"] = err_tail or None
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -1012,6 +1087,8 @@ def make_handler(story_path: Path, schema: dict):
                 self._get_versions(url)
             elif route == "/api/consolidate/status":
                 self._get_consolidate_status()
+            elif route == "/api/regenerate-all/status":
+                self._get_regenerate_all_status()
             elif route == "/img":
                 self._get_img(url)
             else:
@@ -1186,6 +1263,8 @@ def make_handler(story_path: Path, schema: dict):
                 self._post_select()
             elif route == "/api/consolidate":
                 self._post_consolidate()
+            elif route == "/api/regenerate-all":
+                self._post_regenerate_all()
             else:
                 self._fail(404, f"no such POST route: {route}")
 
@@ -1483,6 +1562,186 @@ def make_handler(story_path: Path, schema: dict):
                 status = _consolidate_job["status"]
                 results = list(_consolidate_job["results"])  # shallow copy for thread safety
             self._send_json(200, {"ok": True, "status": status, "results": results})
+
+        def _get_regenerate_all_status(self) -> None:
+            """Return current regenerate-all job state (cheap poll target for the client).
+
+            Response shape:
+            {
+              "ok": true,
+              "status": "idle"|"running"|"done"|"error",
+              "error": str|null,
+              "total": N,
+              "done": M,       # computed from file existence; lags until sweep completes
+              "pages": {"3": {"status": "running"|"done"|"error", "error": str|null}, …}
+            }
+            done is derived from file existence rather than _regen_jobs because all per-page
+            job entries flip from "running" to their final state only at the end of the
+            subprocess (capture_output=True buffers to EOF — no streaming mid-run).
+            """
+            with _regen_lock:
+                status = _regen_all_job["status"]
+                error  = _regen_all_job["error"]
+                nums   = list(_regen_all_job["pages"])
+                page_jobs = {
+                    str(n): dict(_regen_jobs.get(n, {"status": None, "error": None}))
+                    for n in nums
+                }
+
+            pages_dir = story_dir / "pages"
+            done = sum(
+                1
+                for n in nums
+                if any(
+                    (pages_dir / f"page-{n:02d}{sfx}.png").exists()
+                    for sfx in ("", "-native", "-long")
+                )
+            )
+
+            self._send_json(200, {
+                "ok": True,
+                "status": status,
+                "error": error,
+                "total": len(nums),
+                "done": done,
+                "pages": page_jobs,
+            })
+
+        def _post_regenerate_all(self) -> None:
+            """Regenerate every page in the book with a single render_book.py run.
+
+            Body (optional JSON): {"fresh_bg": bool}
+            fresh_bg=true additionally deletes the shared text-bg-long.png and any
+            per-page dedicated backgrounds so the full-book run regenerates them fresh.
+            Useful after a style_guide change in long-mode books.
+
+            Returns 200 {"ok": true, "total": N} immediately; poll
+            GET /api/regenerate-all/status for progress.
+
+            Interlocks (all 409):
+            - consolidation is running
+            - this regenerate-all is already running
+            - any per-page regen/recomposite is running
+            """
+            # Optional body (fresh_bg flag); no body is also fine.
+            body, err = self._read_json_body()
+            fresh_bg = False
+            if body and not err:
+                fresh_bg = bool(body.get("fresh_bg", False))
+
+            # GEMINI_API_KEY check — regenerate-all always triggers paid calls.
+            if not os.environ.get("GEMINI_API_KEY"):
+                self._fail(
+                    400,
+                    "GEMINI_API_KEY is not set in the editor's environment. "
+                    "Restart the editor with the key: "
+                    "GEMINI_API_KEY=your_key uv run edit_story.py --story …",
+                )
+                return
+
+            if not RENDER_SCRIPT.is_file():
+                self._fail(500, f"render script not found: {RENDER_SCRIPT}")
+                return
+
+            # Read story.json for page list.
+            try:
+                with story_path.open(encoding="utf-8") as f:
+                    s = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                self._fail(500, f"cannot read story.json: {e}")
+                return
+
+            nums: list[int] = []
+            seen: set[int] = set()
+            for page in s.get("pages", []):
+                n = page.get("page_num")
+                if isinstance(n, int) and not isinstance(n, bool) and n not in seen:
+                    nums.append(n)
+                    seen.add(n)
+            if not nums:
+                self._fail(400, "story has no pages to render")
+                return
+
+            # Gate: must not conflict with other running jobs.
+            with _regen_lock:
+                if _consolidate_job["status"] == "running":
+                    self._fail(409, "consolidation is running — wait for it to finish before re-rendering")
+                    return
+                if _regen_all_job["status"] == "running":
+                    self._fail(409, "regenerate-all is already running")
+                    return
+                if any(j.get("status") == "running" for j in _regen_jobs.values()):
+                    self._fail(409, "a page render is running — wait for it to finish before re-rendering all")
+                    return
+                # Claim the job slot and mark every page as running.
+                _regen_all_job["status"] = "running"
+                _regen_all_job["error"] = None
+                _regen_all_job["pages"][:] = nums
+                for n in nums:
+                    _regen_jobs[n] = {"status": "running", "error": None}
+
+            pages_dir = story_dir / "pages"
+
+            # Archive and delete each page's canonical artifacts, then optionally wipe bg files.
+            # Wrapped in try/except: if this raises, the job state is already "running" and
+            # everything stays 409-locked until restart — reset it on failure.
+            try:
+                pages_dir.mkdir(parents=True, exist_ok=True)
+
+                for n in nums:
+                    # Archive current canonical into history before deleting.
+                    _adopt_canonical(pages_dir, n)
+                    # Delete canonical artifacts (bg files excluded — preserved by default
+                    # to avoid a repeat paid bg call, same as per-page regenerate).
+                    for name in _canonical_artifact_names(n):
+                        p = pages_dir / name
+                        try:
+                            p.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+
+                if fresh_bg:
+                    # Delete per-page dedicated backgrounds (already archived via _adopt_canonical
+                    # which includes page-NN-long-bg.png in _adopt_artifact_names).
+                    for n in nums:
+                        bg = pages_dir / f"page-{n:02d}-long-bg.png"
+                        try:
+                            bg.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    # Archive and delete the shared text-page background (no existing history
+                    # infra — move into pages/history/ with a timestamp for manual recovery).
+                    shared_bg = pages_dir / "text-bg-long.png"
+                    if shared_bg.is_file():
+                        try:
+                            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                            bg_hist = pages_dir / "history" / f"text-bg-long-{stamp}.png"
+                            bg_hist.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(shared_bg, bg_hist)
+                            shared_bg.unlink(missing_ok=True)
+                        except OSError:
+                            pass  # best-effort; render_book.py will regenerate it
+
+            except Exception as exc:  # noqa: BLE001
+                # Reset job state so the editor isn't locked until restart.
+                with _regen_lock:
+                    _regen_all_job["status"] = "error"
+                    _regen_all_job["error"] = str(exc)
+                    for n in nums:
+                        _regen_jobs.pop(n, None)
+                self._fail(500, f"failed to prepare pages for regeneration: {exc}")
+                return
+
+            # Spawn background render thread.
+            env = os.environ.copy()
+            t = threading.Thread(
+                target=_run_regen_all,
+                args=(story_path, pages_dir, nums, env),
+                daemon=True,
+            )
+            t.start()
+
+            self._send_json(200, {"ok": True, "total": len(nums)})
 
     return EditorHandler
 

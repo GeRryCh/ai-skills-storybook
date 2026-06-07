@@ -230,6 +230,9 @@ let autoSavePaused = false; // set on 409 (concurrent writer); cleared only by r
 // ── Version-history state ───────────────────────────────────────────────────
 const _pageVersionData = new Map(); // page_num → {versions: [...], viewIdx: int, fast: {...}}
 const _regenPolls      = new Map(); // page_num → intervalId
+// ── Regenerate-all state ─────────────────────────────────────────────────────
+let _regenAllPoll    = null;  // intervalId while a regenerate-all run is in progress
+let _regenAllRunning = false; // true while the run is in-flight (flag for card rebuilds)
 // ── Smart-regenerate / Pillow-only tracking ──────────────────────────────────
 // editedFields: per-page tracking of which story.json fields changed since the
 // last completed render or recomposite (cleared on done, not on save).
@@ -269,6 +272,18 @@ async function init() {
   document.getElementById('header-title').textContent =
     (story.title || 'Untitled') + ' — Storybook Editor';
   renderAll();
+
+  // Resume a regenerate-all run that was started before this page load.
+  try {
+    const raResp = await fetch('/api/regenerate-all/status');
+    const raData = await raResp.json();
+    if (raData.ok && raData.status === 'running') {
+      _regenAllRunning = true;
+      const btn = document.getElementById('btn-regen-all');
+      if (btn) { btn.disabled = true; btn.textContent = '↻ Re-generating…'; }
+      _regenAllPoll = setInterval(_refreshRegenAllStatus, 2000);
+    }
+  } catch (_) { /* non-fatal: editor still usable */ }
 }
 
 // ── Dirty tracking ─────────────────────────────────────────────────────────
@@ -1204,7 +1219,7 @@ function updateRegenButtons(num, regen) {
   const statusEl  = document.getElementById(`regen-status-${num}`);
   if (!regenBtn) return;
 
-  const running  = regen ? regen.status === 'running' : _regenPolls.has(num);
+  const running  = regen ? regen.status === 'running' : (_regenPolls.has(num) || _regenAllRunning);
   const hasVers  = (_pageVersionData.get(num) || {}).versions?.length > 0;
   const fast     = !running && fastAvailable(num);
 
@@ -1556,6 +1571,139 @@ async function _refreshConsolidateStatus() {
   } catch (_) { /* network blip — keep polling */ }
 }
 
+// ── Re-generate all pages ─────────────────────────────────────────────────
+async function doRegenerateAll() {
+  const pages = story.pages || [];
+  const n = pages.length;
+  if (n === 0) { alert('No pages in story to render.'); return; }
+
+  // Primary confirm: cost + history note + style-sheet reminder.
+  const msg =
+    `Re-generate all ${n} page${n === 1 ? '' : 's'}?\n\n` +
+    `This makes ${n} paid Gemini call${n === 1 ? '' : 's'} (one per page) and replaces every ` +
+    `page image. Current images are saved to history.\n\n` +
+    `Note: style sheets are NOT regenerated — re-run Stage 2 first if you changed ` +
+    `style_guide and want the sheets to reflect the new settings.`;
+  if (!confirm(msg)) return;
+
+  // Second confirm for long-mode books: shared bg may be stale.
+  let fresh_bg = false;
+  const hasLong = story.text_mode === 'long' ||
+    pages.some(p => p.text_mode === 'long');
+  if (hasLong) {
+    fresh_bg = confirm(
+      'Also regenerate the text-page background?\n\n' +
+      '+1 paid Gemini call (and +1 per page that has a dedicated background).\n\n' +
+      'A style_guide change makes the old background stale — this replaces it. ' +
+      'Cancel keeps the current background.'
+    );
+  }
+
+  // Flush unsaved edits so render_book.py reads the latest story.json.
+  if (dirtyPages.size > 0) {
+    await triggerSave(false);
+    if (dirtyPages.size > 0) {
+      alert('Please save your changes first, then try re-generating.');
+      return;
+    }
+  }
+
+  const btn = document.getElementById('btn-regen-all');
+  const statusEl = document.getElementById('regen-all-status');
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Re-generating…'; }
+  if (statusEl) { statusEl.textContent = 'starting…'; }
+  const errEl = document.getElementById('regen-all-error');
+  if (errEl) { errEl.style.display = 'none'; errEl.innerHTML = ''; }
+
+  try {
+    const resp = await fetch('/api/regenerate-all', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fresh_bg}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Re-generate All Pages'; }
+      if (statusEl) { statusEl.textContent = ''; }
+      alert('Could not start re-generation:\n\n' + (data.error || resp.statusText));
+      return;
+    }
+
+    // Mark all pages running and start the poll.
+    _regenAllRunning = true;
+    pages.forEach(p => updateRegenButtons(p.page_num, {status: 'running'}));
+    _regenAllPoll = setInterval(_refreshRegenAllStatus, 2000);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Re-generate All Pages'; }
+    if (statusEl) { statusEl.textContent = ''; }
+    alert('Network error: ' + e.message);
+  }
+}
+
+async function _refreshRegenAllStatus() {
+  try {
+    const resp = await fetch('/api/regenerate-all/status');
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // Update progress text.
+    const statusEl = document.getElementById('regen-all-status');
+    if (statusEl && data.status === 'running') {
+      statusEl.textContent = `rendering… ${data.done}/${data.total}`;
+    }
+
+    // Terminal: done or error.
+    if (data.status === 'done' || data.status === 'error') {
+      if (_regenAllPoll) { clearInterval(_regenAllPoll); _regenAllPoll = null; }
+      _regenAllRunning = false;
+
+      const btn = document.getElementById('btn-regen-all');
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Re-generate All Pages'; }
+      if (statusEl) { statusEl.textContent = ''; }
+
+      // Show aggregate error if any.
+      const errEl = document.getElementById('regen-all-error');
+      if (errEl && data.status === 'error' && data.error) {
+        errEl.style.display = '';
+        errEl.innerHTML = `⚠ Re-generation failed:<pre>${esc(data.error.slice(-600))}</pre>`;
+      }
+
+      // Refresh global render status and all page badges.
+      try {
+        const srResp = await fetch('/api/status');
+        const srData = await srResp.json();
+        if (srData.ok) {
+          renderStatus = srData.pages || {};
+          document.querySelectorAll('[data-page-badge]').forEach(el => {
+            const idx = parseInt(el.dataset.pageBadge, 10);
+            const page = story.pages && story.pages[idx];
+            if (page) updatePageBadge(el, page);
+          });
+        }
+      } catch (_) { /* non-fatal */ }
+
+      // Clear per-page edit state for successfully rendered pages; update previews.
+      const pages = story.pages || [];
+      pages.forEach(p => {
+        const num = p.page_num;
+        const pageEntry = data.pages && data.pages[String(num)];
+        if (pageEntry && pageEntry.status === 'done') {
+          editedPages.delete(p);
+          editedFields.delete(p);
+        }
+        // fetchVersions updates the preview panel, regen badge, and regen buttons.
+        fetchVersions(num);
+      });
+
+      // Reset bookPaidEdit only when every page succeeded — all book-level edits applied.
+      if (data.status === 'done') {
+        bookPaidEdit = false;
+        pages.forEach(p => updateRegenButtons(p.page_num));
+      }
+    }
+  } catch (_) { /* network blip — keep polling */ }
+}
+
 // ── Full render ────────────────────────────────────────────────────────────
 function renderAll() {
   const main = document.getElementById('main');
@@ -1579,8 +1727,13 @@ function renderAll() {
       </h2>
       <div class="section-body" id="pages-body"></div>
     </section>
-    <div style="text-align:center;margin:4px 0 24px">
+    <div style="text-align:center;margin:4px 0 24px;display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap">
+      <button class="btn-regen" id="btn-regen-all" onclick="doRegenerateAll()">↻ Re-generate All Pages</button>
       <button class="btn-primary" onclick="openConsolidateModal()">📦 Consolidate Story</button>
+    </div>
+    <div id="regen-all-status-wrap" style="text-align:center;margin:-8px 0 16px;font-size:0.85em;color:#64748b">
+      <span id="regen-all-status"></span>
+      <div id="regen-all-error" class="regen-error" style="display:none"></div>
     </div>`;
   renderBook();
   renderCast();
