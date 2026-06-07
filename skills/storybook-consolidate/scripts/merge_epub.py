@@ -351,7 +351,7 @@ def merge_epub(
     if not phys_pages:
         print(
             f"ERROR: No rendered pages found in {pages_dir}. "
-            "Run render_book.py first, then retry.",
+            "Render pages first (storybook-render skill, render_book.py), then retry.",
             file=sys.stderr,
         )
         sys.exit(1)
