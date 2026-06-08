@@ -156,6 +156,10 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 .btn-recomp:hover:not(:disabled){background:#bbf7d0;cursor:pointer}
 .btn-recomp:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
 .regen-status-inline{font-size:11px;color:#64748b}
+/* Shared modal chrome (confirm + consolidate) */
+dialog.app-modal{margin:auto;border:1px solid #e2e8f0;border-radius:10px;
+  padding:24px;max-width:480px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+dialog.app-modal::backdrop{background:rgba(15,23,42,.45)}
 /* Consolidate modal */
 dialog#consolidate-modal{margin:auto;border:1px solid #e2e8f0;border-radius:10px;
   padding:24px;max-width:480px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12)}
@@ -195,6 +199,20 @@ dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
   <p style="color:#64748b">Loading…</p>
 </main>
 
+<!-- Generic confirm modal — avoids browser "suppress dialogs" killing confirm() -->
+<dialog class="app-modal" id="confirm-modal">
+  <p id="confirm-msg" style="white-space:pre-wrap;font-size:14px;color:#1e293b;margin:0 0 16px;line-height:1.5"></p>
+  <div id="confirm-suppress-row" style="display:none;margin-bottom:14px">
+    <label style="font-size:12px;color:#64748b;display:flex;gap:6px;align-items:center;cursor:pointer">
+      <input type="checkbox" id="confirm-suppress-cb"> Don't ask me again this session
+    </label>
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:8px">
+    <button class="btn-sm" id="confirm-cancel">Cancel</button>
+    <button class="btn-primary" id="confirm-ok">OK</button>
+  </div>
+</dialog>
+
 <!-- Consolidate Story modal — lives outside <main> so renderAll() wipes don't remove it -->
 <dialog id="consolidate-modal">
   <h3>Consolidate Story <small>(Stage 4 — free, no API calls)</small></h3>
@@ -217,6 +235,34 @@ dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
 
 <script>
 'use strict';
+
+// ── Custom confirm dialog (avoids browser "suppress dialogs" breaking confirm()) ──
+// suppressKey: pass a string to show "Don't ask me again this session" checkbox.
+// Once suppressed, future calls with the same key auto-resolve true.
+const _suppressedConfirms = new Set();
+function customConfirm(msg, suppressKey) {
+  if (suppressKey && _suppressedConfirms.has(suppressKey)) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const dlg     = document.getElementById('confirm-modal');
+    const msgEl   = document.getElementById('confirm-msg');
+    const okBtn   = document.getElementById('confirm-ok');
+    const canBtn  = document.getElementById('confirm-cancel');
+    const suppRow = document.getElementById('confirm-suppress-row');
+    const suppCb  = document.getElementById('confirm-suppress-cb');
+    msgEl.textContent = msg;
+    if (suppressKey) { suppRow.style.display = ''; suppCb.checked = false; }
+    else             { suppRow.style.display = 'none'; }
+    function finish(val) {
+      dlg.close();
+      if (val && suppressKey && suppCb.checked) _suppressedConfirms.add(suppressKey);
+      resolve(val);
+    }
+    okBtn.onclick  = () => finish(true);
+    canBtn.onclick = () => finish(false);
+    dlg.onclose    = () => resolve(false); // ESC key
+    dlg.showModal();
+  });
+}
 
 // ── State ──────────────────────────────────────────────────────────────────
 let story = null;
@@ -963,7 +1009,7 @@ async function doSheetRegenerate(i) {
     : `Generate style sheet for "${name}"?\n\n` +
       `This generates the sheet (1 paid Gemini call — gemini-3-pro-image).\n\n` +
       `Pages using "${name}" will NOT render automatically — render them from the Pages section.`;
-  if (!confirm(msg)) return;
+  if (!await customConfirm(msg, 'sheet-regen')) return;
 
   // Flush pending save so make_style_sheet.py reads the latest story.json.
   if (unsavedChanges) {
@@ -1000,13 +1046,13 @@ async function doSheetRegenerate(i) {
   }
 }
 
-function deleteChar(evt, i) {
+async function deleteChar(evt, i) {
   evt.stopPropagation();
   const name = story.cast[i].name;
   const usedOn = (story.pages || []).filter(p =>
     p.cast && p.cast.includes(name));
   if (usedOn.length > 0) {
-    if (!confirm(`"${name}" appears on ${usedOn.length} page(s). Delete anyway (will remove from those pages)?`))
+    if (!await customConfirm(`"${name}" appears on ${usedOn.length} page(s). Delete anyway (will remove from those pages)?`))
       return;
     usedOn.forEach(p => {
       p.cast = p.cast.filter(n => n !== name);
@@ -1669,8 +1715,8 @@ async function doRecomposite(num) {
       updateRegenButtons(num);  // restore button state
       if (data.fallback) {
         // Prerequisite raw/art/bg is missing — offer paid fallback.
-        if (confirm(`Fast re-composite unavailable:\n${data.error || ''}\n\nRun a full paid re-render instead?`)) {
-          doRegenerate(num);
+        if (await customConfirm(`Fast re-composite unavailable:\n${data.error || ''}\n\nRun a full paid re-render instead?`, 'page-regen')) {
+          await doRegenerate(num);
         }
       } else {
         alert('Could not start re-composite:\n\n' + (data.error || resp.statusText));
@@ -1691,7 +1737,7 @@ async function doRegenerate(num) {
   const msg = hasVersions
     ? `Regenerate page ${num}?\n\nThis generates a new image (one paid Gemini call).\nThe current image will be saved to history.`
     : `Render page ${num}?\n\nThis generates the image (one paid Gemini call).`;
-  if (!confirm(msg)) return;
+  if (!await customConfirm(msg, 'page-regen')) return;
 
   // Flush pending auto-save so render_book.py reads the latest image_prompt.
   if (unsavedChanges) {
@@ -1843,18 +1889,19 @@ async function doRegenerateAll() {
     `page image. Current images are saved to history.\n\n` +
     `Note: style sheets are NOT regenerated — re-run Stage 2 first if you changed ` +
     `style_guide and want the sheets to reflect the new settings.`;
-  if (!confirm(msg)) return;
+  if (!await customConfirm(msg, 'regen-all')) return;
 
   // Second confirm for long-mode books: shared bg may be stale.
   let fresh_bg = false;
   const hasLong = story.text_mode === 'long' ||
     pages.some(p => p.text_mode === 'long');
   if (hasLong) {
-    fresh_bg = confirm(
+    fresh_bg = await customConfirm(
       'Also regenerate the text-page background?\n\n' +
       '+1 paid Gemini call (and +1 per page that has a dedicated background).\n\n' +
       'A style_guide change makes the old background stale — this replaces it. ' +
-      'Cancel keeps the current background.'
+      'Cancel keeps the current background.',
+      'regen-all-bg'
     );
   }
 
