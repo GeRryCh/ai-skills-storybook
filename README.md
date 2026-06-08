@@ -4,7 +4,7 @@
 > lock each character's look, anchor faces to real photos, and tune text and
 > layout per page.
 
-Three Claude Code skills that turn a story idea (optionally with character photos) into a fully illustrated children's picture book.
+Four Claude Code skills that turn a story idea (optionally with character photos) into a fully illustrated children's picture book.
 
 > ⚠️ **Constant development — breaking changes are the norm.** This project evolves
 > aggressively and makes no backward-compatibility promises. The `story.json` contract,
@@ -17,9 +17,10 @@ Three Claude Code skills that turn a story idea (optionally with character photo
 
 Each skill hands off a single file — `story.json` — to the next stage.
 
-1. **storybook-story** — Free. Writes `story.json`: page text, image prompts, and cast list. Has an approval gate before any paid stage runs.
-2. **storybook-stylesheet** — Paid (1 image call per character). Generates a style-sheet PNG per character. Has an approval gate before rendering.
-3. **storybook-render** — Paid (1 image call per page). Renders all page illustrations concurrently, overlays text, and auto-assembles a PDF.
+1. **storybook-story** — Free. Writes `story.json`: page text, image prompts, and cast list (characters, objects, and locations). Has an approval gate before any paid stage runs.
+2. **storybook-stylesheet** — Paid (1 image call per cast entry). Generates a style-sheet PNG per cast entry. Has an approval gate before rendering.
+3. **storybook-render** — Paid (1 image call per page). Renders all page illustrations concurrently and overlays text (overlay, native, or long mode).
+4. **storybook-consolidate** — Free. Assembles rendered pages into PDF and/or EPUB, and optionally packages everything into a zip.
 
 ## Requirements
 
@@ -31,14 +32,26 @@ Each skill hands off a single file — `story.json` — to the next stage.
 After approving `story.json` (stage 1), run the paid stages:
 
 ```bash
-# Stage 2 — generate character style sheets
+# Stage 2 — generate style sheets for all cast entries
 uv run skills/storybook-stylesheet/scripts/make_style_sheet.py --story story.json
 
-# Stage 3 — render all pages and produce a PDF
+# Stage 3 — render all pages
 uv run skills/storybook-render/scripts/render_book.py --story story.json
+
+# Stage 4 — assemble PDF / EPUB (free, no API key needed)
+uv run skills/storybook-consolidate/scripts/merge_pdf.py --story story.json
+uv run skills/storybook-consolidate/scripts/merge_epub.py --story story.json
 ```
 
-Re-run either command safely: already-generated files are skipped automatically.
+Re-run any command safely: already-generated files are skipped automatically.
+
+## Visual editor
+
+Edit `story.json` without touching raw JSON — browse cast photos, regenerate individual pages or style sheets, pick text mode per page, and run Stage 4 when ready:
+
+```bash
+uv run skills/storybook-story/scripts/edit_story.py --story /path/to/story.json
+```
 
 ## More
 
