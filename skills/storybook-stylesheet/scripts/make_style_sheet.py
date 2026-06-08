@@ -55,9 +55,11 @@ _IMAGE_SYSTEM_PROMPT_PREFIX = (
 _IMAGE_SYSTEM_PROMPT_TAIL = "Output only the generated image without additional commentary."
 _KIND_LIKENESS = {
     "character": (
-        "Preserve the character's facial identity and likeness from the provided "
-        "reference photographs; take the outfit and styling from the text prompt, "
-        "never from the photographs. "
+        "Any attached reference photographs all depict one real, specific person. "
+        "Your illustration must be a faithful, instantly recognisable portrait of "
+        "that exact person rendered in the requested art style — never a generic "
+        "character merely inspired by the photographs. Take the outfit and styling "
+        "from the text prompt, never from the photographs. "
     ),
     "object": (
         "Preserve the subject's recognizable shape, structure, materials, and "
@@ -216,8 +218,15 @@ def require_style_guide(story: dict) -> None:
         sys.exit(2)
 
 
-def build_sheet_prompt(story: dict, entry: dict) -> str:
-    """Prompt for one cast entry's individual reference sheet, branched on kind."""
+def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
+    """Prompt for one cast entry's individual reference sheet, branched on kind.
+
+    has_refs: True when this entry has reference photos that will be attached to
+    the call. Switches the likeness sentence from a weak conditional ("If
+    reference photo(s) are provided...") to an assertive instruction naming the
+    concrete subject — the conditional phrasing let the model treat the photos
+    as loose style hints and draw a generic person from the appearance prose.
+    """
     style = build_style_block(story)
     kind = (entry.get("kind") or "character").strip() or "character"
     name = (entry.get("name") or "").strip()
@@ -235,9 +244,14 @@ def build_sheet_prompt(story: dict, entry: dict) -> str:
             f"Show this one object only: {subject}. "
             f"Show the object from multiple angles, plus a detail close-up of its most "
             f"distinguishing features, consistent design across the sheet. "
-            f"If reference photo(s) are provided, match the object's shape, proportions, "
-            f"colours, and distinguishing details as closely as possible — keep it clearly "
-            f"recognisable. "
+            + (
+                f"The attached reference photographs show the real object: {name or 'the subject'}. "
+                f"Match its shape, proportions, colours, and distinguishing details from the "
+                f"photographs exactly — it must read as the very same object. "
+                if has_refs
+                else ""
+            )
+            +
             f"Render in the illustration style (do not composite, paste, trace, or "
             f"reproduce the photo itself; no photographic elements). "
             f"Art style: {style}. "
@@ -253,8 +267,14 @@ def build_sheet_prompt(story: dict, entry: dict) -> str:
             f"Show a wide establishing view and one or two closer views from different "
             f"angles, plus a detail close-up of its most distinguishing features, "
             f"consistent design across the sheet. "
-            f"If reference photo(s) are provided, match the place's recognisable "
-            f"architecture, landmarks, and geography as closely as possible. "
+            + (
+                f"The attached reference photographs show the real place: {name or 'the subject'}. "
+                f"Match its recognisable architecture, landmarks, and geography from the "
+                f"photographs exactly — it must read as the very same place. "
+                if has_refs
+                else ""
+            )
+            +
             f"Render in the illustration style (do not composite, paste, trace, or "
             f"reproduce the photo itself; no photographic elements). "
             f"Art style: {style}. "
@@ -272,8 +292,18 @@ def build_sheet_prompt(story: dict, entry: dict) -> str:
             f"(3) full-body right profile view, "
             f"(4) a close-up of the face. "
             f"Same character at the same scale and with identical design in every view. "
-            f"If reference photo(s) are provided, match this character's facial features "
-            f"and hair as closely as possible — keep the likeness clearly recognisable. "
+            + (
+                f"The attached reference photographs all show the same real person: "
+                f"{name or 'the main character'}. Draw exactly this person — match the face "
+                f"shape, eyes, eyebrows, nose, mouth, skin tone, and hair from the "
+                f"photographs as closely as the art style allows. The sheet must be an "
+                f"unmistakable portrait of {name or 'this person'}, instantly recognisable "
+                f"to people who know them — never a generic character merely inspired by "
+                f"the photographs. "
+                if has_refs
+                else ""
+            )
+            +
             f"Render in the illustration style (do not composite, paste, trace, or "
             f"reproduce the photo itself; no photographic elements). "
             f"Outfit and clothing: use exactly the outfit described above in the character "
@@ -424,6 +454,7 @@ def generate_image(
     resolution: str,
     aspect_ratio: str | None = None,
     system_prompt: str | None = None,
+    ref_label: str | None = None,
 ) -> bool:
     """Generate a single image via the Gemini API and write it to out_path."""
     from google import genai
@@ -437,8 +468,11 @@ def generate_image(
     if system_prompt is None:
         system_prompt = image_system_prompt("character")
 
-    # Build contents: text prompt + one Part.from_bytes per input image.
-    # No interleaved label strings (stylesheet sends bare image parts).
+    # Build contents: text prompt + labeled image parts. Each reference image is
+    # preceded by a short text part binding it to the named subject (same
+    # labeled-interleaved pattern as render_book.py's run_nano_banana) — bare
+    # unlabeled photos let the model treat them as loose style hints instead of
+    # the concrete person/object/place to match.
     contents: list = [prompt]
     contents_desc: list[tuple] = [("text", prompt)]  # mirrors contents for audit log
     for img in input_images:
@@ -447,6 +481,10 @@ def generate_image(
         if not mime:
             mime = "image/png"
         data = p.read_bytes()
+        if ref_label:
+            label_text = f"Next image: {ref_label}."
+            contents.append(label_text)
+            contents_desc.append(("text", label_text))
         contents.append(types.Part.from_bytes(data=data, mime_type=mime))
         contents_desc.append(("image", str(p), mime, len(data)))
 
@@ -592,14 +630,22 @@ def main() -> None:
             print(f"MEDIA: {target}")
             continue
 
-        prompt = build_sheet_prompt(story, entry)
         input_images = collect_ref_images_for_entry(entry)
+        prompt = build_sheet_prompt(story, entry, has_refs=bool(input_images))
         print(f"\nGenerating sheet for {name!r} (kind={kind}) -> {target}")
         print(f"Prompt: {prompt}")
 
+        # Keep label wording in sync with render_book.py's IMAGE_SYSTEM_PROMPT
+        # "kind" vocabulary (real photograph of the character/object/location).
+        ref_labels = {
+            "character": f"real photograph of the character {name} (facial likeness reference)",
+            "object": f"real photograph of the object {name} (appearance reference)",
+            "location": f"real photograph of the location {name} (setting reference)",
+        }
         ok = generate_image(
             prompt, input_images, target, resolution, aspect_ratio,
             system_prompt=image_system_prompt(kind),
+            ref_label=ref_labels[kind] if input_images else None,
         )
         if not ok or not target.exists():
             print(f"ERROR: style sheet PNG not produced for {name!r}.", file=sys.stderr)
