@@ -337,15 +337,90 @@ def require_style_guide(story: dict) -> None:
         sys.exit(2)
 
 
+# Keep in sync with the copy in make_style_sheet.py
+# (the two skills share no module; both copies must stay identical).
+CAST_ID_MIGRATION_MESSAGE = (
+    "ERROR: story.json uses the pre-PER-56 schema. The cast reference contract changed "
+    "(breaking, no shim):\n"
+    "  cast[].id  — add a stable lowercase slug to every cast entry\n"
+    "               pattern: ^[a-z][a-z0-9-]*$  (e.g. 'pip', 'major-oak')\n"
+    "  pages[].cast — change name strings to id strings (matching cast[].id)\n"
+    "  image_prompt — replace literal name mentions with <id> placeholders\n"
+    "                 (render resolves <id> → display name before every Gemini call)\n"
+    "Migrate story.json (or re-run Stage 1) and re-run. See\n"
+    "skills/storybook-story/assets/story_schema.json."
+)
+
+_CAST_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def require_cast_ids(story: dict) -> None:
+    """Fail fast (exit 2) on pre-PER-56 story.json files missing cast[].id. Breaking change, no shim."""
+    cast = story.get("cast")
+    if not isinstance(cast, list):
+        return  # other validators will catch a missing/malformed cast
+    missing: list[str] = []
+    for entry in cast:
+        if not isinstance(entry, dict):
+            continue
+        cid = entry.get("id")
+        name = entry.get("name") or "unnamed"
+        if not isinstance(cid, str) or not _CAST_ID_PATTERN.match(cid):
+            missing.append(repr(name))
+    if missing:
+        print(
+            f"Cast entries missing a valid 'id': {', '.join(missing)}\n\n"
+            f"{CAST_ID_MIGRATION_MESSAGE}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def resolve_cast_placeholders(text: str, story: dict) -> str:
+    """Replace <id> placeholders in a prompt with cast entry display names.
+
+    Broad regex <([^<>]+)> catches malformed tokens (e.g. <Pip>, <grandma rosa>)
+    so they can never slip through unsubstituted to the image model (in native text
+    mode a strong text-renderer would letter them into the art). Uses a function
+    replacement — never a string replacement — to avoid misinterpreting \\1/\\g
+    escapes in display names. Unknown/malformed tokens are stripped of angle brackets
+    and logged as warnings; the validator is the hard gate.
+    """
+    cast_by_id: dict[str, str] = {
+        c.get("id", ""): c.get("name", c.get("id", ""))
+        for c in story.get("cast", [])
+        if isinstance(c, dict) and c.get("id")
+    }
+
+    def _replace(m: re.Match) -> str:
+        token = m.group(1)
+        if token in cast_by_id:
+            return cast_by_id[token]
+        # Unknown / malformed: strip brackets, warn. Never let <…> reach the model.
+        print(
+            f"Warning: image_prompt placeholder <{token}> is not a known cast id; "
+            "stripping angle brackets. Add the id to story.json cast or use validate_story.py.",
+            file=sys.stderr,
+        )
+        return token
+
+    return re.sub(r"<([^<>]+)>", _replace, text)
+
+
 def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> str:
     placement = page.get("text_placement", "floating")
     style = build_style_block(story)
     anchor = STYLE_ANCHOR.format(style=style)
 
+    # Resolve <id> placeholders → display names. Single chokepoint covering all text modes.
+    # The model must never receive raw <id> tokens — especially in native mode where a
+    # strong text-renderer would letter them into the art.
+    resolved_prompt = resolve_cast_placeholders(page.get("image_prompt", ""), story)
+
     if text_mode == "native":
         # Strip any baked-in safe-zone sentence (". Leave the <...>.") from the prompt so the
         # model gets a clean slate — then append NATIVE_TEXT_DIRECTIVE with the verbatim text.
-        raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", page["image_prompt"])
+        raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", resolved_prompt)
         base = raw_prompt.rstrip(". ")
         text = page.get("text", "")
         # Reuse the same role -> family map the overlay path uses; name the family as a
@@ -364,13 +439,13 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
     if text_mode == "long":
         # Long mode art page: strip any baked-in safe-zone sentence; request full-bleed
         # art with no text (text is rendered on a separate physical page).
-        raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", page["image_prompt"])
+        raw_prompt = re.sub(r"\.\s*Leave the [^.]+\.?\s*$", "", resolved_prompt)
         base = raw_prompt.rstrip(". ")
         return f"{base}. {anchor}. {FULL_BLEED_ART_DIRECTIVE}"
 
     # overlay (default): unchanged behaviour. "floating" is native-only -> bottom here.
     # tone: light hint → request a dark text-safe zone so the white panel blends cleanly.
-    base = page["image_prompt"].rstrip(". ")
+    base = resolved_prompt.rstrip(". ")
     color = page.get("text_color_hint", "dark")
     tone = "darkly-toned" if color == "light" else "lightly-toned"
     safe_zone = TEXT_SAFE_ZONE_DIRECTIVE.format(
@@ -474,20 +549,23 @@ def collect_input_images(
             print(f"Warning: {msg}", file=sys.stderr)
 
     cast_index: dict[str, dict] = {
-        c.get("name", ""): c for c in story.get("cast", [])
+        c.get("id", ""): c for c in story.get("cast", [])
+        if isinstance(c, dict) and c.get("id")
     }
     page_cast: list[str] = page.get("cast", [])
 
     # Partition the page cast by kind, preserving page order within each group.
+    # page_cast entries are cast ids (PER-56); display names come from the entry.
     characters: list[tuple[str, dict]] = []
     objects: list[tuple[str, dict]] = []
     locations: list[tuple[str, dict]] = []
-    for name in page_cast:
-        entry = cast_index.get(name)
+    for cid in page_cast:
+        entry = cast_index.get(cid)
         if entry is None:
-            warn(f"page references unknown cast name {name!r}; skipping.")
+            warn(f"page references unknown cast id {cid!r}; skipping.")
             continue
         kind = (entry.get("kind") or "character").strip() or "character"
+        name = entry.get("name") or cid  # display name for labels
         if kind == "object":
             objects.append((name, entry))
         elif kind == "location":
@@ -1179,6 +1257,7 @@ def main() -> None:
     story_path = Path(args.story).resolve()
     story = load_story(story_path)
     reject_legacy_keys(story)
+    require_cast_ids(story)
     require_style_guide(story)
 
     # CLI flag > story.json field > built-in default (2K).

@@ -398,8 +398,10 @@ def validate_story(
             )
 
     # --- cast ----------------------------------------------------------------
-    cast_names: list[str] = []
-    cast_by_name: dict[str, dict] = {}  # name → entry; used by PER-42 echo check below
+    _ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+    cast_ids: list[str] = []
+    cast_by_id: dict[str, dict] = {}   # id → entry; used by PER-42 echo + placeholder checks
+    cast_names: list[str] = []          # names: retained for duplicate-name warning only
     cast = story.get("cast")
     if cast is not None:
         if not isinstance(cast, list) or not cast:
@@ -411,15 +413,30 @@ def validate_story(
                     errors.append(f"{where} must be an object")
                     continue
                 warn_unknown(entry, known["cast_entry"], where)
-                for req in ("name", "appearance"):
+                for req in ("id", "name", "appearance"):
                     if not isinstance(entry.get(req), str):
                         errors.append(f"{where} missing string field '{req}'")
+                # Validate id: required, pattern ^[a-z][a-z0-9-]*$, unique
+                cid = entry.get("id")
+                if isinstance(cid, str):
+                    if not _ID_PATTERN.match(cid):
+                        errors.append(
+                            f"{where}.id {cid!r} is invalid — must match "
+                            "^[a-z][a-z0-9-]*$ (lowercase, start with letter, "
+                            "hyphens ok; e.g. 'pip', 'major-oak')"
+                        )
+                    elif cid in cast_ids:
+                        errors.append(f"duplicate cast id '{cid}' — ids must be unique")
+                    else:
+                        cast_ids.append(cid)
+                        cast_by_id[cid] = entry
+                # Duplicate-name warning: two entries sharing a display name produce
+                # identical Gemini labels ("character style sheet for X") — ambiguous.
                 name = entry.get("name")
                 if isinstance(name, str):
                     if name in cast_names:
-                        warnings.append(f"duplicate cast name '{name}'")
+                        warnings.append(f"duplicate cast name '{name}' — two entries with the same display name produce identical model labels")
                     cast_names.append(name)
-                    cast_by_name[name] = entry
                 kind = entry.get("kind")
                 if kind is not None and kind not in enums["kind"]:
                     errors.append(
@@ -512,12 +529,11 @@ def validate_story(
                     ):
                         errors.append(f"{where}.cast must be an array of strings")
                     else:
-                        for n in pc:
-                            if n not in cast_names:
+                        for cid in pc:
+                            if cid not in cast_ids:
                                 errors.append(
-                                    f"{where}.cast: '{n}' is not in the cast "
-                                    f"({cast_names}) — names must match "
-                                    "cast[].name exactly"
+                                    f"{where}.cast: '{cid}' is not in the cast "
+                                    f"({cast_ids}) — must match cast[].id exactly"
                                 )
                         # PER-42: warn when image_prompt echoes a sheet-backed
                         # cast member's appearance (character/object kinds only;
@@ -525,8 +541,8 @@ def validate_story(
                         # that the prompt legitimately evokes by name).
                         prompt_text = page.get("image_prompt")
                         if isinstance(prompt_text, str):
-                            for n in pc:
-                                ce = cast_by_name.get(n)
+                            for cid in pc:
+                                ce = cast_by_id.get(cid)
                                 if ce is None:
                                     continue
                                 ce_kind = ce.get("kind") or "character"
@@ -537,11 +553,32 @@ def validate_story(
                                     continue
                                 frag = _appearance_echo(ce_appearance, prompt_text)
                                 if frag:
+                                    ce_name = ce.get("name") or cid
                                     warnings.append(
                                         f"{where}.image_prompt repeats appearance of "
-                                        f"'{n}' (\"{frag}\") — refer to sheet-backed "
-                                        "cast by name only; the style sheet defines "
+                                        f"'{ce_name}' (\"{frag}\") — use <{cid}> "
+                                        "placeholder; the style sheet defines "
                                         "appearance (PER-42)"
+                                    )
+                            # Placeholder check: every <token> in image_prompt must
+                            # be a known cast id. Broad regex catches malformed tokens
+                            # (e.g. <Pip>, <grandma rosa>) so they never slip through
+                            # unsubstituted to the image model.
+                            _PLACEHOLDER_RE = re.compile(r"<([^<>]+)>")
+                            page_cast_set = set(pc)
+                            for m in _PLACEHOLDER_RE.finditer(prompt_text):
+                                token = m.group(1)
+                                if token not in cast_ids:
+                                    errors.append(
+                                        f"{where}.image_prompt: <{token}> is not a "
+                                        f"known cast id ({cast_ids}) — use a valid "
+                                        "cast[].id value as the placeholder"
+                                    )
+                                elif token not in page_cast_set:
+                                    warnings.append(
+                                        f"{where}.image_prompt uses <{token}> but "
+                                        f"'{token}' is not in this page's cast — "
+                                        "no reference image will be sent for it"
                                     )
             if nums and sorted(nums) != list(range(1, len(nums) + 1)):
                 warnings.append(
@@ -972,9 +1009,9 @@ def _restore_sheet(pages_dir: Path, sheet_path: Path) -> None:
 
 
 def _build_sheet_versions_payload(
-    pages_dir: Path, story_dir: Path, name: str, sheet_path: "Path | None"
+    pages_dir: Path, story_dir: Path, cid: str, sheet_path: "Path | None"
 ) -> dict:
-    """Build the {versions, regen} dict returned by GET /api/sheet/versions."""
+    """Build the {versions, regen} dict returned by GET /api/sheet/versions?id=…."""
     canonical_hash: "str | None" = None
     if sheet_path is not None and sheet_path.is_file():
         try:
@@ -1026,7 +1063,7 @@ def _build_sheet_versions_payload(
         })
 
     with _regen_lock:
-        regen = dict(_regen_jobs.get(f"sheet:{name}", {"status": None, "error": None}))
+        regen = dict(_regen_jobs.get(f"sheet:{cid}", {"status": None, "error": None}))
 
     return {"versions": versions, "regen": regen}
 
@@ -1039,16 +1076,16 @@ def _build_sheet_versions_payload(
 def _run_sheet_regen(
     story_path: Path,
     pages_dir: Path,
-    name: str,
+    cid: str,
     old_sheet_path: "Path | None",
     env: dict,
 ) -> None:
-    """Thread target: invoke make_style_sheet.py --only NAME, then update _regen_jobs.
+    """Thread target: invoke make_style_sheet.py --only ID, then update _regen_jobs.
 
     On success: adopts the new canonical sheet into history, marks done.
     On failure: restores the old sheet from history (if any), marks error.
     """
-    job_key = f"sheet:{name}"
+    job_key = f"sheet:{cid}"
     try:
         cmd = [
             "uv",
@@ -1057,7 +1094,7 @@ def _run_sheet_regen(
             "--story",
             str(story_path),
             "--only",
-            name,
+            cid,
         ]
         result = subprocess.run(
             cmd,
@@ -1073,7 +1110,7 @@ def _run_sheet_regen(
                 with story_path.open(encoding="utf-8") as f:
                     updated = json.load(f)
                 new_entry = next(
-                    (e for e in updated.get("cast", []) if e.get("name") == name),
+                    (e for e in updated.get("cast", []) if e.get("id") == cid),
                     None,
                 )
                 new_sheet_str = new_entry.get("style_sheet") if new_entry else None
@@ -1399,17 +1436,17 @@ def make_handler(story_path: Path, schema: dict):
                 }
             cast_status: dict[str, dict] = {}
             for entry in story.get("cast", []):
-                name = entry.get("name")
-                if not isinstance(name, str):
+                cid = entry.get("id")
+                if not isinstance(cid, str):
                     continue
                 sheet = entry.get("style_sheet")
                 style_sheet_exists = (
                     isinstance(sheet, str)
                     and resolve_story_rel(sheet, story_dir).exists()
                 )
-                cast_status[name] = {
+                cast_status[cid] = {
                     "style_sheet_exists": style_sheet_exists,
-                    "regen": sheet_jobs.get(name, {"status": None, "error": None}),
+                    "regen": sheet_jobs.get(cid, {"status": None, "error": None}),
                 }
             self._send_json(
                 200, {"ok": True, "pages": page_status, "cast": cast_status}
@@ -1775,9 +1812,9 @@ def make_handler(story_path: Path, schema: dict):
             Response: {ok, versions: [{id, path, mtime, in_use}], regen: {status, error}}
             """
             qs = parse_qs(url.query)
-            name = qs.get("name", [""])[0].strip()
-            if not name:
-                self._fail(400, "?name= must be non-empty")
+            cid = qs.get("id", [""])[0].strip()
+            if not cid:
+                self._fail(400, "?id= must be non-empty")
                 return
             try:
                 with story_path.open(encoding="utf-8") as f:
@@ -1785,9 +1822,9 @@ def make_handler(story_path: Path, schema: dict):
             except (OSError, json.JSONDecodeError) as e:
                 self._fail(500, f"cannot read story.json: {e}")
                 return
-            entry = next((e for e in s.get("cast", []) if e.get("name") == name), None)
+            entry = next((e for e in s.get("cast", []) if e.get("id") == cid), None)
             if entry is None:
-                self._fail(404, f"cast entry {name!r} not found")
+                self._fail(404, f"cast entry id {cid!r} not found")
                 return
             sheet_str = entry.get("style_sheet")
             sheet_path_val = (
@@ -1796,16 +1833,16 @@ def make_handler(story_path: Path, schema: dict):
                 else None
             )
             pages_dir = story_dir / "pages"
-            payload = _build_sheet_versions_payload(pages_dir, story_dir, name, sheet_path_val)
+            payload = _build_sheet_versions_payload(pages_dir, story_dir, cid, sheet_path_val)
             self._send_json(200, {"ok": True, **payload})
 
         def _post_sheet_regenerate(self) -> None:
             """Generate or regenerate the style sheet for one cast entry.
 
-            Body: {"name": "Cast Name"}
-            Requires GEMINI_API_KEY in the editor's environment.
-            Spawns uv run make_style_sheet.py --only NAME in a background thread;
-            returns 200 immediately. Poll GET /api/sheet/versions?name=… for progress.
+            Body: {"id": "cast-id"}
+            Requires STORYBOOK_SKILL_OPENAI_API_KEY (or OPENAI_API_KEY) in the environment.
+            Spawns uv run make_style_sheet.py --only ID in a background thread;
+            returns 200 immediately. Poll GET /api/sheet/versions?id=… for progress.
 
             Full-quiescence gate (all 409):
             - any page render, sheet regen, recomposite, or regen-all is running
@@ -1817,31 +1854,31 @@ def make_handler(story_path: Path, schema: dict):
             if err:
                 self._fail(400, err)
                 return
-            name = (body or {}).get("name", "")
-            if not isinstance(name, str) or not name.strip():
-                self._fail(400, "body must have non-empty name (string)")
+            cid = (body or {}).get("id", "")
+            if not isinstance(cid, str) or not cid.strip():
+                self._fail(400, "body must have non-empty id (string)")
                 return
-            name = name.strip()
+            cid = cid.strip()
 
-            # Find the cast entry (name check before key check — smoke-testable without key).
+            # Find the cast entry (id check before key check — smoke-testable without key).
             try:
                 with story_path.open(encoding="utf-8") as f:
                     s = json.load(f)
             except (OSError, json.JSONDecodeError) as e:
                 self._fail(500, f"cannot read story.json: {e}")
                 return
-            entry = next((e for e in s.get("cast", []) if e.get("name") == name), None)
+            entry = next((e for e in s.get("cast", []) if e.get("id") == cid), None)
             if entry is None:
-                self._fail(404, f"cast entry {name!r} not found in story.json")
+                self._fail(404, f"cast entry id {cid!r} not found in story.json")
                 return
 
-            # GEMINI_API_KEY check — sheet generation always triggers a paid call.
-            if not os.environ.get("GEMINI_API_KEY"):
+            # API key check — sheet generation triggers a paid call (OpenAI gpt-image-2).
+            if not (os.environ.get("STORYBOOK_SKILL_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")):
                 self._fail(
                     400,
-                    "GEMINI_API_KEY is not set in the editor's environment. "
-                    "Restart the editor with the key: "
-                    "GEMINI_API_KEY=your_key uv run edit_story.py --story …",
+                    "No OpenAI API key found. Set STORYBOOK_SKILL_OPENAI_API_KEY (or OPENAI_API_KEY) "
+                    "and restart the editor: "
+                    "STORYBOOK_SKILL_OPENAI_API_KEY=your_key uv run edit_story.py --story …",
                 )
                 return
 
@@ -1850,7 +1887,7 @@ def make_handler(story_path: Path, schema: dict):
                 return
 
             # Full-quiescence gate.
-            job_key = f"sheet:{name}"
+            job_key = f"sheet:{cid}"
             with _regen_lock:
                 if _consolidate_job["status"] == "running":
                     self._fail(409, "consolidation is running — wait for it to finish before regenerating sheets")
@@ -1885,7 +1922,7 @@ def make_handler(story_path: Path, schema: dict):
             env = os.environ.copy()
             t = threading.Thread(
                 target=_run_sheet_regen,
-                args=(story_path, pages_dir, name, old_sheet, env),
+                args=(story_path, pages_dir, cid, old_sheet, env),
                 daemon=True,
             )
             t.start()
@@ -1895,7 +1932,7 @@ def make_handler(story_path: Path, schema: dict):
         def _post_sheet_select(self) -> None:
             """Copy a sheet history version into the canonical slot (free, no API call).
 
-            Body: {"name": "Cast Name", "version": "YYYYMMDD-HHMMSS"}
+            Body: {"id": "cast-id", "version": "YYYYMMDD-HHMMSS"}
             Same full-quiescence gate as _post_sheet_regenerate (sheets are render
             inputs — swapping one while a render is running could corrupt the output).
             """
@@ -1903,15 +1940,15 @@ def make_handler(story_path: Path, schema: dict):
             if err:
                 self._fail(400, err)
                 return
-            name = (body or {}).get("name", "")
+            cid = (body or {}).get("id", "")
             version = (body or {}).get("version", "")
-            if not isinstance(name, str) or not name.strip():
-                self._fail(400, "body must have non-empty name (string)")
+            if not isinstance(cid, str) or not cid.strip():
+                self._fail(400, "body must have non-empty id (string)")
                 return
             if not isinstance(version, str) or not version.strip():
                 self._fail(400, "body must have non-empty version (string)")
                 return
-            name = name.strip()
+            cid = cid.strip()
             version = version.strip()
 
             try:
@@ -1920,14 +1957,14 @@ def make_handler(story_path: Path, schema: dict):
             except (OSError, json.JSONDecodeError) as e:
                 self._fail(500, f"cannot read story.json: {e}")
                 return
-            entry = next((e for e in s.get("cast", []) if e.get("name") == name), None)
+            entry = next((e for e in s.get("cast", []) if e.get("id") == cid), None)
             if entry is None:
-                self._fail(404, f"cast entry {name!r} not found")
+                self._fail(404, f"cast entry id {cid!r} not found")
                 return
 
             sheet_str = entry.get("style_sheet")
             if not isinstance(sheet_str, str):
-                self._fail(400, f"cast entry {name!r} has no style_sheet path recorded")
+                self._fail(400, f"cast entry id {cid!r} has no style_sheet path recorded")
                 return
             sheet_path_val = resolve_story_rel(sheet_str, story_dir)
             pages_dir = story_dir / "pages"
@@ -1946,7 +1983,7 @@ def make_handler(story_path: Path, schema: dict):
 
             # "current" pseudo-entry: canonical is already correct, just return fresh payload.
             if version == "current":
-                payload = _build_sheet_versions_payload(pages_dir, story_dir, name, sheet_path_val)
+                payload = _build_sheet_versions_payload(pages_dir, story_dir, cid, sheet_path_val)
                 self._send_json(200, {"ok": True, **payload})
                 return
 
@@ -1958,11 +1995,11 @@ def make_handler(story_path: Path, schema: dict):
             stem = sheet_path_val.stem
             stamp_dir = pages_dir / "history" / stem / version
             if not stamp_dir.is_dir():
-                self._fail(404, f"version {version!r} not found for {name!r}")
+                self._fail(404, f"version {version!r} not found for cast id {cid!r}")
                 return
             src = stamp_dir / f"{stem}.png"
             if not src.is_file():
-                self._fail(404, f"version {version!r} has no PNG for {name!r}")
+                self._fail(404, f"version {version!r} has no PNG for cast id {cid!r}")
                 return
 
             # Adopt-on-mutate invariant: archive current before overwriting.
@@ -1975,7 +2012,7 @@ def make_handler(story_path: Path, schema: dict):
                 self._fail(500, f"cannot copy version: {e}")
                 return
 
-            payload = _build_sheet_versions_payload(pages_dir, story_dir, name, sheet_path_val)
+            payload = _build_sheet_versions_payload(pages_dir, story_dir, cid, sheet_path_val)
             self._send_json(200, {"ok": True, **payload})
 
         def _post_consolidate(self) -> None:

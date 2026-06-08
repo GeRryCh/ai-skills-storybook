@@ -12,6 +12,7 @@
   },
   "cast": [
     {
+      "id": "pip",
       "name": "Pip",
       "appearance": "small brave hedgehog, round body, soft brown spines, big curious dark eyes, tiny pink nose, wears a tiny red scarf",
       "ref_image": ["../pip-storm/refs/pip-ref.png"],
@@ -26,9 +27,9 @@
   "pages": [
     {
       "page_num": 1,
-      "cast": ["Pip"],
+      "cast": ["pip"],
       "text": "Pip and the Big Storm",
-      "image_prompt": "Cover of a children's picture book. A small brave hedgehog named Pip stands at the edge of a meadow looking up at dark storm clouds gathering on the horizon. Soft watercolor, gentle pastel palette. Square composition.",
+      "image_prompt": "Cover of a children's picture book. <pip> stands at the edge of a meadow looking up at dark storm clouds gathering on the horizon. Soft watercolor, gentle pastel palette. Square composition.",
       "text_placement": "bottom",
       "text_color_hint": "dark",
       "text_align": "center",
@@ -36,25 +37,25 @@
     },
     {
       "page_num": 2,
-      "cast": ["Pip"],
+      "cast": ["pip"],
       "text": "Pip the hedgehog lived in a small burrow at the edge of Meadow Green. Every morning he would scurry out to play among the tall grass, chasing butterflies and sniffing wildflowers that swayed in the gentle breeze.\n\nBut one bright morning, Pip noticed something strange. The usual birdsong had gone quiet, and a heavy stillness had settled over the meadow. Far away, at the very edge of the sky, grey clouds were beginning to pile up — tall and dark, like mountains made of shadow.",
-      "image_prompt": "A small brave hedgehog named Pip playing happily among wildflowers in a meadow. Warm golden light. Children's picture book illustration, soft watercolor, gentle pastel palette. Square composition. Full-bleed art, no text.",
+      "image_prompt": "<pip> playing happily among wildflowers in a meadow. Warm golden light. Children's picture book illustration, soft watercolor, gentle pastel palette. Square composition. Full-bleed art, no text.",
       "text_color_hint": "dark",
       "font": "reader"
     },
     {
       "page_num": 3,
-      "cast": ["Pip"],
+      "cast": ["pip"],
       "text": "The first fat drops of rain splattered on Pip's spines just as the sky turned purple-grey above him. Then came the thunder — a deep, rolling boom that shook the ground beneath his tiny paws.\n\nPip's heart beat fast. Rain poured down harder and harder, flattening the wildflowers and turning the meadow paths into little rivers. Lightning flickered far away over the hills. He had to find shelter — and quickly! Pip tucked his nose down, folded in his spines as best he could, and ran.",
-      "image_prompt": "A small brave hedgehog named Pip running through rain, big raindrops falling, dark purple clouds above, the meadow blurred and stormy. Children's picture book illustration, soft watercolor, cool blues and purples. Square composition. Full-bleed art, no text.",
+      "image_prompt": "<pip> running through rain, big raindrops falling, dark purple clouds above, the meadow blurred and stormy. Children's picture book illustration, soft watercolor, cool blues and purples. Square composition. Full-bleed art, no text.",
       "text_color_hint": "dark",
       "font": "reader"
     },
     {
       "page_num": 4,
-      "cast": ["Pip"],
+      "cast": ["pip"],
       "text": "Through the rain Pip ran, past the old stone wall and the sleeping rabbit warrens, until he spotted a great oak tree with gnarled roots curling out of the ground like friendly arms.\n\nHe crept beneath the widest root, into a little hollow that was dry and soft with last autumn's leaves. Outside, rain hammered the meadow and thunder grumbled on — but in here, Pip was safe and snug.\n\nHe wrapped his red scarf tight, curled himself into a perfect ball, and listened to the storm singing above him. And before long, without meaning to at all, Pip fell fast asleep.",
-      "image_prompt": "A small brave hedgehog named Pip curled up snugly under the roots of a large old oak tree, watching rain fall outside, a warm amber glow around Pip. Children's picture book illustration, soft watercolor, warm amber and brown tones. Square composition. Full-bleed art, no text.",
+      "image_prompt": "<pip> curled up snugly under the roots of a large old oak tree, watching rain fall outside, a warm amber glow around Pip. Children's picture book illustration, soft watercolor, warm amber and brown tones. Square composition. Full-bleed art, no text.",
       "text_color_hint": "dark",
       "font": "reader"
     }

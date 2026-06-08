@@ -145,7 +145,7 @@ Each entry carries an optional `"kind"` field: `"character"` (default when absen
 `"object"` (a significant prop or vehicle), or `"location"` (a named real place).
 
 - ONE entry per **real** character, object, or named place. Do not add scene words or pronouns.
-- Each entry: `name` (exactly as written in `image_prompt`s), `appearance`
+- Each entry: `id` (stable lowercase slug, pattern `^[a-z][a-z0-9-]*$`, e.g. `pip`, `major-oak` — used in `pages[].cast` and `<id>` placeholders in `image_prompt`; also the style-sheet filename slug; NEVER reaches the image model), `name` (human-readable display name shown to Gemini, e.g. `Pip`), `appearance`
   (concrete: species, age, hair, **one specific outfit**, colours, distinguishing
   features — more specific = more consistent), and optional `ref_image` (photo
   path(s) for that one character).
@@ -336,8 +336,8 @@ medium → palette → line → lighting → mood) and inject it verbatim into e
 
 ### Per-page `cast` field (required)
 
-Every page MUST have a `cast` array listing the names of all cast members that appear
-on that page. Names must match `cast[].name` exactly. Use `[]` for wordless or
+Every page MUST have a `cast` array listing the **ids** of all cast members that appear
+on that page. ids must match `cast[].id` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
 **Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero, and Stage
@@ -349,7 +349,7 @@ sheet + hero photo + both supporting sheets without dropping anything.
 
 Example:
 ```json
-{ "page_num": 3, "cast": ["Pip", "Mira"], "text": "...", ... }
+{ "page_num": 3, "cast": ["pip", "mira"], "text": "...", ... }
 ```
 
 This drives Stage 3: `render_book.py` sends only those cast members' style sheets as
@@ -359,21 +359,21 @@ cast members not on the page.
 ### image_prompt rules
 
 Every `image_prompt` MUST:
-- Name every character that appears on that page (use the exact names from the `cast` array).
+- Reference cast members with `<id>` placeholders (e.g. `<pip>`) — Stage 3 substitutes each `<id>` with the entry's display `name` before the Gemini call, so the model always sees real names.
 - State the art style.
 - NOT contain the actual story text — the script renders it (baked into the illustration in native mode, Pillow-overlaid in overlay mode).
 - NOT contain text-position or safe-zone language — the script appends those transparently from `text_placement`.
 
-**Name-only rule for cast members (PER-42):** Refer to every entry in `pages[].cast` by
-**name only** — never repeat their `appearance` (species, age, colours, outfit, physical
+**`<id>` placeholder + name-only rule (PER-56 + PER-42):** Use `<id>` placeholders for every entry in `pages[].cast` —
+never repeat their `appearance` (species, age, colours, outfit, physical
 traits). Each cast entry is reference-backed at render time (character/object → style
 sheet; location → photo or sheet); the sheet/photo is a stronger, more consistent signal
 than prose, and inline appearance description makes the model deviate from the reference.
 
-- ✅ "Pip scrambles up the hill" — name + action, no appearance prose
-- ✅ "Red Umbrella tumbles in the wind" — name only; the object sheet carries its look
-- ✅ "...at the Eiffel Tower..." — place name; the location photo carries the setting
-- ❌ "A small brave hedgehog named Pip scrambles up the hill" — echoes `appearance`, weakens sheet
+- ✅ `<pip> scrambles up the hill` — placeholder + action, no appearance prose
+- ✅ `<red-umbrella> tumbles in the wind` — placeholder; the object sheet carries its look
+- ✅ `..at <eiffel-tower>..` — place placeholder; the location photo carries the setting
+- ❌ `A small brave hedgehog named Pip scrambles up the hill` — echoes `appearance`, weakens sheet
 
 **Pose, action, expression, and scene description stay in the prompt** — only inherent
 appearance (what the cast entry looks like) is dropped.

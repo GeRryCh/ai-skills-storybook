@@ -30,10 +30,11 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["name", "appearance"],
+        "required": ["id", "name", "appearance"],
         "additionalProperties": false,
         "properties": {
-          "name": { "type": "string", "description": "Name exactly as written in image_prompts and pages[].cast." },
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Stable lowercase identifier for this cast entry. Pattern: ^[a-z][a-z0-9-]*$ (e.g. 'pip', 'major-oak'). Referenced by pages[].cast and <id> placeholders in image_prompt. Also the style-sheet filename slug (style-sheet-{id}.png). NEVER reaches the image model — render resolves <id> → name before the Gemini call. Stable across display-name renames." },
+          "name": { "type": "string", "description": "Human-readable display name shown to the image model (e.g. 'Pip', 'Major Oak'). Used in Gemini-facing prompt substitutions and reference-image labels." },
           "kind": {
             "type": "string",
             "enum": ["character", "object", "location"],
@@ -117,7 +118,7 @@
           "page_num": { "type": "integer", "minimum": 1 },
           "cast": {
             "type": "array",
-            "description": "Names of the cast entries appearing on this page — characters, objects, and locations in ONE flat list, any mix and multiplicity (e.g. ['Pip', 'Red Umbrella', 'Gazelle Valley']). MUST match cast[].name exactly. Drives which reference images are sent when rendering this page. The FIRST entry whose kind is 'character' (or kind is absent, defaulting to character) is the page HERO — it additionally contributes its first ref_image photo for facial likeness; author the hero/child first among the characters. Objects and locations follow after characters. Use [] for scenery-only or subject-free pages.",
+            "description": "ids of the cast entries appearing on this page — characters, objects, and locations in ONE flat list, any mix and multiplicity (e.g. ['pip', 'red-umbrella', 'gazelle-valley']). MUST match cast[].id exactly. Drives which reference images are sent when rendering this page. The FIRST entry whose kind is 'character' (or kind is absent, defaulting to character) is the page HERO — it additionally contributes its first ref_image photo for facial likeness; author the hero/child first among the characters. Objects and locations follow after characters. Use [] for scenery-only or subject-free pages.",
             "items": { "type": "string" }
           },
           "text": {
@@ -126,7 +127,7 @@
           },
           "image_prompt": {
             "type": "string",
-            "description": "Full image generation prompt. Must name characters and mention style. Content only — do not include text-position or safe-zone directives; the render script appends those transparently from text_placement."
+            "description": "Full image generation prompt. Reference cast members with <id> placeholders (e.g. '<pip> shelters under <major-oak>') — render resolves each <id> to the cast entry's display name before the Gemini call, so the model always sees real names. Never repeat a cast member's appearance prose (PER-42 name-only rule: the style sheet defines appearance; name-only is the stronger consistency signal). Pose, action, expression, and scene description stay in the prompt. Must mention the illustration style. Content only — do not include text-position or safe-zone directives; the render script appends those transparently from text_placement."
           },
           "text_placement": {
             "type": "string",

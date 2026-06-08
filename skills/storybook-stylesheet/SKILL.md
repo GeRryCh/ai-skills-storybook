@@ -5,7 +5,7 @@ description: >
   Use when an approved story.json already exists (from storybook-story) and the user
   wants to build, regenerate, or fix the character reference sheets — e.g. "make the
   style sheet", "regenerate the character sheets", "the characters look inconsistent /
-  wrong", "redo the style sheet". Produces one style-sheet-{name}.png per character,
+  wrong", "redo the style sheet". Produces one style-sheet-{id}.png per character,
   which render_book.py selects per page for consistency. Requires an existing story.json
   with a 'cast' array. Costs one image API call per eligible cast entry. If no story.json
   exists yet, run storybook-story first.
@@ -35,7 +35,7 @@ uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
 This makes **one OpenAI gpt-image-2 image call per cast entry** to produce individual PNGs
-(`style-sheet-{name}.png`) — one sheet per entry, no combined cast sheet. **Every cast
+(`style-sheet-{id}.png` — filename is the cast entry's `id` field, e.g. `style-sheet-pip.png`) — one sheet per entry, no combined cast sheet. **Every cast
 entry gets a sheet**: characters (`kind` absent or `"character"`), objects (`kind:
 "object"`), and locations (`kind: "location"`). Location sheets are generated from the
 entry's downloaded real-place photo(s) in `ref_image` (Stage 1, PER-50) when present —
@@ -59,21 +59,20 @@ sheet as the clothing reference, ignoring photo outfit variation.
 
 If the user supplied no character refs, the script still runs (prompt-only generation).
 
-**The script is idempotent per character.** If `style-sheet-{name}.png` already exists
-it is skipped. To force a regenerate for one character, use `--only NAME` (PER-59) after
+**The script is idempotent per character.** If `style-sheet-{id}.png` already exists
+it is skipped. To force a regenerate for one character, use `--only ID` (PER-59) after
 deleting that character's file:
 
 ```bash
-rm style-sheet-pip.png   # replace 'pip' with the character's slug
-uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json --only Pip
+rm style-sheet-pip.png   # replace 'pip' with the cast entry's id
+uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json --only pip
 # or re-run the full sheet stage (regenerates only missing sheets):
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-`--only NAME` processes exactly one cast entry by exact name match (exit 2 if not found).
-The slug walk runs for all entries so filenames remain stable. This is also what the
+`--only ID` processes exactly one cast entry by exact id match (exit 2 if not found). This is also what the
 visual editor's "↻ Regenerate sheet" button invokes (it deletes the PNG first, then calls
-`--only NAME` via the server).
+`--only ID` via the server).
 
 ---
 
@@ -90,7 +89,7 @@ If a sheet is wrong:
    - If the likeness anchored onto the wrong person or the crop clipped the subject,
      fix the crop first: re-run `crop_character.py` with an adjusted `--box` (it
      overwrites silently), then update `ref_image` to the corrected crop path.
-2. Delete only that character's sheet file (e.g. `rm style-sheet-pip.png`).
+2. Delete only that character's sheet file (e.g. `rm style-sheet-{id}.png`).
 3. Re-run the command above.
 
 Do not proceed to Stage 3 until the user approves all sheets.

@@ -693,7 +693,7 @@ function renderCast() {
   addBtn.textContent = '+ Add cast member';
   addBtn.addEventListener('click', () => {
     if (!story.cast) story.cast = [];
-    story.cast.push({ name: '', appearance: '' });
+    story.cast.push({ id: '', name: '', appearance: '' });
     renderCast();
     markDirty(null);
   });
@@ -711,6 +711,10 @@ function buildCharCard(char, i) {
       <span class="toggle">▼</span>
     </div>
     <div class="card-body open" id="char-body-${i}">
+      <div class="field">
+        <label>ID <small style="color:#94a3b8">(lowercase slug, stable key — set once; rename display name freely below)</small></label>
+        <input type="text" id="char-id-${i}" value="${esc(char.id||'')}" placeholder="e.g. pip, major-oak" pattern="^[a-z][a-z0-9-]*$" style="font-family:monospace">
+      </div>
       <div class="field">
         <label>Name</label>
         <input type="text" id="char-name-${i}" value="${esc(char.name||'')}">
@@ -733,25 +737,34 @@ function buildCharCard(char, i) {
       </div>
     </div>`;
 
+  const idInp   = card.querySelector(`#char-id-${i}`);
   const nameInp = card.querySelector(`#char-name-${i}`);
   const titleEl = card.querySelector(`#char-title-${i}`);
+  idInp.addEventListener('change', () => {
+    const newId = idInp.value.trim();
+    char.id = newId;
+    // Auto-fill name from id when name is still blank (convenience for new entries)
+    if (!char.name && newId) {
+      char.name = newId;
+      nameInp.value = newId;
+      titleEl.textContent = newId;
+    }
+    markDirty(null);
+  });
   nameInp.addEventListener('change', () => {
-    const oldName = char.name;
     const newName = nameInp.value;
     char.name = newName;
     titleEl.textContent = newName || '(no name)';
-    // Propagate rename to all pages' cast lists
-    if (oldName && oldName !== newName) {
-      (story.pages || []).forEach(page => {
-        const idx = page.cast ? page.cast.indexOf(oldName) : -1;
-        if (idx !== -1) {
-          page.cast[idx] = newName;
-          dirtyPages.add(page);
-        }
-      });
-      // Re-render pages cast UI only
-      renderPages();
+    // Auto-fill id from name when id is still blank (slugify: lowercase, replace non-alnum with -)
+    if (!char.id && newName) {
+      const slug = newName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      if (/^[a-z][a-z0-9-]*$/.test(slug)) {
+        char.id = slug;
+        idInp.value = slug;
+      }
     }
+    // No page.cast propagation: pages[].cast holds ids, not names. Renaming the
+    // display name does not touch references — that's the whole point of PER-56.
     markDirty(null);
   });
 
@@ -779,12 +792,13 @@ function buildCharCard(char, i) {
   renderRefRows(card.querySelector(`#char-refs-${i}`), char);
   renderSheetPreview(card.querySelector(`#char-sheet-${i}`), char, i);
   // Fetch sheet versions if sheet exists or a regen is running (enables resume after reload).
-  const _csd = charStatusData[char.name] || {};
+  const cid = char.id || '';
+  const _csd = charStatusData[cid] || {};
   const _sheetRunning = _csd.regen && _csd.regen.status === 'running';
   if (char.style_sheet || _sheetRunning) {
-    fetchSheetVersions(char.name);
-    if (_sheetRunning && !_sheetPolls.has(char.name)) {
-      startSheetPoll(char.name);
+    fetchSheetVersions(cid);
+    if (_sheetRunning && !_sheetPolls.has(cid)) {
+      startSheetPoll(cid);
     }
   }
   return card;
@@ -792,8 +806,9 @@ function buildCharCard(char, i) {
 
 function renderSheetPreview(container, char, i) {
   container.innerHTML = '';
-  const name = char.name;
-  const sd = charStatusData[name] || {};
+  const cid  = char.id || '';
+  const name = char.name || cid || '(no name)';
+  const sd = charStatusData[cid] || {};
   const regen = sd.regen || {};
   const isRunning = regen.status === 'running';
   const hasSheet = !!char.style_sheet;
@@ -821,22 +836,24 @@ function renderSheetPreview(container, char, i) {
   _renderSheetVersionUI(name);
 }
 
-// Helper: find the current cast-array index for a given cast-member name.
-function _sheetIdx(name) {
-  return (story.cast || []).findIndex(c => c.name === name);
+// Helper: find the current cast-array index for a given cast-member id.
+function _sheetIdx(cid) {
+  return (story.cast || []).findIndex(c => c.id === cid);
 }
 
-// Render the sheet version history UI for the given cast member name.
-function _renderSheetVersionUI(name, apiData) {
-  const i = _sheetIdx(name);
+// Render the sheet version history UI for the given cast member id.
+function _renderSheetVersionUI(cid, apiData) {
+  const i = _sheetIdx(cid);
   if (i < 0) return;
   const area = document.getElementById(`sheet-versions-${i}`);
   if (!area) return;
 
-  const vd = _sheetVersionData.get(name);
+  const vd = _sheetVersionData.get(cid);
   const versions = (apiData && apiData.versions) || (vd && vd.versions) || [];
   const viewIdx  = vd ? vd.viewIdx : 0;
   const regen    = (apiData && apiData.regen) || {};
+  const char = (story.cast || [])[i];
+  const name = (char && char.name) || cid || '(no name)';
 
   if (versions.length === 0) {
     area.innerHTML = '';
@@ -848,7 +865,7 @@ function _renderSheetVersionUI(name, apiData) {
   const n = versions.length;
   const buster = encodeURIComponent(v.mtime || '');
   const imgSrc = `/img?path=${encodeURIComponent(v.path)}&t=${buster}`;
-  const nameJ  = JSON.stringify(name);
+  const cidJ   = JSON.stringify(cid);
 
   area.innerHTML =
     `<div class="preview-img-wrap" style="display:inline-block">` +
@@ -857,13 +874,13 @@ function _renderSheetVersionUI(name, apiData) {
     `<div class="preview-overlay">` +
     (v.in_use
       ? `<span class="inuse-badge">✓ Used in book</span>`
-      : `<button class="btn-use-version" onclick="_clickSelectSheetVersion(${nameJ},'${esc(v.id)}')">Use in book</button>`) +
+      : `<button class="btn-use-version" onclick="_clickSelectSheetVersion(${cidJ},'${esc(v.id)}')">Use in book</button>`) +
     `</div></div>` +
     (n > 1
       ? `<div class="preview-nav">` +
-        `<button class="btn-sm" ${viewIdx <= 0 ? 'disabled' : ''} onclick="_prevSheetVersion(${nameJ})">‹</button>` +
+        `<button class="btn-sm" ${viewIdx <= 0 ? 'disabled' : ''} onclick="_prevSheetVersion(${cidJ})">‹</button>` +
         `<span class="ver-counter">${viewIdx + 1} / ${n}</span>` +
-        `<button class="btn-sm" ${viewIdx >= n - 1 ? 'disabled' : ''} onclick="_nextSheetVersion(${nameJ})">›</button>` +
+        `<button class="btn-sm" ${viewIdx >= n - 1 ? 'disabled' : ''} onclick="_nextSheetVersion(${cidJ})">›</button>` +
         `</div>`
       : '') +
     (regen.status === 'error'
@@ -891,27 +908,27 @@ function _updateSheetRegenBtn(i, regen) {
   }
 }
 
-// Fetch /api/sheet/versions for the named cast member, cache, and update UI.
-async function fetchSheetVersions(name) {
+// Fetch /api/sheet/versions for the given cast id, cache, and update UI.
+async function fetchSheetVersions(cid) {
   try {
-    const resp = await fetch(`/api/sheet/versions?name=${encodeURIComponent(name)}`);
+    const resp = await fetch(`/api/sheet/versions?id=${encodeURIComponent(cid)}`);
     const data = await resp.json();
     if (!data.ok) return;
 
     const versions = data.versions || [];
-    const prev = _sheetVersionData.get(name);
+    const prev = _sheetVersionData.get(cid);
     const prevIdx = prev ? prev.viewIdx : -1;
     const inUseIdx = versions.findIndex(v => v.in_use);
     let viewIdx = inUseIdx >= 0 ? inUseIdx : 0;
     if (prevIdx >= 0 && prevIdx < versions.length) viewIdx = prevIdx;
-    _sheetVersionData.set(name, {versions, viewIdx});
+    _sheetVersionData.set(cid, {versions, viewIdx});
 
-    _renderSheetVersionUI(name, data);
+    _renderSheetVersionUI(cid, data);
 
     // Stop poll on terminal status; resync story state on done.
     const status = data.regen && data.regen.status;
-    if (_sheetPolls.has(name) && (status === 'done' || status === 'error')) {
-      stopSheetPoll(name);
+    if (_sheetPolls.has(cid) && (status === 'done' || status === 'error')) {
+      stopSheetPoll(cid);
       if (status === 'done') {
         // Patch story.cast[i].style_sheet and update storyMtime so the next save
         // uses the fresh mtime written by make_style_sheet.py.
@@ -919,16 +936,16 @@ async function fetchSheetVersions(name) {
           const stResp = await fetch('/api/story');
           const newMtime = stResp.headers.get('X-Story-Mtime');
           const newStory = await stResp.json();
-          const i2 = _sheetIdx(name);
+          const i2 = _sheetIdx(cid);
           if (i2 >= 0 && story.cast && story.cast[i2]) {
-            const newEntry = (newStory.cast || []).find(e => e.name === name);
+            const newEntry = (newStory.cast || []).find(e => e.id === cid);
             if (newEntry) story.cast[i2].style_sheet = newEntry.style_sheet;
           }
           if (newMtime) storyMtime = newMtime;
         } catch (e) {
           console.warn('fetchSheetVersions: story resync failed', e);
         }
-        // Refresh charStatusData
+        // Refresh charStatusData (keyed by id)
         try {
           const sr = await fetch('/api/status');
           const sd = await sr.json();
@@ -936,7 +953,7 @@ async function fetchSheetVersions(name) {
           charStatusData = sd.cast   || {};
         } catch (_) {}
         // Re-render the sheet preview for this cast entry only.
-        const i3 = _sheetIdx(name);
+        const i3 = _sheetIdx(cid);
         if (i3 >= 0) {
           const sheetEl = document.getElementById(`char-sheet-${i3}`);
           if (sheetEl) renderSheetPreview(sheetEl, story.cast[i3], i3);
@@ -944,42 +961,42 @@ async function fetchSheetVersions(name) {
       }
     }
   } catch (e) {
-    console.warn('fetchSheetVersions failed for', name, e);
+    console.warn('fetchSheetVersions failed for', cid, e);
   }
 }
 
-function startSheetPoll(name) {
-  stopSheetPoll(name);
-  _sheetPolls.set(name, setInterval(() => fetchSheetVersions(name), 2000));
+function startSheetPoll(cid) {
+  stopSheetPoll(cid);
+  _sheetPolls.set(cid, setInterval(() => fetchSheetVersions(cid), 2000));
 }
-function stopSheetPoll(name) {
-  if (_sheetPolls.has(name)) {
-    clearInterval(_sheetPolls.get(name));
-    _sheetPolls.delete(name);
+function stopSheetPoll(cid) {
+  if (_sheetPolls.has(cid)) {
+    clearInterval(_sheetPolls.get(cid));
+    _sheetPolls.delete(cid);
   }
 }
 
 // Arrow navigation through the sheet version list.
-function _prevSheetVersion(name) {
-  const vd = _sheetVersionData.get(name);
+function _prevSheetVersion(cid) {
+  const vd = _sheetVersionData.get(cid);
   if (!vd || vd.viewIdx <= 0) return;
   vd.viewIdx--;
-  _renderSheetVersionUI(name, {versions: vd.versions, regen: null});
+  _renderSheetVersionUI(cid, {versions: vd.versions, regen: null});
 }
-function _nextSheetVersion(name) {
-  const vd = _sheetVersionData.get(name);
+function _nextSheetVersion(cid) {
+  const vd = _sheetVersionData.get(cid);
   if (!vd || vd.viewIdx >= vd.versions.length - 1) return;
   vd.viewIdx++;
-  _renderSheetVersionUI(name, {versions: vd.versions, regen: null});
+  _renderSheetVersionUI(cid, {versions: vd.versions, regen: null});
 }
 
 // "Use in book" for sheets: POST /api/sheet/select then refresh UI.
-async function _clickSelectSheetVersion(name, versionId) {
+async function _clickSelectSheetVersion(cid, versionId) {
   try {
     const resp = await fetch('/api/sheet/select', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, version: versionId}),
+      body: JSON.stringify({id: cid, version: versionId}),
     });
     const data = await resp.json();
     if (!data.ok) {
@@ -987,9 +1004,9 @@ async function _clickSelectSheetVersion(name, versionId) {
       return;
     }
     const versions = data.versions || [];
-    const cur = _sheetVersionData.get(name);
-    _sheetVersionData.set(name, {versions, viewIdx: cur ? cur.viewIdx : 0});
-    _renderSheetVersionUI(name, data);
+    const cur = _sheetVersionData.get(cid);
+    _sheetVersionData.set(cid, {versions, viewIdx: cur ? cur.viewIdx : 0});
+    _renderSheetVersionUI(cid, data);
   } catch (e) {
     alert('Network error while selecting sheet version: ' + e.message);
   }
@@ -999,15 +1016,16 @@ async function _clickSelectSheetVersion(name, versionId) {
 async function doSheetRegenerate(i) {
   const char = (story.cast || [])[i];
   if (!char) return;
-  const name = char.name;
-  const hasVersions = (_sheetVersionData.get(name) || {}).versions?.length > 0;
+  const cid  = char.id || '';
+  const name = char.name || cid || '(no name)';
+  const hasVersions = (_sheetVersionData.get(cid) || {}).versions?.length > 0;
   const msg = hasVersions
     ? `Regenerate style sheet for "${name}"?\n\n` +
-      `This generates a new sheet (1 paid Gemini call — gemini-3-pro-image).\n` +
+      `This generates a new sheet (1 paid call — gpt-image-2).\n` +
       `The current sheet is archived to history.\n\n` +
       `Pages using "${name}" will NOT re-render automatically — re-render them separately if needed.`
     : `Generate style sheet for "${name}"?\n\n` +
-      `This generates the sheet (1 paid Gemini call — gemini-3-pro-image).\n\n` +
+      `This generates the sheet (1 paid call — gpt-image-2).\n\n` +
       `Pages using "${name}" will NOT render automatically — render them from the Pages section.`;
   if (!await customConfirm(msg, 'sheet-regen')) return;
 
@@ -1029,7 +1047,7 @@ async function doSheetRegenerate(i) {
     const resp = await fetch('/api/sheet/regenerate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name}),
+      body: JSON.stringify({id: cid}),
     });
     const data = await resp.json();
     if (!resp.ok) {
@@ -1038,7 +1056,7 @@ async function doSheetRegenerate(i) {
       alert('Could not start sheet generation:\n\n' + (data.error || resp.statusText));
       return;
     }
-    startSheetPoll(name);
+    startSheetPoll(cid);
   } catch (e) {
     if (btn)      { btn.disabled = false; btn.textContent = char.style_sheet ? '↻ Regenerate sheet (paid)' : '↻ Generate sheet (paid)'; }
     if (statusEl) { statusEl.textContent = ''; }
@@ -1048,14 +1066,17 @@ async function doSheetRegenerate(i) {
 
 async function deleteChar(evt, i) {
   evt.stopPropagation();
-  const name = story.cast[i].name;
+  const char = story.cast[i];
+  const cid  = char.id || '';
+  const name = char.name || cid || '(no name)';
+  // Match by id (pages[].cast holds ids — PER-56); fall back to name for legacy files
   const usedOn = (story.pages || []).filter(p =>
-    p.cast && p.cast.includes(name));
+    p.cast && (cid ? p.cast.includes(cid) : p.cast.includes(name)));
   if (usedOn.length > 0) {
     if (!await customConfirm(`"${name}" appears on ${usedOn.length} page(s). Delete anyway (will remove from those pages)?`))
       return;
     usedOn.forEach(p => {
-      p.cast = p.cast.filter(n => n !== name);
+      p.cast = p.cast.filter(n => n !== (cid || name));
       dirtyPages.add(p);
     });
   }
@@ -1112,9 +1133,11 @@ function updatePageBadge(badgeEl, page) {
 // No disk checks — this is a warning about full-render intent, computed client-side.
 function pageRefCount(page) {
   const cast = page.cast || [];
-  const kindOf = n => { const c = (story.cast || []).find(c => c.name === n); return c ? (c.kind || 'character') : 'character'; };
-  const heroName = cast.find(n => kindOf(n) === 'character');
-  const hero = heroName ? (story.cast || []).find(c => c.name === heroName) : null;
+  // cast entries are ids (PER-56); resolve to entries via id
+  const entryOf = cid => (story.cast || []).find(c => c.id === cid);
+  const kindOf  = cid => { const e = entryOf(cid); return e ? (e.kind || 'character') : 'character'; };
+  const heroId  = cast.find(cid => kindOf(cid) === 'character');
+  const hero    = heroId ? entryOf(heroId) : null;
   return cast.length + (hero && refList(hero).length > 0 ? 1 : 0);
 }
 const FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image';
@@ -1270,34 +1293,43 @@ function buildPageCard(page, i) {
   return card;
 }
 
-// Ordered page cast: selected names as drag-free reorderable list, unselected as + buttons
+// Ordered page cast: selected ids as drag-free reorderable list, unselected as + buttons
 function renderPageCast(container, page) {
   container.innerHTML = '';
-  const selected = page.cast || [];
-  const castNames = (story.cast || []).map(c => c.name).filter(Boolean);
+  const selected = page.cast || [];  // array of cast ids (PER-56)
+  // Build id→entry map for display names and kinds
+  const castById = {};
+  (story.cast || []).forEach(c => { if (c.id) castById[c.id] = c; });
+  const castIds = Object.keys(castById);
 
-  // Helper: get kind for a cast name
-  const kindOf = name => {
-    const c = (story.cast || []).find(c => c.name === name);
+  // Helper: get kind for a cast id
+  const kindOf = cid => {
+    const c = castById[cid];
     return c ? (c.kind || 'character') : 'character';
+  };
+  // Display name for a cast id
+  const nameOf = cid => {
+    const c = castById[cid];
+    return c ? (c.name || cid) : cid;
   };
 
   // Hero = first character-kind entry (not literal-first)
-  const heroIdx = selected.findIndex(n => kindOf(n) === 'character');
+  const heroIdx = selected.findIndex(cid => kindOf(cid) === 'character');
 
   // Selected list
   const listDiv = document.createElement('div');
   listDiv.className = 'cast-list';
-  selected.forEach((name, j) => {
+  selected.forEach((cid, j) => {
     const entry = document.createElement('div');
     entry.className = 'cast-entry';
     const isHero = j === heroIdx;
-    const entryKind = kindOf(name);
+    const entryKind = kindOf(cid);
+    const displayName = nameOf(cid);
     const kindBadge = entryKind !== 'character'
       ? `<span class="kind-badge" title="${entryKind}">${entryKind.toUpperCase().slice(0,3)}</span>`
       : '';
     entry.innerHTML =
-      `<span>${esc(name)}${isHero ? '<span class="hero-badge" title="First character-kind entry also contributes their reference photo at render time">HERO</span>' : ''}${kindBadge}</span>` +
+      `<span>${esc(displayName)}${isHero ? '<span class="hero-badge" title="First character-kind entry also contributes their reference photo at render time">HERO</span>' : ''}${kindBadge}</span>` +
       `${j > 0 ? `<button class="btn-sm" onclick="">↑</button>` : '<span style="width:28px"></span>'}` +
       `${j < selected.length - 1 ? `<button class="btn-sm" onclick="">↓</button>` : '<span style="width:28px"></span>'}` +
       `<button class="btn-sm btn-danger" onclick="">✕</button>`;
@@ -1327,18 +1359,18 @@ function renderPageCast(container, page) {
   });
   container.appendChild(listDiv);
 
-  // Unselected cast — show as + buttons
-  const unsel = castNames.filter(n => !selected.includes(n));
+  // Unselected cast — show as + buttons (display name for readability, push id)
+  const unsel = castIds.filter(cid => !selected.includes(cid));
   if (unsel.length > 0) {
     const unselDiv = document.createElement('div');
     unselDiv.className = 'uncast-btns';
-    unsel.forEach(name => {
+    unsel.forEach(cid => {
       const btn = document.createElement('button');
       btn.className = 'btn-cast-add';
-      btn.textContent = '+ ' + name;
+      btn.textContent = '+ ' + nameOf(cid);
       btn.addEventListener('click', () => {
         if (!page.cast) page.cast = [];
-        page.cast.push(name);
+        page.cast.push(cid);  // push id, not display name
         markDirty(page, 'cast');
         renderPageCast(container, page);
       });
@@ -2131,11 +2163,11 @@ function clientValidate() {
     if (story[key] !== undefined && !e.includes(story[key]))
       errors.push(`'${key}' must be one of [${e.join(', ')}] (got: ${story[key]})`);
   }
-  const castNames = (story.cast || []).map(c => c.name).filter(Boolean);
+  const castIds = (story.cast || []).map(c => c.id).filter(Boolean);
   (story.pages || []).forEach((page, i) => {
-    (page.cast || []).forEach(n => {
-      if (!castNames.includes(n))
-        errors.push(`Page ${page.page_num}: cast member "${n}" is not in the cast`);
+    (page.cast || []).forEach(cid => {
+      if (!castIds.includes(cid))
+        errors.push(`Page ${page.page_num}: cast id "${cid}" is not in the cast`);
     });
     for (const key of ['text_placement','text_align','font','model','text_mode']) {
       const e = enumFor(key);

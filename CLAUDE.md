@@ -162,15 +162,13 @@ Gemini call with `if not raw_path.exists()`. This means:
   when `page-NN-long.png` and the shared `text-bg-long.png` already exist.
   Use `--composite-only` to guarantee no paid call is ever made in a run.
 
-## Key design decision: explicit cast, never prose-scraped
+## Key design decision: explicit cast, never prose-scraped; cast referenced by id (PER-56)
 
-**`image_prompt` references cast by name only (PER-42).** Every entry in `pages[].cast`
-is reference-backed at render time (character/object → style sheet; location → sheet, photo fallback). Repeating a cast member's `appearance` prose in the `image_prompt` makes the
-render model deviate from the reference; name-only is the stronger, more consistent
-signal. Pose, action, expression, and scene description stay in the prompt — only inherent
-appearance (species, colours, outfit, physical traits) is omitted. Non-cast background
-figures are described in prose as usual (no reference to anchor on).
-`validate_story.py` warns on detected echoes (character/object kinds; locations excluded).
+**Cast entries have a stable `id` (PER-56).** Pattern `^[a-z][a-z0-9-]*$` (e.g. `pip`, `major-oak`). The id is the internal key — it appears in `pages[].cast` and as `<id>` placeholders in `image_prompt`. It also drives the style-sheet filename: `style-sheet-{id}.png` (replacing the old `char_slug(name)`-derived filename). **The id NEVER reaches the image model.** `render_book.py`'s `resolve_cast_placeholders()` substitutes `<id>` → cast entry's display `name` before every Gemini call; the model always sees real names. This hybrid design (id internal, name to model) was chosen after research: Google Gemini image models run on "deep language understanding" — real names carry species/gender/age cues that opaque ids lack, and in native text mode a raw `<id>` token would be lettered into the art.
+
+**`image_prompt` uses `<id>` placeholders (PER-56 + PER-42).** Example: `"<pip> runs through rain"` → Gemini sees `"Pip runs through rain"`. Never repeat a cast member's `appearance` prose in the prompt (PER-42) — the style sheet defines appearance; name-only (via `<id>` → name) is the stronger consistency signal. Pose, action, expression, scene description stay in the prompt. `validate_story.py` errors on unknown `<id>` tokens, warns on echo. Non-cast background figures are described in prose as usual.
+
+**Breaking change (PER-56, no shim):** both paid scripts call `require_cast_ids()` (exit 2 with migration message) when any cast entry is missing a valid `id`. Migrate story.json: add `id` to each cast entry, switch `pages[].cast` to ids, convert `image_prompt` name mentions to `<id>` placeholders.
 
 The `cast` array in `story.json` is authored explicitly and is the **only** source for
 the style sheets. An earlier regex that scraped characters from prose minted phantom
@@ -189,12 +187,12 @@ preserves the existing cap math (5 Stage-2 / 4-or-5 render cap by model) unchang
 per-character and per-person, so nothing interacts differently with the caps.
 
 Re-run recipe for a bad crop: re-run `crop_character.py` with an adjusted `--box` (it
-overwrites silently — free to iterate) → `rm style-sheet-{slug}.png` → re-run Stage 2
+overwrites silently — free to iterate) → `rm style-sheet-{id}.png` → re-run Stage 2
 (or use the editor's per-cast Regenerate sheet button — PER-59).
 Cross-session note: crop provenance is not stored in `story.json` (intentional — same rule
 as `style_sheet`). To redo a crop in a new session you need the original source photo again.
 
-Each page also carries an explicit `cast` list (`pages[].cast`) naming which
+Each page also carries an explicit `cast` list (`pages[].cast`) of cast **ids** — not names — naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
 this to send only the relevant per-cast-entry style sheets — the model never sees sheets
 for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it additionally contributes its first `ref_image` (a solo photo or a Stage-1

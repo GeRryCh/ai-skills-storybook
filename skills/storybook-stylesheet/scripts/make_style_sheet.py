@@ -272,6 +272,45 @@ def require_style_guide(story: dict) -> None:
         sys.exit(2)
 
 
+# Keep in sync with the copy in render_book.py
+# (the two skills share no module; both copies must stay identical).
+CAST_ID_MIGRATION_MESSAGE = (
+    "ERROR: story.json uses the pre-PER-56 schema. The cast reference contract changed "
+    "(breaking, no shim):\n"
+    "  cast[].id  — add a stable lowercase slug to every cast entry\n"
+    "               pattern: ^[a-z][a-z0-9-]*$  (e.g. 'pip', 'major-oak')\n"
+    "  pages[].cast — change name strings to id strings (matching cast[].id)\n"
+    "  image_prompt — replace literal name mentions with <id> placeholders\n"
+    "                 (render resolves <id> → display name before every Gemini call)\n"
+    "Migrate story.json (or re-run Stage 1) and re-run. See\n"
+    "skills/storybook-story/assets/story_schema.json."
+)
+
+_CAST_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def require_cast_ids(story: dict) -> None:
+    """Fail fast (exit 2) on pre-PER-56 story.json files missing cast[].id. Breaking change, no shim."""
+    cast = story.get("cast")
+    if not isinstance(cast, list):
+        return  # other validators will catch a missing/malformed cast
+    missing: list[str] = []
+    for entry in cast:
+        if not isinstance(entry, dict):
+            continue
+        cid = entry.get("id")
+        name = entry.get("name") or "unnamed"
+        if not isinstance(cid, str) or not _CAST_ID_PATTERN.match(cid):
+            missing.append(repr(name))
+    if missing:
+        print(
+            f"Cast entries missing a valid 'id': {', '.join(missing)}\n\n"
+            f"{CAST_ID_MIGRATION_MESSAGE}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
     """Prompt for one cast entry's individual reference sheet, branched on kind.
 
@@ -650,21 +689,22 @@ def main() -> None:
     )
     parser.add_argument(
         "--only",
-        metavar="NAME",
+        metavar="ID",
         default=None,
         help=(
-            "Process only the cast entry whose name matches NAME exactly "
-            "(exit 2 if not found). The slug walk still runs for all entries "
-            "so filenames remain stable. Delete the entry's PNG first to force "
-            "regeneration past the skip-if-exists guard."
+            "Process only the cast entry whose id matches ID exactly "
+            "(exit 2 if not found). Every entry's slug is still computed "
+            "so filenames remain stable even when only one entry is processed. "
+            "Delete the entry's PNG first to force regeneration past the skip-if-exists guard."
         ),
     )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
-    only_name: str | None = args.only
+    only_id: str | None = args.only
     story = load_story(story_path)
     reject_legacy_keys(story)
+    require_cast_ids(story)
     require_style_guide(story)
 
     # CLI flag > story.json field > built-in default (2K).
@@ -685,55 +725,58 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # --only: validate the target name exists before starting the slug walk.
-    if only_name is not None:
-        cast_names = [(e.get("name") or "").strip() for e in cast]
-        if only_name not in cast_names:
-            available = [n for n in cast_names if n]
+    # --only: validate the target id exists before starting the main loop.
+    if only_id is not None:
+        cast_ids = [(e.get("id") or "").strip() for e in cast]
+        if only_id not in cast_ids:
+            available = [i for i in cast_ids if i]
             print(
-                f"ERROR: no cast entry named {only_name!r}. "
-                f"Available: {', '.join(repr(n) for n in available) if available else '(none)'}",
+                f"ERROR: no cast entry with id {only_id!r}. "
+                f"Available: {', '.join(repr(i) for i in available) if available else '(none)'}",
                 file=sys.stderr,
             )
             sys.exit(2)
 
-    used_slugs: set[str] = set()
     any_failed = False
 
     for entry in cast:
+        cid = (entry.get("id") or "").strip()
         name = (entry.get("name") or "").strip()
         kind = (entry.get("kind") or "character").strip() or "character"
 
         if kind not in ("character", "object", "location"):
             print(
-                f"ERROR: cast entry {name!r} has unknown kind {kind!r} "
+                f"ERROR: cast entry {name!r} (id={cid!r}) has unknown kind {kind!r} "
                 f"(must be 'character', 'object', or 'location').",
                 file=sys.stderr,
             )
             sys.exit(2)
 
-        slug = char_slug(name or "entry", used_slugs)
+        # Filename slug is the entry id (PER-56: id is already slug-safe).
+        # Guard against blank id (require_cast_ids should have caught it already).
+        slug = cid or "entry"
         target = out_dir / f"style-sheet-{slug}.png"
 
         # --only: skip non-matching entries so they get zero side effects.
-        # The slug walk above must run for every entry to keep filenames stable
-        # for ALL cast members, even those we do not process.
-        if only_name is not None and name != only_name:
+        # Every entry's slug/target is still computed above to keep the loop
+        # structure consistent (even though slugs are now ids, not derived).
+        if only_id is not None and cid != only_id:
             continue
 
         if target.exists():
-            print(f"Skipping {name!r} — sheet already exists: {target}")
+            print(f"Skipping {name!r} (id={cid!r}) — sheet already exists: {target}")
             entry["style_sheet"] = str(target)
             print(f"MEDIA: {target}")
             continue
 
         input_images = collect_ref_images_for_entry(entry)
         prompt = build_sheet_prompt(story, entry, has_refs=bool(input_images))
-        print(f"\nGenerating sheet for {name!r} (kind={kind}) -> {target}")
+        print(f"\nGenerating sheet for {name!r} (id={cid!r}, kind={kind}) -> {target}")
         print(f"Prompt: {prompt}")
 
         # Keep label wording in sync with render_book.py's IMAGE_SYSTEM_PROMPT
         # "kind" vocabulary (real photograph of the character/object/location).
+        # Labels use display name, not id — model-facing strings always use names.
         ref_labels = {
             "character": f"real photograph of the character {name} (facial likeness reference)",
             "object": f"real photograph of the object {name} (appearance reference)",
@@ -745,7 +788,7 @@ def main() -> None:
             ref_label=ref_labels[kind] if input_images else None,
         )
         if not ok or not target.exists():
-            print(f"ERROR: style sheet PNG not produced for {name!r}.", file=sys.stderr)
+            print(f"ERROR: style sheet PNG not produced for {name!r} (id={cid!r}).", file=sys.stderr)
             any_failed = True
             continue
 

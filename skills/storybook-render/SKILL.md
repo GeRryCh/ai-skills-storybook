@@ -75,7 +75,7 @@ For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png`
 ## Location references
 
 If `story.json` has `cast` entries with `kind: "location"` and a page lists one of those
-names in its `pages[].cast` array, that place's Stage-2 reference sheet (`style_sheet`) is
+ids in its `pages[].cast` array, that place's Stage-2 reference sheet (`style_sheet`) is
 sent as an additional reference image — the same mechanism as characters and objects. When
 the entry has no sheet (e.g. a book rendered before Stage 2 was re-run with PER-50), the
 first `ref_image` photo is sent as a fallback instead (logged). Location references take
@@ -89,8 +89,12 @@ dropped). On scenery-only pages
 (`"cast": []`) the location photo is the sole reference image.
 
 Each reference is sent with a short identifying note in the Gemini call so the model knows
-a location sheet or photo is the setting, not a character. Unknown locations and missing
+a location sheet or photo is the setting, not a character. Unknown ids and missing
 files degrade to a logged warning and skip — they never fail the render.
+
+## `<id>` placeholder substitution (PER-56)
+
+`pages[].cast` holds cast **ids** (e.g. `["pip", "major-oak"]`). `image_prompt` uses `<id>` placeholders. Before every Gemini call, `render_book.py`'s `resolve_cast_placeholders()` substitutes each `<id>` with the cast entry's display `name` — the model always sees real names, never id tokens. Unknown or malformed `<id>` tokens (e.g. `<Pip>` with wrong case) are stripped of angle brackets and logged; the validator (`validate_story.py`) is the hard gate that prevents them.
 
 ---
 

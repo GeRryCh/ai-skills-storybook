@@ -12,11 +12,11 @@ All scripts are PEP-723 inline-dependency scripts. Always invoke with `uv run` s
 
 ## Preserve idempotency
 
-Both paid scripts skip work whose output already exists. `make_style_sheet.py` skips any `style-sheet-{name}.png` that already exists; `render_book.py` skips any `page-NN.png` that exists. **Preserve this behaviour** — it makes partial-failure re-runs cheap. To force a regenerate, `rm` the target first.
+Both paid scripts skip work whose output already exists. `make_style_sheet.py` skips any `style-sheet-{id}.png` that already exists (filename is the cast entry's `id` — PER-56); `render_book.py` skips any `page-NN.png` that exists. **Preserve this behaviour** — it makes partial-failure re-runs cheap. To force a regenerate, `rm` the target first.
 
 ## Keep duplicated helpers in sync
 
-`build_style_block()` and `append_api_log()` are intentionally duplicated in both `render_book.py` and `make_style_sheet.py`. Any change to either must be applied to both copies.
+`build_style_block()`, `append_api_log()`, `require_cast_ids()`, and `CAST_ID_MIGRATION_MESSAGE` are intentionally duplicated in both `render_book.py` and `make_style_sheet.py`. Any change to any of these must be applied to both copies.
 
 ## No migration shim for legacy keys
 
@@ -30,9 +30,11 @@ Both paid scripts refuse to run (`require_style_guide()`, exit 2) when `style_gu
 
 The `cast` array in `story.json` is authored explicitly and is the **only** source for style sheets. Do not reintroduce any regex/NLP that scrapes character names from `image_prompt` prose — this previously minted phantom characters (a fish "Deep" from "deep twilight sky", a girl "She" from "She holds a rabbit") and poisoned every page. See `get_cast()` docstring in `make_style_sheet.py`.
 
-## Name-only refs in `image_prompt`
+Each cast entry has a stable `id` (PER-56): lowercase slug, pattern `^[a-z][a-z0-9-]*$` (e.g. `pip`, `major-oak`). `pages[].cast` holds ids; `image_prompt` uses `<id>` placeholders. The id is internal structure — it never reaches the image model.
 
-`image_prompt` must reference cast members **by name only** (PER-42). Repeating a cast member's `appearance` prose makes the render model deviate from the reference sheet. Pose, action, expression, and scene description stay in the prompt — only inherent appearance is omitted.
+## `<id>` placeholders in `image_prompt` (PER-56 + PER-42)
+
+`image_prompt` references cast members with `<id>` placeholders (e.g. `"<pip> runs through rain"`). `render_book.py`'s `resolve_cast_placeholders()` substitutes each `<id>` → cast entry's display `name` before every Gemini call, so the model always sees real names. This is the name-only rule (PER-42): placeholder → name is the substitution; repeating a cast member's `appearance` prose still weakens the reference-sheet signal and must be avoided. Pose, action, expression, and scene description stay in the prompt.
 
 ## Outfit lock
 
