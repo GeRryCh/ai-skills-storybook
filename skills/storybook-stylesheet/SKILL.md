@@ -14,7 +14,7 @@ metadata:
     bins:
       - uv
     env:
-      - GEMINI_API_KEY
+      - STORYBOOK_SKILL_OPENAI_API_KEY
 ---
 
 # Storybook — Stage 2: Character Style Sheets
@@ -22,7 +22,7 @@ metadata:
 ## Preconditions
 
 - `{out_dir}/story.json` exists and contains a non-empty `cast` array (authored in Stage 1 by **storybook-story**).
-- `GEMINI_API_KEY` is set; `uv` is installed. The script calls the Gemini image API directly (no sibling skill needed).
+- `STORYBOOK_SKILL_OPENAI_API_KEY` (or `OPENAI_API_KEY`) is set; `uv` is installed. The script calls the OpenAI gpt-image-2 image API directly (no sibling skill needed).
 
 If `story.json` is missing, run **storybook-story** first. If the `cast` array is missing, add it to `story.json` before running (sheets are built from that list, never guessed from prose).
 
@@ -34,7 +34,7 @@ If `story.json` is missing, run **storybook-story** first. If the `cast` array i
 uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 ```
 
-This makes **one Gemini image call per cast entry** to produce individual PNGs
+This makes **one OpenAI gpt-image-2 image call per cast entry** to produce individual PNGs
 (`style-sheet-{name}.png`) — one sheet per entry, no combined cast sheet. **Every cast
 entry gets a sheet**: characters (`kind` absent or `"character"`), objects (`kind:
 "object"`), and locations (`kind: "location"`). Location sheets are generated from the
@@ -46,8 +46,8 @@ full-body right profile, and a face close-up; for objects and locations, multipl
 representative angles. Reference images are used as input: only that entry's own
 `ref_image` (a single path or an array of paths — **every path must be a single-person
 image** for characters; if the source photo was a group photo, use the per-person crop
-produced in Stage 1, not the original), capped at 5 (the Gemini 3 Pro Image
-character-lane limit). There is no shared global pool — refs are mapped per entry in Stage
+produced in Stage 1, not the original), capped at 5 reference photos per call.
+There is no shared global pool — refs are mapped per entry in Stage
 1, so one character's photo never bleeds into another's sheet. The script writes each
 entry's `style_sheet` path back into the `cast` array in `story.json`.
 

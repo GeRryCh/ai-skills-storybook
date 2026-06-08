@@ -2,16 +2,22 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "google-genai",
+#     "openai>=1.40",
 #     "Pillow",
 # ]
 # ///
 """
 Generate per-cast-entry reference sheets for a storybook.
 
-Reads story.json, calls the Gemini image API once per eligible cast entry to
-produce individual PNGs (style-sheet-{slug}.png), then writes each entry's
-style_sheet path back into story.json.
+Reads story.json, calls the OpenAI gpt-image-2 image API (images.edit) once per
+eligible cast entry to produce individual PNGs (style-sheet-{slug}.png), then
+writes each entry's style_sheet path back into story.json.
+
+gpt-image-2 (edit endpoint) is the style-sheet standard: it processes every
+reference photo at high fidelity for stronger likeness than Gemini. A baked-in
+"flat 2D cartoon, not a photo" style directive (STYLE_BOOST_*) counters the edit
+endpoint's photoreal bias so sheets stay in the book's illustration style.
+NOTE: render_book.py (Stage 3) still uses Gemini — a deliberate split.
 
 Eligible entries (every cast entry gets a sheet):
   kind=character — outfit-locked, face/hair likeness from ref_image photos.
@@ -24,7 +30,7 @@ Eligible entries (every cast entry gets a sheet):
 Idempotent: skips entries whose style-sheet-{slug}.png already exists. To force
 a regenerate for one entry, delete that entry's file and re-run.
 
-Requires GEMINI_API_KEY in the environment.
+Requires STORYBOOK_SKILL_OPENAI_API_KEY (or OPENAI_API_KEY) in the environment.
 
 Usage:
   uv run make_style_sheet.py --story /path/to/story.json [--out-dir /path/to/outdir]
@@ -42,9 +48,57 @@ import re
 import sys
 from pathlib import Path
 
-# Gemini image-generation config.
-IMAGE_MODEL = "gemini-3-pro-image"
-MAX_INPUT_IMAGES = 5  # Gemini 3 Pro Image: up to 5 reference images per call
+# OpenAI image-generation config (gpt-image-2, images.edit endpoint).
+IMAGE_MODEL = "gpt-image-2"
+MAX_INPUT_IMAGES = 5  # cap reference photos per call (per-character refs are few)
+IMAGE_QUALITY = "medium"  # validated look for these sheets; "high" is slower/costlier
+IMAGE_MODERATION = "low"  # reduce false-refusals; gpt-image-2 did not block child faces
+
+# gpt-image-2 takes a pixel `size`, not an aspect enum. Map the book aspect_ratio.
+_PORTRAIT_RATIOS = {"2:3", "3:4", "4:5", "9:16"}
+_LANDSCAPE_RATIOS = {"3:2", "4:3", "5:4", "16:9", "21:9"}
+
+
+def aspect_to_size(aspect: str | None) -> str:
+    if not aspect:
+        return "auto"
+    a = aspect.strip()
+    if a == "1:1":
+        return "1024x1024"
+    if a in _PORTRAIT_RATIOS:
+        return "1024x1536"
+    if a in _LANDSCAPE_RATIOS:
+        return "1536x1024"
+    return "auto"
+
+
+def get_api_key() -> str | None:
+    """OpenAI key: project-specific var first, then the standard OPENAI_API_KEY."""
+    return os.environ.get("STORYBOOK_SKILL_OPENAI_API_KEY") or os.environ.get(
+        "OPENAI_API_KEY"
+    )
+
+
+# Baked-in style directive. The images.edit endpoint forces input_fidelity HIGH
+# and hugs the reference photos, which biases the face photoreal. This front- and
+# back-loads a hard "flat 2D cartoon, NOT a photo" instruction so sheets stay in
+# the book's illustration style while keeping the photo's facial identity.
+STYLE_BOOST_HEAD = (
+    "FLAT 2D HAND-PAINTED CHILDREN'S-BOOK WATERCOLOR ILLUSTRATION — a soft "
+    "storybook cartoon drawing, NOT a photograph. Absolutely no photorealism: "
+    "no photographic skin texture, no realistic pores/shading/lighting, no 3D "
+    "rendering. Use simplified cartoon features, soft watercolor washes, and "
+    "visible thin pen-and-ink outlines. Treat any attached photographs ONLY as "
+    "a reference for the person's facial IDENTITY (face shape, beard, eyes, "
+    "nose, hair) — copy the identity, then REDRAW the whole figure from scratch "
+    "in flat watercolor cartoon style. Never reproduce photographic detail.\n\n"
+)
+STYLE_BOOST_TAIL = (
+    "\n\nFINAL REMINDER: the output must look like a flat, soft, hand-painted "
+    "children's-book watercolor cartoon with ink outlines — never a photo, never "
+    "photorealistic. Likeness comes through cartoon facial features, not "
+    "photographic rendering."
+)
 
 # Per-kind system prompts: common prefix + kind-specific likeness sentence + tail.
 _IMAGE_SYSTEM_PROMPT_PREFIX = (
@@ -456,79 +510,122 @@ def generate_image(
     system_prompt: str | None = None,
     ref_label: str | None = None,
 ) -> bool:
-    """Generate a single image via the Gemini API and write it to out_path."""
-    from google import genai
-    from google.genai import types
+    """Generate a single sheet via OpenAI gpt-image-2 and write it to out_path.
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    Uses images.edit when reference photos exist (the documented multi-image
+    likeness path); falls back to images.generate for entries with no photos
+    (edit requires >=1 input image). The images.edit endpoint has no system role
+    and no per-image label parts, so the system prompt, the reference label, and
+    the sheet prompt are folded into one prompt string, wrapped in STYLE_BOOST_*.
+    `resolution` (1K/2K/4K) is Gemini-era and unused by gpt-image-2 (logged only);
+    the call size comes from aspect_ratio via aspect_to_size().
+    """
+    import base64
+
+    from openai import OpenAI
+
+    api_key = get_api_key()
     if not api_key:
-        print("ERROR: GEMINI_API_KEY is not set in the environment.", file=sys.stderr)
+        print(
+            "ERROR: no OpenAI key. Set STORYBOOK_SKILL_OPENAI_API_KEY (or OPENAI_API_KEY).",
+            file=sys.stderr,
+        )
         return False
 
     if system_prompt is None:
         system_prompt = image_system_prompt("character")
 
-    # Build contents: text prompt + labeled image parts. Each reference image is
-    # preceded by a short text part binding it to the named subject (same
-    # labeled-interleaved pattern as render_book.py's run_nano_banana) — bare
-    # unlabeled photos let the model treat them as loose style hints instead of
-    # the concrete person/object/place to match.
-    contents: list = [prompt]
-    contents_desc: list[tuple] = [("text", prompt)]  # mirrors contents for audit log
+    # Fold system + reference label + sheet prompt into one prompt, wrapped in the
+    # baked-in cartoon style directive (edit has no separate system channel).
+    label_note = (
+        f"About the attached reference photograph(s): {ref_label}.\n\n"
+        if (ref_label and input_images)
+        else ""
+    )
+    full_prompt = (
+        STYLE_BOOST_HEAD
+        + system_prompt.strip()
+        + "\n\n"
+        + label_note
+        + prompt.strip()
+        + STYLE_BOOST_TAIL
+    )
+
+    size = aspect_to_size(aspect_ratio)
+
+    # Audit log (book log.txt): mirror the gemini-era contents order — folded
+    # prompt as contents[0], then each reference image's metadata.
+    contents_desc: list[tuple] = [("text", full_prompt)]
     for img in input_images:
         p = Path(img)
         mime, _ = mimetypes.guess_type(str(p))
         if not mime:
             mime = "image/png"
-        data = p.read_bytes()
-        if ref_label:
-            label_text = f"Next image: {ref_label}."
-            contents.append(label_text)
-            contents_desc.append(("text", label_text))
-        contents.append(types.Part.from_bytes(data=data, mime_type=mime))
-        contents_desc.append(("image", str(p), mime, len(data)))
-
-    response_modalities = ["TEXT", "IMAGE"]
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        response_modalities=response_modalities,
-        image_config=types.ImageConfig(image_size=resolution, aspect_ratio=aspect_ratio),
-    )
+        try:
+            n = p.stat().st_size
+        except OSError:
+            n = 0
+        contents_desc.append(("image", str(p), mime, n))
     append_api_log(
         out_path.parent / "log.txt",  # out_path is out_dir/style-sheet-*.png
         script="make_style_sheet.py",
         target=out_path,
         model=IMAGE_MODEL,
-        resolution=resolution,
+        resolution=f"{size} (q={IMAGE_QUALITY}; --resolution {resolution} ignored)",
         aspect_ratio=aspect_ratio,
-        response_modalities=response_modalities,
+        response_modalities=["IMAGE"],
         system_instruction=system_prompt,
         contents_desc=contents_desc,
     )
 
+    client = OpenAI(api_key=api_key, timeout=300.0, max_retries=2)
+    handles = []
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=IMAGE_MODEL,
-            contents=contents,
-            config=config,
-        )
-    except Exception as e:
-        print(f"ERROR: image API request failed: {e}", file=sys.stderr)
-        return False
+        for img in input_images:
+            handles.append(open(Path(img), "rb"))
+        try:
+            if handles:
+                response = client.images.edit(
+                    model=IMAGE_MODEL,
+                    image=handles,
+                    prompt=full_prompt,
+                    size=size,
+                    quality=IMAGE_QUALITY,
+                    n=1,
+                    # moderation isn't in older SDK-typed edit signatures; route via
+                    # extra_body so it reaches the API regardless of SDK version.
+                    extra_body={"moderation": IMAGE_MODERATION},
+                )
+            else:
+                response = client.images.generate(
+                    model=IMAGE_MODEL,
+                    prompt=full_prompt,
+                    size=size,
+                    quality=IMAGE_QUALITY,
+                    n=1,
+                    extra_body={"moderation": IMAGE_MODERATION},
+                )
+        except Exception as e:  # surfaces moderation_blocked / bad-request reasons
+            print(f"ERROR: image API request failed: {e}", file=sys.stderr)
+            return False
+    finally:
+        for fh in handles:
+            try:
+                fh.close()
+            except Exception:
+                pass
 
-    # Extract image bytes from the response parts.
-    image_data: bytes | None = None
-    for part in response.candidates[0].content.parts:
-        if part.inline_data is not None:
-            image_data = part.inline_data.data
-            break
-    if not image_data:
+    try:
+        b64 = response.data[0].b64_json
+    except Exception:
+        print("ERROR: no images returned by the API.", file=sys.stderr)
+        return False
+    if not b64:
         print("ERROR: no images returned by the API.", file=sys.stderr)
         return False
 
     try:
-        out_path.write_bytes(_ensure_png(image_data))
+        out_path.write_bytes(_ensure_png(base64.b64decode(b64)))
     except Exception as e:
         print(f"ERROR: failed to write image: {e}", file=sys.stderr)
         return False
