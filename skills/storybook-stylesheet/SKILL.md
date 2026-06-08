@@ -44,9 +44,8 @@ style — or from `appearance` alone for fictional places. Each sheet shows that
 alone: for characters, exactly four views — full-body front (анфас), full-body left profile,
 full-body right profile, and a face close-up; for objects and locations, multiple
 representative angles. Reference images are used as input: only that entry's own
-`ref_image` (a single path or an array of paths — **every path must be a single-person
-image** for characters; if the source photo was a group photo, use the per-person crop
-produced in Stage 1, not the original), capped at 5 reference photos per call.
+`ref_image` (a single path or an array of paths — multiple angles of the same person are
+accepted), capped at 5 reference photos per call.
 There is no shared global pool — refs are mapped per entry in Stage
 1, so one character's photo never bleeds into another's sheet. The script writes each
 entry's `style_sheet` path back into the `cast` array in `story.json`.
@@ -86,9 +85,6 @@ pages.
 If a sheet is wrong:
 1. Fix that character's entry in the `cast` array in `story.json` (sharpen
    `appearance`, set/update `ref_image`).
-   - If the likeness anchored onto the wrong person or the crop clipped the subject,
-     fix the crop first: re-run `crop_character.py` with an adjusted `--box` (it
-     overwrites silently), then update `ref_image` to the corrected crop path.
 2. Delete only that character's sheet file (e.g. `rm style-sheet-{id}.png`).
 3. Re-run the command above.
 

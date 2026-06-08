@@ -96,45 +96,9 @@ Exits 0 when clean. On errors (exit 2), fix `story.json` and re-run until clean.
 ### Source-photo analysis (BEFORE authoring the cast)
 
 When the user supplies reference photos, **view every photo with the Read tool before
-writing the cast** — never map a photo to a character without seeing it first.
-
-**Single-person photo:** map the photo directly to that character's `ref_image` (unchanged
-behavior). No crop needed — add the path as-is.
-
-**Multi-person photo** (two or more distinct people in frame): do NOT point any character's
-`ref_image` at the original group photo. Instead:
-
-1. **Describe** each distinct person visible: approximate age, hair colour/length,
-   clothing, position in frame (e.g. "the girl on the left in the red jacket"), and any
-   distinguishing features. Be concrete — this description drives the crop box.
-2. **Ask the user** which people should become characters and what to name each one.
-   Never auto-promote everyone; the user may only want one or two of the people shown.
-3. **For each chosen person**, produce a single-person crop:
-   - Estimate a **generous** fractional bounding box — full person head-to-toe with
-     comfortable margin so hair and limbs are never clipped. When in doubt, go bigger;
-     background context is harmless, a clipped head is not.
-   - Run the crop script (free, Pillow only, no API call; requires `uv` on PATH — same
-     dependency as Stages 2–3):
-     ```
-     uv run {skillDir}/scripts/crop_character.py \
-       --image /path/to/source.jpg \
-       --box L,T,R,B \
-       --out {out_dir}/ref-{char-slug}.png
-     ```
-     `L,T,R,B` are fractions of image width/height in [0, 1] — **not pixel coordinates**.
-     Example: `--box 0.05,0.08,0.45,0.95`
-   - **View the crop with the Read tool** to verify: right person captured, head/hair not
-     clipped, no other person dominating the frame. If anything is off, adjust the box
-     and re-run — the script silently overwrites the output file, so iteration is free.
-   - Set that character's `ref_image` to the crop path.
-
-**Naming convention for crop files:** `ref-{char-slug}.png` in the output directory, where
-`slug` is the character name lowercased with non-alphanumerics replaced by hyphens (e.g.
-`ref-mia.png`, `ref-little-bear.png`). If a character has an additional solo photo, list
-both: `["ref-mia.png", "/photos/mia-solo.jpg"]`. For a second crop of the same character
-use `-2`/`-3` suffixes (`ref-mia-2.png`). Crop filenames must be unique within the book.
-
-**The original multi-person photo must never appear in any character's `ref_image`.**
+writing the cast** — never map a photo to a character without seeing it first. Then
+map each photo (or an array of same-person angles) directly to that character's
+`ref_image`.
 
 ### Cast — the `cast` array (drives consistency)
 
@@ -154,16 +118,12 @@ Each entry carries an optional `"kind"` field: `"character"` (default when absen
   If the user did not specify clothing, invent one simple distinctive outfit and name
   it. Photos anchor face and hair likeness only — Stage 2 ignores clothing in photos.
 - If the user supplied character photos, map each to its character's `ref_image`
-  following the Source-photo analysis step above. **Every path in `ref_image` must
-  be a single-person image** — a solo photo or a Stage-1 crop from
-  `scripts/crop_character.py`. For multi-person source photos, use only the
-  per-person crop, never the group original. Use a single path for one photo, or
-  an array of paths for several images of the same person (multiple angles or a
-  crop plus a solo photo). This Stage-1 mapping is the ONLY source of reference
-  photos — Stage 2 builds each style sheet from that character's `ref_image` and
-  nothing else. There is no shared global pool, so one character's photo never
-  bleeds into another's sheet. Capped at 5 photos per character (Gemini 3 Pro
-  Image character-lane limit).
+  following the Source-photo analysis step above. Use a single path for one photo,
+  or an array of paths for several images of the same person (multiple angles).
+  This Stage-1 mapping is the ONLY source of reference photos — Stage 2 builds
+  each style sheet from that character's `ref_image` and nothing else. There is no
+  shared global pool, so one character's photo never bleeds into another's sheet.
+  Capped at 5 photos per character (Gemini 3 Pro Image character-lane limit).
 
 Never rely on auto-extraction: the cast is never guessed from prose.
 
@@ -341,7 +301,7 @@ on that page. ids must match `cast[].id` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
 **Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero, and Stage
-3 additionally feeds that character's first `ref_image` (a solo photo or a Stage-1 crop)
+3 additionally feeds that character's first `ref_image` (a reference photo)
 into the render to lock its facial likeness. List the protagonist (e.g. the child the book is
 about) first on every page they appear; with a 4-ref cap (flash default; 5 with pro), a fifth reference
 may be dropped to make room for the hero's photo. Three-character pages on flash can carry hero

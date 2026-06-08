@@ -418,12 +418,6 @@ def collect_ref_images_for_entry(entry: dict) -> list[str]:
 
     `ref_image` accepts a single path (string) or a list of paths.
 
-    For kind=character: every path must be a single-person image — a solo photo or a
-    per-person crop produced in Stage 1 by storybook-story's crop_character.py.
-    Multi-person group photos should have been cropped before story.json was written;
-    if a group photo slips through here the model cannot know which person's likeness
-    to anchor.
-
     Only photos mapped to THIS entry are used — there is no shared global pool, so
     one entry's reference photo never bleeds into another's sheet. The cast-to-photo
     mapping is fixed in Stage 1 (storybook-story).

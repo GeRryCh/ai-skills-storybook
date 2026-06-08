@@ -34,7 +34,7 @@ Arguments:
 
 Naming convention: loc-{slug}-N.jpg (numbered, N = 1, 2, 3 …) in the output
 directory, where slug is the place name lowercased with non-alphanumerics
-replaced by hyphens — same rule as ref-{char-slug}.png for character crops.
+replaced by hyphens (e.g. loc-major-oak-1.jpg).
 Stage 1 invokes this script once per photo; all numbered paths go into the
 `ref_image` array of the location cast entry.
 
@@ -244,7 +244,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Validate numeric args (exit 2 on bad values — same as --box in crop_character.py)
+    # Validate numeric args (exit 2 on bad values)
     if args.min_edge <= 0:
         _fail("--min-edge must be a positive integer.", code=2)
     if args.max_edge <= 0:

@@ -15,23 +15,6 @@ uv run skills/storybook-story/scripts/validate_story.py \
 uv run skills/storybook-story/scripts/validate_story.py \
   --story tests/fixtures/gazelle-valley/story.json
 
-# No API cost — crop the committed fixture ref image (happy path + overwrite loop)
-uv run skills/storybook-story/scripts/crop_character.py \
-  --image tests/fixtures/pip-storm/refs/pip-ref.png \
-  --box 0.2,0.1,0.8,0.9 --out /tmp/smoke-crop.png
-# Adjust box and re-run (must overwrite silently)
-uv run skills/storybook-story/scripts/crop_character.py \
-  --image tests/fixtures/pip-storm/refs/pip-ref.png \
-  --box 0.1,0.05,0.9,0.95 --out /tmp/smoke-crop.png
-# Pixel coords → exit 2 with "fractions, not pixels" message
-uv run skills/storybook-story/scripts/crop_character.py \
-  --image tests/fixtures/pip-storm/refs/pip-ref.png \
-  --box 120,40,800,900 --out /tmp/smoke-bad.png
-# Degenerate box (left ≥ right) → exit 2
-uv run skills/storybook-story/scripts/crop_character.py \
-  --image tests/fixtures/pip-storm/refs/pip-ref.png \
-  --box 0.8,0.1,0.2,0.9 --out /tmp/smoke-bad.png
-
 # No API cost — exercise text overlay against a committed fixture page
 uv run skills/storybook-render/scripts/overlay_text.py \
   --image tests/fixtures/pip-storm/pages/page-01.png \

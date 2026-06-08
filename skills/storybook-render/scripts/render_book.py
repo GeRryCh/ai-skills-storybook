@@ -488,11 +488,6 @@ def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
 def _ref_photos(entry: dict) -> list[str]:
     """This cast entry's own reference photo paths, in order, existing only.
 
-    For kind=character entries, each path must be a single-person image — a solo
-    photo or a Stage-1 crop produced by storybook-story's crop_character.py.
-    Multi-person group photos should have been cropped to per-person files before
-    story.json was written.
-
     Mirrors collect_ref_images_for_entry() in make_style_sheet.py (the two skills share
     no module): normalize a string-or-list `ref_image` -> dedup keeping order -> drop
     missing files. No cap here; the caller's per-model budget governs.

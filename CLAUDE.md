@@ -15,9 +15,7 @@ Four skills run in order and hand off a **single file, `story.json`**, in an out
 directory (default: a newly created `{slug(title)}/` folder under the user's cwd;
 an explicitly user-named path is used verbatim):
 
-1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), crops
-   multi-person photos to one file per person via `scripts/crop_character.py` (Pillow only,
-   no API), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
+1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
    (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
 2. **storybook-stylesheet** (paid, 1 image call per cast entry) — generates one
@@ -93,13 +91,6 @@ All scripts are PEP-723 inline-dependency scripts — always run with `uv run` (
 deps like Pillow automatically), never `python`:
 
 ```bash
-# Stage 1 — crop one person from a multi-person source photo (free, Pillow only, no API)
-# Run once per character extracted from a group photo; overwrites --out on each run.
-uv run skills/storybook-story/scripts/crop_character.py \
-  --image /path/to/family.jpg \
-  --box 0.05,0.10,0.48,0.95 \
-  --out {out_dir}/ref-mia.png
-
 # Stage 2
 uv run skills/storybook-stylesheet/scripts/make_style_sheet.py --story story.json
 
@@ -179,24 +170,11 @@ entry's own `ref_image` (a single path or an array of paths), capped at 5 (Gemin
 Pro Image character-lane limit). There is no shared global pool — the cast-to-photo mapping
 is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 
-**Single-person images only.** Every path in `ref_image` must show only one person — a solo
-photo or a per-person crop. If a source photo contains multiple people, Stage 1 crops it
-to one file per character via `skills/storybook-story/scripts/crop_character.py` (Pillow
-only, free, no API). The original multi-person photo is never listed in any `ref_image`. This
-preserves the existing cap math (5 Stage-2 / 4-or-5 render cap by model) unchanged — refs stay
-per-character and per-person, so nothing interacts differently with the caps.
-
-Re-run recipe for a bad crop: re-run `crop_character.py` with an adjusted `--box` (it
-overwrites silently — free to iterate) → `rm style-sheet-{id}.png` → re-run Stage 2
-(or use the editor's per-cast Regenerate sheet button — PER-59).
-Cross-session note: crop provenance is not stored in `story.json` (intentional — same rule
-as `style_sheet`). To redo a crop in a new session you need the original source photo again.
-
 Each page also carries an explicit `cast` list (`pages[].cast`) of cast **ids** — not names — naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
 this to send only the relevant per-cast-entry style sheets — the model never sees sheets
 for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
-crop), so the render anchors the hero's facial likeness on the real photo, not only on the
+reference photo), so the render anchors the hero's facial likeness on the real photo, not only on the
 (lossy) style sheet. **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
 Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped. **Auto-upgrade (PER-58):** `select_refs()` in `render_book.py` runs before the cap is applied — if the effective model is flash and the candidate list has ≥5 images, the page is silently upgraded to `gemini-3-pro-image` for that call only (logged, story.json untouched). The cap/drop logic is in `select_refs`; `collect_input_images` now returns the full uncapped candidate list.
 
