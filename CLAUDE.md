@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A set of **four Claude Code skills** that together turn a story idea (optionally with
 character photos) into a fully illustrated children's picture book. It is not an app — it
 is skill definitions (`SKILL.md`) plus the Python scripts they invoke. There is no build
-step and no test suite; the scripts are the product.
+step; the scripts are the product. An automated test suite lives in `tests/` (see
+**Tests** section below).
 
 ## The pipeline (read this first)
 
@@ -519,6 +520,28 @@ completeness but never deleted by regenerate, so `render_book.py`'s
 editor does not remap `pages/history/page-NN/` (same drift already exists for the
 canonical files). Editor always assumes `pages/` is beside `story.json` (unchanged
 pre-existing assumption).
+
+## Tests
+
+Two layers live in `tests/`. **Zero-API rule: no test may call Gemini or OpenAI.**
+
+| Layer | Command | API key? | Browser? |
+|---|---|---|---|
+| Unit | `uv run tests/run_unit.py` | No | No |
+| E2E | `uv run tests/run_e2e.py` | No | Yes (chromium) |
+
+**Completion contract** (see also `.claude/rules/smoke-tests.md`):
+- Run **all unit tests** on every task completion — must all pass.
+- Run **scoped e2e** (the module covering the area you changed) — not the full suite.
+- First-time browser setup: `uv run playwright install chromium`
+
+Unit tests cover `select_refs`, `resolve_cast_placeholders`, `collect_input_images`,
+`validate_story`/`_appearance_echo`, and CLI exit codes for all three committed fixtures.
+
+E2E tests cover the `@`-mention picker (PER-62 regression guard), cast-on-page derivation
+(`_castIdsFromPrompt`/`_syncPageCast`), and save round-trip (`PUT /api/story`).
+
+See `tests/README.md` for full documentation and subset runner usage.
 
 ## Repo layout notes
 

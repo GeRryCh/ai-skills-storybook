@@ -56,3 +56,36 @@ back to the paid `tests/regen.sh` (~10 image calls, needs `GEMINI_API_KEY`) when
 actually touches the Gemini API call paths and must be verified end-to-end. When editing a
 paid script, re-run a single proof first (`render_book.py --only N` /
 `make_style_sheet.py` on one character) before any full regen.
+
+## Automated tests (PER-63)
+
+Two test layers now live in `tests/`. **Completion contract** (replaces the manual
+checklist above for tasks touching tested code):
+
+### On every task completion — run ALL unit tests
+
+```bash
+uv run tests/run_unit.py
+```
+
+All 53 tests must pass. No API key needed. No browser needed.
+
+### On task completion — run SCOPED e2e (area you changed only)
+
+Do **not** run the full e2e suite every time — it is browser-heavy. Run only the
+module covering what you changed:
+
+| Area changed | E2E command |
+|---|---|
+| editor.html `@`-picker / `_showMentionPop` | `uv run tests/run_e2e.py tests/e2e/test_mention_picker.py` |
+| `_castIdsFromPrompt` / `_syncPageCast` / cast-on-page view | `uv run tests/run_e2e.py tests/e2e/test_cast_derivation.py` |
+| `PUT /api/story` save / story.json round-trip | `uv run tests/run_e2e.py tests/e2e/test_save_roundtrip.py` |
+| Pure Python function change only | No e2e needed |
+
+First-time browser setup (once per machine):
+
+```bash
+uv run playwright install chromium
+```
+
+See `tests/README.md` for full documentation.
