@@ -99,6 +99,8 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 .btn-cast-add{background:#ede9fe;color:#5b21b6;font-size:12px;padding:2px 8px;
   border-radius:10px;border:none;cursor:pointer}
 .btn-cast-add:hover{background:#ddd6fe}
+.cast-entry.readonly{background:#f8fafc}
+.cast-empty{font-size:12px;color:#94a3b8;font-style:italic;padding:2px 0}
 
 /* ── ref-image rows ───────────────────────────────────────────────────── */
 .ref-row{display:flex;gap:6px;align-items:flex-start;margin-bottom:6px}
@@ -341,7 +343,7 @@ function _hideMentionPop() {
   _mentionHlIdx  = 0;
 }
 
-function _showMentionPop(ta, page, atIdx, query) {
+function _showMentionPop(ta, page, atIdx, query, container) {
   if (!_mentionPop) return;
   const q = (query || '').toLowerCase();
   const cast = (story && story.cast) || [];
@@ -350,7 +352,7 @@ function _showMentionPop(ta, page, atIdx, query) {
   ));
   if (!items.length) { _hideMentionPop(); return; }
 
-  _mentionActive = { ta, page, atIdx };
+  _mentionActive = { ta, page, atIdx, container };
   _mentionItems  = items;
   _mentionHlIdx  = 0;
 
@@ -364,7 +366,7 @@ function _showMentionPop(ta, page, atIdx, query) {
   }).join('');
 
   _mentionPop.querySelectorAll('.mention-row').forEach(row => {
-    row.addEventListener('mousedown', e => {
+    row.addEventListener('pointerdown', e => {
       e.preventDefault(); // prevent textarea blur so we can set selection
       const idx = parseInt(row.dataset.idx, 10);
       _selectMentionItem(idx);
@@ -377,7 +379,7 @@ function _showMentionPop(ta, page, atIdx, query) {
   const rect = ta.getBoundingClientRect();
   _mentionPop.style.left    = `${rect.left}px`;
   _mentionPop.style.top     = `${rect.bottom + 4}px`;
-  _mentionPop.style.display = '';
+  _mentionPop.style.display = 'block';
 }
 
 function _mentionHlUpdate() {
@@ -389,7 +391,7 @@ function _mentionHlUpdate() {
 
 function _selectMentionItem(idx) {
   if (!_mentionActive || !_mentionPop) return;
-  const { ta, page, atIdx } = _mentionActive;
+  const { ta, page, atIdx, container } = _mentionActive;
   const item = _mentionItems[idx];
   if (!item) return;
 
@@ -404,12 +406,48 @@ function _selectMentionItem(idx) {
 
   // Must sync state manually — programmatic .value set does NOT fire 'change',
   // and clicking a row does not blur the textarea, so the existing 'change'
-  // handler won't run. Mirror lines 1248 explicitly.
+  // handler won't run. Mirror the prompt 'change' handler explicitly.
   page.image_prompt = ta.value;
+  _syncPageCast(page, container);  // derive "Cast on this page" from the prompt
   markDirty(page, 'image_prompt');
+  // Cancel the auto-save debounce markDirty just armed — saving mid-type
+  // causes fields to lose focus. Auto-save will fire naturally when the user
+  // blurs the textarea (triggering the existing 'change' handler).
+  clearTimeout(autoSaveTimer);
 
   ta.focus();
   _hideMentionPop();
+}
+
+// ── Derived page cast ─────────────────────────────────────────────────────
+// The image_prompt is the SINGLE source of truth for a page's cast. The cast
+// is exactly the set of valid <id> tokens mentioned in the prompt, in order of
+// first appearance. "Cast on this page" is a read-only view of this — there is
+// no separate add/remove UI. Hero = first character-kind id in that order.
+function _castIdsFromPrompt(promptText) {
+  const validIds = new Set((story.cast || []).filter(c => c.id).map(c => c.id));
+  const seen = [];
+  const re = /<([^<>]+)>/g;
+  let m;
+  while ((m = re.exec(promptText || ''))) {
+    const tok = m[1];
+    if (validIds.has(tok) && !seen.includes(tok)) seen.push(tok);
+  }
+  return seen;
+}
+
+function _syncPageCast(page, container) {
+  const derived = _castIdsFromPrompt(page.image_prompt);
+  const cur = page.cast || [];
+  const same = derived.length === cur.length && derived.every((v, i) => v === cur[i]);
+  if (!same) page.cast = derived;           // page.cast is required by the schema
+  if (container) renderPageCast(container, page);
+  // Ref count depends on page.cast — refresh every page's ref badge (mirrors markDirty).
+  document.querySelectorAll('[data-page-refbadge]').forEach(el => {
+    const idx = parseInt(el.dataset.pageRefbadge, 10);
+    const p = story.pages && story.pages[idx];
+    if (p) updateRefBadge(el, p);
+  });
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -1310,7 +1348,7 @@ function buildPageCard(page, i) {
         <textarea rows="3" id="pg-prompt-${i}">${esc(page.image_prompt||'')}</textarea>
       </div>
       <div class="field">
-        <label>Cast on this page <small style="color:#94a3b8">(first character-kind entry = hero — also contributes reference photo at render)</small></label>
+        <label>Cast on this page <small style="color:#94a3b8">(read-only — derived from the &lt;id&gt; mentions in the image prompt; first character-kind mention = hero, also contributes its reference photo at render)</small></label>
         <div id="pg-cast-${i}" class="cast-section"></div>
       </div>
       <div class="grid3">
@@ -1354,23 +1392,34 @@ function buildPageCard(page, i) {
   // Text / prompt
   const textTa   = card.querySelector(`#pg-text-${i}`);
   const promptTa = card.querySelector(`#pg-prompt-${i}`);
+  const castContainer = card.querySelector(`#pg-cast-${i}`);
   textTa.addEventListener('change', () => { page.text = textTa.value; markDirty(page, 'text'); });
-  promptTa.addEventListener('change', () => { page.image_prompt = promptTa.value; markDirty(page, 'image_prompt'); });
+  promptTa.addEventListener('change', () => {
+    page.image_prompt = promptTa.value;
+    _syncPageCast(page, castContainer);  // image_prompt is the single source of cast
+    markDirty(page, 'image_prompt');
+  });
 
-  // @-mention picker: typing '@' opens a filterable cast-id dropdown
+  // @-mention picker: typing '@' opens a filterable cast-id dropdown.
   promptTa.addEventListener('input', () => {
+    // Commit live so the read-only "Cast on this page" list mirrors the <id>
+    // tokens as they're typed/deleted. No markDirty here — the 'change'
+    // handler (on blur) is the save point, so we never auto-save mid-type.
+    page.image_prompt = promptTa.value;
+    _syncPageCast(page, castContainer);
+
     const pos    = promptTa.selectionStart;
     const before = promptTa.value.slice(0, pos);
     // Scan left from caret for a bare '@'; stop at whitespace or '>' (which
     // closes an existing <id> token) — no trigger inside an existing token.
     let atIdx = -1;
-    for (let i = before.length - 1; i >= 0; i--) {
-      const ch = before[i];
-      if (ch === '@') { atIdx = i; break; }
+    for (let k = before.length - 1; k >= 0; k--) {
+      const ch = before[k];
+      if (ch === '@') { atIdx = k; break; }
       if (/[\s>]/.test(ch)) break;
     }
     if (atIdx >= 0) {
-      _showMentionPop(promptTa, page, atIdx, before.slice(atIdx + 1));
+      _showMentionPop(promptTa, page, atIdx, before.slice(atIdx + 1), castContainer);
     } else {
       _hideMentionPop();
     }
@@ -1444,91 +1493,45 @@ function buildPageCard(page, i) {
   return card;
 }
 
-// Ordered page cast: selected ids as drag-free reorderable list, unselected as + buttons
+// Read-only view of a page's cast. The cast is DERIVED from the <id> tokens in
+// the image_prompt (see _syncPageCast / _castIdsFromPrompt) — the prompt is the
+// single source of truth, so there is no add/remove/reorder UI here. To change
+// the cast, edit the prompt (type @ to pick). Order follows first <id> mention;
+// hero = first character-kind id in that order.
 function renderPageCast(container, page) {
   container.innerHTML = '';
-  const selected = page.cast || [];  // array of cast ids (PER-56)
-  // Build id→entry map for display names and kinds
+  const selected = page.cast || [];  // array of cast ids (PER-56), derived from prompt
   const castById = {};
   (story.cast || []).forEach(c => { if (c.id) castById[c.id] = c; });
-  const castIds = Object.keys(castById);
+  const kindOf = cid => { const c = castById[cid]; return c ? (c.kind || 'character') : 'character'; };
+  const nameOf = cid => { const c = castById[cid]; return c ? (c.name || cid) : cid; };
 
-  // Helper: get kind for a cast id
-  const kindOf = cid => {
-    const c = castById[cid];
-    return c ? (c.kind || 'character') : 'character';
-  };
-  // Display name for a cast id
-  const nameOf = cid => {
-    const c = castById[cid];
-    return c ? (c.name || cid) : cid;
-  };
+  if (!selected.length) {
+    const hint = document.createElement('div');
+    hint.className = 'cast-empty';
+    hint.textContent = 'No cast yet — type @ in the image prompt above to mention a character, object, or place.';
+    container.appendChild(hint);
+    return;
+  }
 
   // Hero = first character-kind entry (not literal-first)
   const heroIdx = selected.findIndex(cid => kindOf(cid) === 'character');
 
-  // Selected list
   const listDiv = document.createElement('div');
   listDiv.className = 'cast-list';
   selected.forEach((cid, j) => {
     const entry = document.createElement('div');
-    entry.className = 'cast-entry';
+    entry.className = 'cast-entry readonly';
     const isHero = j === heroIdx;
     const entryKind = kindOf(cid);
-    const displayName = nameOf(cid);
     const kindBadge = entryKind !== 'character'
       ? `<span class="kind-badge" title="${entryKind}">${entryKind.toUpperCase().slice(0,3)}</span>`
       : '';
     entry.innerHTML =
-      `<span>${esc(displayName)}${isHero ? '<span class="hero-badge" title="First character-kind entry also contributes their reference photo at render time">HERO</span>' : ''}${kindBadge}</span>` +
-      `${j > 0 ? `<button class="btn-sm" onclick="">↑</button>` : '<span style="width:28px"></span>'}` +
-      `${j < selected.length - 1 ? `<button class="btn-sm" onclick="">↓</button>` : '<span style="width:28px"></span>'}` +
-      `<button class="btn-sm btn-danger" onclick="">✕</button>`;
-    const btns = entry.querySelectorAll('button');
-    // ↑
-    if (j > 0) btns[0].addEventListener('click', () => {
-      page.cast.splice(j - 1, 0, page.cast.splice(j, 1)[0]);
-      markDirty(page, 'cast');
-      renderPageCast(container, page);
-    });
-    // ↓
-    if (j < selected.length - 1) {
-      const db = j > 0 ? btns[1] : btns[0];
-      db.addEventListener('click', () => {
-        page.cast.splice(j + 1, 0, page.cast.splice(j, 1)[0]);
-        markDirty(page, 'cast');
-        renderPageCast(container, page);
-      });
-    }
-    // ✕
-    btns[btns.length - 1].addEventListener('click', () => {
-      page.cast.splice(j, 1);
-      markDirty(page, 'cast');
-      renderPageCast(container, page);
-    });
+      `<span>${esc(nameOf(cid))}${isHero ? '<span class="hero-badge" title="First character-kind entry also contributes their reference photo at render time">HERO</span>' : ''}${kindBadge}</span>`;
     listDiv.appendChild(entry);
   });
   container.appendChild(listDiv);
-
-  // Unselected cast — show as + buttons (display name for readability, push id)
-  const unsel = castIds.filter(cid => !selected.includes(cid));
-  if (unsel.length > 0) {
-    const unselDiv = document.createElement('div');
-    unselDiv.className = 'uncast-btns';
-    unsel.forEach(cid => {
-      const btn = document.createElement('button');
-      btn.className = 'btn-cast-add';
-      btn.textContent = '+ ' + nameOf(cid);
-      btn.addEventListener('click', () => {
-        if (!page.cast) page.cast = [];
-        page.cast.push(cid);  // push id, not display name
-        markDirty(page, 'cast');
-        renderPageCast(container, page);
-      });
-      unselDiv.appendChild(btn);
-    });
-    container.appendChild(unselDiv);
-  }
 }
 
 function movePage(evt, i, dir) {

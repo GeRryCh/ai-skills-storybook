@@ -277,7 +277,13 @@ launches a tiny local HTTP server (127.0.0.1 only) and opens `assets/editor.html
 the browser. It provides a visual form for `story.json` — book settings, cast with
 photo previews, palette swatches, **per-cast-entry style-sheet generate/regenerate button
 with version history and "Use in book" selector** (PER-59), and a page-by-page editor with
-hero-ordered cast selection, render-status badges, **per-page image preview, generation
+**an `@`-mention cast picker in the image-prompt field** (PER-62: type `@` to insert an
+`<id>` placeholder, filterable by id/name, all kinds with badges, keyboard nav), a
+**read-only "Cast on this page" view derived from the prompt's `<id>` mentions** (PER-62:
+the image_prompt is the single source of truth for a page's cast — `_castIdsFromPrompt()`
+collects valid `<id>` tokens in first-appearance order, `_syncPageCast()` reconciles
+`page.cast` on every prompt edit; hero = first character-kind mention; no manual
+add/remove/reorder UI), render-status badges, **per-page image preview, generation
 history browser, a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
 and hit Regenerate to retry that page on the stronger model without touching the rest), **a
 per-page ref-count warning badge** (PER-58: amber "5 refs → pro required" when the intent-based
