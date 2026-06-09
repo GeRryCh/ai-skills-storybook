@@ -70,6 +70,26 @@ stays as a short human-readable label used in prose.
 model to reinterpret it every call. A specific `style_guide` with hex palette and lighting
 direction gives the model the same concrete target on every page.
 
+### Deriving style_guide from a reference image
+
+When the user provides a style reference image (a screenshot, illustration, or any image
+showing the look they want), view it in-session and extract the fields as follows:
+
+- **`palette`** — pick 3–5 dominant colors using their hex codes (e.g. `"vivid cobalt #1A3CFF"`).
+  Hex is the most precise anchor for the renderer; named-color descriptions are a fallback.
+- **`medium`** — identify the rendering technique: watercolor wash, cel-shaded flat fill,
+  pixel art, ink hatching, gouache, comic halftone, etc.
+- **`line`** — observe line weight, color, and style: bold black outlines, thin grey ink,
+  no outlines (fully painterly), dotted screen lines, etc.
+- **`lighting`** — note direction and quality: flat/even (common in anime/pixel), dramatic
+  side-light, diffuse overcast, hard comic shadows, etc.
+- **`mood`** — capture the overall vocabulary: playful, high-contrast, gritty, soft, vibrant,
+  muted, retro, etc.
+
+The image is analyzed in-session only — it is not persisted and not passed to the renderer.
+Only the extracted text ends up in `story.json`; that text is what locks book-wide visual
+consistency across every separate paid API call.
+
 ## Illustration style tips
 
 - Name characters consistently in every `image_prompt` (exact same name every page).

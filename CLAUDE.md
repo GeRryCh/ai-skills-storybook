@@ -15,7 +15,7 @@ Four skills run in order and hand off a **single file, `story.json`**, in an out
 directory (default: a newly created `{slug(title)}/` folder under the user's cwd;
 an explicitly user-named path is used verbatim):
 
-1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
+1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), optionally analyzes a **style reference image** in-session to seed `style_guide` (PER-9: free, no API, same Claude-vision seam as cast photos), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
    (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
 2. **storybook-stylesheet** (paid, 1 image call per cast entry) — generates one

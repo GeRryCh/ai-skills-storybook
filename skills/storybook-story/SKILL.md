@@ -79,7 +79,7 @@ The following algorithm covers **scalar book-level knobs** that churn when the s
 4. **Propose working title and resolve `{out_dir}`** — derive a candidate title from the story idea (it can be refined at Gate 1) and apply the Output directory resolution rule above: create the new folder with `mkdir -p` now, before any file is written. Show the folder path to the user.
 5. **Analyze any supplied photos** (see Source-photo analysis below) before authoring the cast.
 6. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
-7. Author cast and `style_guide` (from the style answer + STYLE_PRIMER).
+7. Author cast and `style_guide` (from the style answer, a supplied **style reference image** if any, + STYLE_PRIMER).
 8. **Gate 1: Configuration summary — confirm before writing** (see Configuration summary section below). Stop and wait for "go".
 9. Draft page prose and image prompts — word counts per the now-locked `age_band` and `text_mode` (drafting after Gate 1 avoids rework when a summary override changes word-count guidance).
 10. Write `{out_dir}/story.json` following the schema exactly.
@@ -93,12 +93,33 @@ Exits 0 when clean. On errors (exit 2), fix `story.json` and re-run until clean.
 12. Show the Handoff message.
 13. **Gate 2: prose review** — stop and wait for explicit user approval before Stage 2.
 
+### Style reference image (BEFORE authoring style_guide)
+
+When the user supplies a **style reference image** (an illustration, screenshot, or any
+image showing the look they want — as opposed to a character/cast photo), **view it with
+the Read tool** before authoring `style_guide`. Then:
+
+- Derive `style` (short label, e.g. `"anime cel-shaded, vivid palette"`) from what you see.
+- Derive the full `style_guide` object: sample 3–5 dominant hex swatches for `palette`;
+  name the `medium`, `line`, `lighting`, and `mood` you observe in the image.
+- The image is analyzed **in-session only** — it is **not** persisted and **never** passed
+  to the renderer or added to `cast`. The extracted text is the artifact; that text seeds
+  the byte-identical style block injected into every paid API call.
+- **Disambiguation:** if a supplied image's role is ambiguous (character likeness vs. style
+  look), ask the user which it is before mapping. A style-ref image must never be added as
+  a cast `ref_image`; a character photo must never seed `style_guide`.
+- If no style reference image is provided, derive `style_guide` from the text answer as
+  usual — this branch is fully opt-in.
+
+The derived `style` + `style_guide` flow through Gate 1 like any other answer; the user
+can confirm or edit them there and later in `edit_story.py`.
+
 ### Source-photo analysis (BEFORE authoring the cast)
 
-When the user supplies reference photos, **view every photo with the Read tool before
-writing the cast** — never map a photo to a character without seeing it first. Then
-map each photo (or an array of same-person angles) directly to that character's
-`ref_image`.
+When the user supplies reference photos (character/cast photos), **view every photo with
+the Read tool before writing the cast** — never map a photo to a character without seeing
+it first. Then map each photo (or an array of same-person angles) directly to that
+character's `ref_image`.
 
 ### Cast — the `cast` array (drives consistency)
 
