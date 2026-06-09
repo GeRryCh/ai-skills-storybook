@@ -2361,13 +2361,8 @@ function hideAutoSaveHint() {
   if (dot) dot.title = 'Unsaved changes';
 }
 
-// ── Keyboard shortcut ──────────────────────────────────────────────────────
-document.addEventListener('keydown', e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-    e.preventDefault();
-    triggerSave();
-  }
-});
+// Saving is automatic (debounced on edit) plus the explicit Save button —
+// no Cmd/Ctrl+S shortcut (removed so the browser's own Save isn't shadowed).
 
 // ── Dirty guard ────────────────────────────────────────────────────────────
 window.addEventListener('beforeunload', e => {
