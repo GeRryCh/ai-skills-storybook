@@ -182,6 +182,18 @@ dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
   max-height:80px;overflow:auto}
 .cm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;
   padding-top:12px;border-top:1px solid #f1f5f9}
+
+/* ── @-mention picker (image_prompt cast picker) ────────────────────────── */
+#mention-pop{position:fixed;z-index:900;background:#fff;border:1px solid #c4b5fd;
+  border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);
+  min-width:200px;max-width:340px;padding:4px 0;display:none;overflow:hidden}
+.mention-row{display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;
+  font-size:13px;white-space:nowrap}
+.mention-row:hover,.mention-row.hl{background:#ede9fe}
+.mention-row .m-name{flex:1;color:#1e293b;font-weight:500}
+.mention-row .m-kind{font-size:10px;padding:1px 6px;border-radius:8px;
+  background:#f1f5f9;color:#64748b;font-weight:500;text-transform:uppercase;letter-spacing:.03em}
+.mention-row .m-id{font-size:11px;color:#94a3b8;font-family:monospace}
 </style>
 </head>
 <body>
@@ -301,6 +313,104 @@ const PILLOW_FIELDS = new Set(['text', 'text_placement', 'text_color_hint', 'tex
 // Book-level fields that don't affect renders at all — changes to these never
 // set bookPaidEdit (e.g. title is metadata only; saved_formats is a consolidate hint).
 const NEUTRAL_BOOK_FIELDS = new Set(['title', 'language', 'saved_formats']);
+
+// ── @-mention picker for image_prompt ────────────────────────────────────
+// Single shared floating popup (one DOM element). Typing '@' in any image_prompt
+// textarea opens a filterable list of all cast entries; selecting one inserts
+// the correct <id> token at the caret and manually syncs story state (a
+// programmatic .value set does NOT fire 'change', so we do it explicitly).
+let _mentionPop    = null;  // the #mention-pop element
+let _mentionActive = null;  // {ta, page, atIdx} while open; null when closed
+let _mentionHlIdx  = 0;     // keyboard-highlighted row index
+let _mentionItems  = [];    // current filtered cast entries
+
+function _initMentionPop() {
+  _mentionPop = document.createElement('div');
+  _mentionPop.id = 'mention-pop';
+  document.body.appendChild(_mentionPop);
+  // Close on click outside (capture phase so it fires before focus shifts)
+  document.addEventListener('mousedown', e => {
+    if (_mentionPop && !_mentionPop.contains(e.target)) _hideMentionPop();
+  }, true);
+}
+
+function _hideMentionPop() {
+  if (_mentionPop) _mentionPop.style.display = 'none';
+  _mentionActive = null;
+  _mentionItems  = [];
+  _mentionHlIdx  = 0;
+}
+
+function _showMentionPop(ta, page, atIdx, query) {
+  if (!_mentionPop) return;
+  const q = (query || '').toLowerCase();
+  const cast = (story && story.cast) || [];
+  const items = cast.filter(c => c.id && (
+    c.id.includes(q) || (c.name || '').toLowerCase().includes(q)
+  ));
+  if (!items.length) { _hideMentionPop(); return; }
+
+  _mentionActive = { ta, page, atIdx };
+  _mentionItems  = items;
+  _mentionHlIdx  = 0;
+
+  _mentionPop.innerHTML = items.map((c, idx) => {
+    const kind = c.kind || 'character';
+    return `<div class="mention-row" data-idx="${idx}">` +
+      `<span class="m-name">${esc(c.name || c.id)}</span>` +
+      `<span class="m-kind">${esc(kind)}</span>` +
+      `<span class="m-id">&lt;${esc(c.id)}&gt;</span>` +
+      `</div>`;
+  }).join('');
+
+  _mentionPop.querySelectorAll('.mention-row').forEach(row => {
+    row.addEventListener('mousedown', e => {
+      e.preventDefault(); // prevent textarea blur so we can set selection
+      const idx = parseInt(row.dataset.idx, 10);
+      _selectMentionItem(idx);
+    });
+  });
+
+  _mentionHlUpdate();
+
+  // Position anchored below the textarea (avoids covering the text being typed)
+  const rect = ta.getBoundingClientRect();
+  _mentionPop.style.left    = `${rect.left}px`;
+  _mentionPop.style.top     = `${rect.bottom + 4}px`;
+  _mentionPop.style.display = '';
+}
+
+function _mentionHlUpdate() {
+  if (!_mentionPop) return;
+  _mentionPop.querySelectorAll('.mention-row').forEach((row, i) => {
+    row.classList.toggle('hl', i === _mentionHlIdx);
+  });
+}
+
+function _selectMentionItem(idx) {
+  if (!_mentionActive || !_mentionPop) return;
+  const { ta, page, atIdx } = _mentionActive;
+  const item = _mentionItems[idx];
+  if (!item) return;
+
+  const before = ta.value.slice(0, atIdx);
+  const after  = ta.value.slice(ta.selectionStart);
+  const insert = `<${item.id}> `;
+  ta.value = before + insert + after;
+
+  // Restore caret to end of inserted token
+  const pos = before.length + insert.length;
+  ta.setSelectionRange(pos, pos);
+
+  // Must sync state manually — programmatic .value set does NOT fire 'change',
+  // and clicking a row does not blur the textarea, so the existing 'change'
+  // handler won't run. Mirror lines 1248 explicitly.
+  page.image_prompt = ta.value;
+  markDirty(page, 'image_prompt');
+
+  ta.focus();
+  _hideMentionPop();
+}
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -1246,6 +1356,47 @@ function buildPageCard(page, i) {
   const promptTa = card.querySelector(`#pg-prompt-${i}`);
   textTa.addEventListener('change', () => { page.text = textTa.value; markDirty(page, 'text'); });
   promptTa.addEventListener('change', () => { page.image_prompt = promptTa.value; markDirty(page, 'image_prompt'); });
+
+  // @-mention picker: typing '@' opens a filterable cast-id dropdown
+  promptTa.addEventListener('input', () => {
+    const pos    = promptTa.selectionStart;
+    const before = promptTa.value.slice(0, pos);
+    // Scan left from caret for a bare '@'; stop at whitespace or '>' (which
+    // closes an existing <id> token) — no trigger inside an existing token.
+    let atIdx = -1;
+    for (let i = before.length - 1; i >= 0; i--) {
+      const ch = before[i];
+      if (ch === '@') { atIdx = i; break; }
+      if (/[\s>]/.test(ch)) break;
+    }
+    if (atIdx >= 0) {
+      _showMentionPop(promptTa, page, atIdx, before.slice(atIdx + 1));
+    } else {
+      _hideMentionPop();
+    }
+  });
+  promptTa.addEventListener('keydown', e => {
+    if (!_mentionActive || !_mentionPop || _mentionPop.style.display === 'none') return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _mentionHlIdx = Math.min(_mentionHlIdx + 1, _mentionItems.length - 1);
+      _mentionHlUpdate();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _mentionHlIdx = Math.max(_mentionHlIdx - 1, 0);
+      _mentionHlUpdate();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      _selectMentionItem(_mentionHlIdx);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      _hideMentionPop();
+    }
+  });
+  promptTa.addEventListener('blur', () => {
+    // Delay so a mousedown on a mention row fires before we hide
+    setTimeout(_hideMentionPop, 150);
+  });
 
   // Selects
   bindEnum(card.querySelector(`#pg-placement-${i}`), page, 'text_placement',
@@ -2224,6 +2375,7 @@ window.addEventListener('beforeunload', e => {
 });
 
 // ── Boot ───────────────────────────────────────────────────────────────────
+_initMentionPop();
 init();
 </script>
 </body>
