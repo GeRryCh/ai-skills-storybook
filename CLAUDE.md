@@ -53,7 +53,7 @@ an explicitly user-named path is used verbatim):
 `story.json` is the contract between stages; its schema is `skills/storybook-story/assets/story_schema.json`.
 
 Both paid scripts write an append-only audit log **`out_dir/log.txt`** for every outgoing
-Gemini request — full config, system instruction, full prompt, and per-reference-image
+image request (Stage 2 → OpenAI, Stage 3 → Gemini; same log format) — full config, system instruction, full prompt, and per-reference-image
 metadata (source path, mime, byte count; never raw bytes) in `contents` order. The helper
 `append_api_log()` is duplicated in both scripts (keep in sync with `build_style_block()`
 and `_ensure_png`). Runs with `--composite-only` and editor recomposites never write
@@ -63,7 +63,7 @@ gitignored (including inside `tests/fixtures/`).
 
 A top-level `style_guide` object is **required** in `story.json`: both paid scripts
 assemble it into one byte-identical style block (`build_style_block()`, duplicated in
-both scripts — keep the copies in sync) injected verbatim into every Gemini call. This is
+both scripts — keep the copies in sync) injected verbatim into every image call (both vendors). This is
 the book-wide consistency mechanism (each page is a separate stateless call). Both scripts
 **refuse to run** (`require_style_guide()`, exit 2) when it is missing or empty — breaking
 change for pre-existing `story.json` files; add the field to render old books. The `style`
@@ -73,17 +73,36 @@ Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`
 
 ## Critical external dependency
 
-The two paid scripts call the **Gemini image API directly** (via the `google-genai`
-Python SDK, declared as a PEP-723 inline dependency). They build a `genai.Client` with
-`api_key` from the environment, model `gemini-3-pro-image` (style sheets, always, up to 5 character
-reference images per call) or for page renders the configurable model — default `gemini-3.1-flash-image`
-(4-ref cap) or `gemini-3-pro-image` (5-ref cap) set per-page, book-wide, or via `--model` CLI flag;
-style sheets always stay on pro regardless. Scripts send the prompt plus reference images as `types.Part.from_bytes`, and
-extract the returned image from `part.inline_data.data`.
-Requires `uv` on PATH and `GEMINI_API_KEY` in the environment. No sibling skill is
-needed (an earlier version shelled out to `nano-banana-pro-openrouter`; that logic is now
-inlined in each script — `run_nano_banana()` in `render_book.py` and `generate_image()` in
-`make_style_sheet.py`).
+The two paid scripts call **different image vendors** — this is a cross-vendor pipeline,
+not one model end-to-end. Both declare their SDK as a PEP-723 inline dependency.
+
+- **`make_style_sheet.py` (Stage 2) → OpenAI `gpt-image-2`** via the `openai` SDK. Uses
+  `client.images.edit` when an entry has reference photos (the documented multi-image
+  likeness path), falling back to `client.images.generate` when it has none (edit requires
+  ≥1 input image). `gpt-image-2` has no separate system-role channel on `images.edit`, so
+  the per-kind system prompt, the reference label, and the sheet prompt are folded into one
+  prompt string (wrapped in `STYLE_BOOST_HEAD`/`STYLE_BOOST_TAIL`). `quality="medium"`,
+  `moderation="low"` (via `extra_body` so it reaches the API regardless of SDK version).
+  Call size comes from `aspect_to_size(aspect_ratio)` — the `--resolution` 1K/2K/4K flag is
+  Gemini-era and **ignored** here (logged only). Requires `STORYBOOK_SKILL_OPENAI_API_KEY`
+  (preferred) or `OPENAI_API_KEY`. Returned image is `response.data[0].b64_json`.
+- **`render_book.py` (Stage 3) → Google Gemini** via the `google-genai` SDK. Builds a
+  `genai.Client` (lazily, on first paid call) with `api_key` from the environment; configurable
+  model — default `gemini-3.1-flash-image` (4-ref cap) or `gemini-3-pro-image` (5-ref cap),
+  set per-page, book-wide, or via `--model` CLI flag (auto-upgrade flash→pro when refs ≥5).
+  Sends the prompt plus reference images as `types.Part.from_bytes`, extracts the returned
+  image from `part.inline_data.data`. Requires `GEMINI_API_KEY`.
+
+**Consistency implication:** the Stage-2 sheet PNG (OpenAI) is fed as a *reference image*
+into the Stage-3 render (Gemini) — a different model interprets it. The verbatim `style`
+string assembled by `build_style_block()` is injected into BOTH vendors' prompts and is the
+only byte-identical cross-vendor anchor; the sheet PNG is a lossy proxy. Sheets force a flat
+neutral background (subject isolation — scenery on a sheet would bleed into every page); the
+book style shows up in the character's linework/palette, not a background.
+
+Requires `uv` on PATH. No sibling skill is needed (an earlier version shelled out to
+`nano-banana-pro-openrouter`; that logic is now inlined in each script — `run_nano_banana()`
+in `render_book.py` and `generate_image()` in `make_style_sheet.py`).
 
 ## Running the scripts
 
@@ -324,7 +343,8 @@ Three server endpoints mirror the page-image flow for cast-entry style sheets:
 - **`POST /api/sheet/regenerate`** body `{name}` — archives the current sheet into history
   (`pages/history/{stem}/{stamp}/{stem}.png`), deletes it, then spawns
   `uv run make_style_sheet.py --only NAME` in a background thread. Returns 200 immediately;
-  poll `/api/sheet/versions?name=X` to watch progress. Requires `GEMINI_API_KEY`.
+  poll `/api/sheet/versions?name=X` to watch progress. Requires `STORYBOOK_SKILL_OPENAI_API_KEY`
+  (or `OPENAI_API_KEY`) — Stage 2 is OpenAI `gpt-image-2`, NOT Gemini (page regen uses Gemini).
   **Full-quiescence gate** (409): ANY running job blocks this call (consolidation, regen-all,
   any page render, any other sheet regen). Reason: make_style_sheet.py rewrites story.json
   on completion; concurrent jobs would corrupt each other's story.json write.

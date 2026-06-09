@@ -676,6 +676,35 @@ def _retry_delay(attempt: int, exc: Exception) -> float:
     return random.uniform(0, capped)
 
 
+def _extract_image_bytes(response) -> bytes | None:
+    """Safely pull the first inline image from a Gemini response.
+
+    A 200 response may carry no image part — empty/None ``candidates``,
+    ``content`` or ``parts`` (safety/recitation block, empty completion,
+    finish_reason != STOP). Return None in every such case instead of letting
+    a ``NoneType is not iterable`` crash take down the whole concurrent render.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            if getattr(part, "inline_data", None) is not None:
+                return part.inline_data.data
+    return None
+
+
+def _empty_response_reason(response) -> str:
+    """Best-effort human reason for why a 200 response carried no image."""
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        feedback = getattr(response, "prompt_feedback", None)
+        blocked = getattr(feedback, "block_reason", None)
+        return f"blocked: {blocked}" if blocked else "no candidates returned"
+    finish = getattr(candidates[0], "finish_reason", None)
+    return f"finish_reason={finish}" if finish else "no image parts"
+
+
 class _LazyClient:
     """Builds the genai.Client on first paid API call.
 
@@ -866,7 +895,7 @@ async def run_nano_banana(
         system_instruction=IMAGE_SYSTEM_PROMPT,
         contents_desc=contents_desc,
     )
-    response = None
+    image_data: bytes | None = None
     for attempt in range(MAX_RETRIES):
         last_exc: Exception
         try:
@@ -875,7 +904,6 @@ async def run_nano_banana(
                 contents=contents,
                 config=config,
             )
-            break
         except errors.APIError as e:
             if e.code != 429 and e.code < 500:
                 log.append(f"  ERROR: image API request failed ({e.code}): {e}")
@@ -884,6 +912,22 @@ async def run_nano_banana(
         except Exception as e:
             log.append(f"  ERROR: image API request failed: {e}")
             return False
+        else:
+            # 200 response — but it may carry no image part (safety/recitation
+            # block, empty completion, finish_reason != STOP). Treat an empty
+            # response as a transient, retryable condition rather than crashing
+            # on None parts (PER-64).
+            image_data = _extract_image_bytes(response)
+            if image_data is not None:
+                break
+            reason = _empty_response_reason(response)
+            if attempt == MAX_RETRIES - 1:
+                log.append(f"  ERROR: API returned no image after {MAX_RETRIES} attempts ({reason}).")
+                return False
+            delay = _retry_delay(attempt, None)
+            log.append(f"  Retry {attempt + 1}/{MAX_RETRIES - 1} after empty response ({reason}); waiting {delay:.1f}s...")
+            await asyncio.sleep(delay)
+            continue
 
         if attempt == MAX_RETRIES - 1:
             log.append(f"  ERROR: image API request failed after {MAX_RETRIES} attempts: {last_exc}")
@@ -892,12 +936,6 @@ async def run_nano_banana(
         log.append(f"  Retry {attempt + 1}/{MAX_RETRIES - 1} after transient error; waiting {delay:.1f}s...")
         await asyncio.sleep(delay)
 
-    # Extract image bytes from the response parts.
-    image_data: bytes | None = None
-    for part in response.candidates[0].content.parts:
-        if part.inline_data is not None:
-            image_data = part.inline_data.data
-            break
     if not image_data:
         log.append("  ERROR: no images returned by the API.")
         return False
