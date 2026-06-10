@@ -70,6 +70,8 @@ the book-wide consistency mechanism (each page is a separate stateless call). Bo
 change for pre-existing `story.json` files; add the field to render old books. The `style`
 string remains as a short human label only.
 
+An optional top-level `premise` string (PER-66) is the **textual analogue of the verbatim style block** — the narrative consistency anchor. It is injected verbatim into every page render prompt immediately after `STYLE_ANCHOR`, for all three text modes (overlay / native / long), via `book_premise(story)` in `render_book.py`'s `build_image_prompt`. **Abstract atmosphere/intent only:** genre, audience age, tone, season, time-of-day arc, narrative register. **NEVER** plot, scenes, named places, or per-page objects — those bleed into every page (the PER-33 location-bleed bug class). Empty/absent premise → zero behavioural change. `premise` is deliberately **NOT** part of `build_style_block()` (which also feeds Stage 2 OpenAI stylesheet calls — narrative premise is noise there) and is not injected into the long-mode text background prompt.
+
 Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`, `locations`, `pages[].characters`, `pages[].location`) with `exit 2` and a migration message — no shim, clean break.
 
 ## Critical external dependency

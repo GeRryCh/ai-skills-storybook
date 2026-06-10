@@ -14,3 +14,4 @@ log.txt
 !/tests/**
 # re-ignore log.txt inside test fixture dirs (paid regen.sh runs produce these)
 /tests/**/log.txt
+__pycache__/

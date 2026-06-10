@@ -63,6 +63,11 @@
       "type": "string",
       "description": "Used when any page's effective text mode is 'long'. Optional custom scene description for the book's shared text-page background (pages/text-bg-long.png — one model-generated image reused on every text page; the book style block is injected, no character references are sent, and a low-detail central area is reserved for text). Omit for a generic style-matched decorative background. Ignored when no page renders in long mode."
     },
+    "premise": {
+      "type": "string",
+      "description": "Optional book-wide narrative anchor injected verbatim into EVERY page render prompt (render-only, Stage 3) — the textual analogue of the style block. Describe ABSTRACT atmosphere/intent ONLY: genre, target audience age, overall tone, season, time-of-day arc, narrative register. NEVER plot, scenes, named places, or per-page objects — anything page-specific bleeds into every page (the PER-33 location-bleed bug). Rule of thumb: if a phrase names a thing that should appear on some pages but not others, it's plot — move it to that page's image_prompt. Answers 'what kind of book is this?', never 'what happens?'. Not injected into style sheets (Stage 2) or the long-mode text background. Omit for no change.",
+      "x-interview": { "priority": "advanced", "ask": "One-line book-wide narrative tone/atmosphere (genre, audience age, mood) — abstract only, no plot or places." }
+    },
     "language": {
       "type": "string",
       "description": "Optional BCP-47 language tag for the book text (e.g. 'en', 'de', 'en-GB'). Used as dc:language metadata in EPUB output (Stage 4, storybook-consolidate). Default: 'en'.",

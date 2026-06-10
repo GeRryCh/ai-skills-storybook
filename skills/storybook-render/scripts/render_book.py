@@ -407,10 +407,30 @@ def resolve_cast_placeholders(text: str, story: dict) -> str:
     return re.sub(r"<([^<>]+)>", _replace, text)
 
 
+def book_premise(story: dict) -> str:
+    """Book-wide narrative anchor (PER-66) — render-only, injected verbatim into every page
+    prompt immediately after STYLE_ANCHOR.
+
+    Deliberately NOT part of build_style_block(): that helper also feeds the OpenAI
+    gpt-image-2 stylesheet calls (Stage 2), where narrative premise is noise and could
+    distort the character sheet. Stage 2 stays untouched.
+
+    Empty / absent premise → returns '' → zero behavioural change.
+    """
+    return (story.get("premise") or "").strip()
+
+
 def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> str:
     placement = page.get("text_placement", "floating")
     style = build_style_block(story)
     anchor = STYLE_ANCHOR.format(style=style)
+    # Fold the optional book-wide narrative anchor into the STYLE_ANCHOR text (PER-66).
+    # One insertion point — all three mode returns carry it unchanged via {anchor}.
+    # Keeps NATIVE_TEXT_DIRECTIVE (the lettering instruction) as the final token in native
+    # mode, which is critical: an end-append would risk the model lettering the premise.
+    premise = book_premise(story)
+    if premise:
+        anchor = f"{anchor}. {premise}"
 
     # Resolve <id> placeholders → display names. Single chokepoint covering all text modes.
     # The model must never receive raw <id> tokens — especially in native mode where a

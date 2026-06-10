@@ -1587,6 +1587,10 @@ function renderBook() {
       <div class="field"><label>Title</label><input type="text" id="book-title"></div>
       <div class="field"><label>Age band</label><select id="book-age-band"></select></div>
     </div>
+    <div class="field">
+      <label>Premise <small style="color:#94a3b8">(optional — book-wide narrative tone injected into every page render; abstract atmosphere only: genre, audience age, mood, season; NO plot, places, or per-page objects)</small></label>
+      <textarea id="book-premise" rows="2" placeholder="e.g. A gentle bedtime picture book for ages 3-5; warm, calm, reassuring tone; soft late-evening light throughout"></textarea>
+    </div>
     <div class="field"><label>Style (short human label for prose — style_guide is what the renderer anchors on)</label>
       <input type="text" id="book-style"></div>
 
@@ -1642,6 +1646,7 @@ function renderBook() {
   bindText(b.querySelector('#sg-lighting'), sg, 'lighting', {optional: true});
   bindText(b.querySelector('#sg-mood'),     sg, 'mood',   {optional: true});
   bindText(b.querySelector('#book-language'), story, 'language', {optional: true});
+  bindText(b.querySelector('#book-premise'), story, 'premise', {optional: true});
   bindText(b.querySelector('#book-textbgprompt'), story, 'text_background_prompt', {optional: true});
 
   // Enums
