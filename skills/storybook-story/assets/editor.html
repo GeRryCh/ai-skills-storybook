@@ -1650,7 +1650,7 @@ function renderBook() {
   bindText(b.querySelector('#book-textbgprompt'), story, 'text_background_prompt', {optional: true});
 
   // Enums
-  bindEnum(b.querySelector('#book-age-band'), story, 'age_band', enumFor('age_band'));
+  bindEnum(b.querySelector('#book-age-band'), story, 'age_band', enumFor('age_band'), {optional: true, defaultVal: 'general'});
   bindEnum(b.querySelector('#book-text-mode'), story, 'text_mode', enumFor('text_mode'), {optional:true,
     onchange: () => { applyDeps(b, null); renderPages(); }});
   bindEnum(b.querySelector('#book-resolution'), story, 'resolution', enumFor('resolution'), {optional:true});

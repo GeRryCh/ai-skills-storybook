@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repo is
 
 A set of **four Claude Code skills** that together turn a story idea (optionally with
-character photos) into a fully illustrated children's picture book. It is not an app — it
+character photos) into a fully illustrated book (any genre or age). It is not an app — it
 is skill definitions (`SKILL.md`) plus the Python scripts they invoke. There is no build
 step; the scripts are the product. An automated test suite lives in `tests/` (see
 **Tests** section below).

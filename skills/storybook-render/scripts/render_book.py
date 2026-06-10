@@ -94,32 +94,32 @@ BACKOFF_MAX_SECONDS = 60.0
 
 IMAGE_SYSTEM_PROMPT = (
     "You are a visionary image-creation artist. Transform the request into a "
-    "vivid, concrete, model-ready illustration. Pay attention to composition, "
+    "vivid, concrete image in the book's art style. Pay attention to composition, "
     "lighting, color, and visual balance. Reference images follow the prompt, "
     "each introduced by a short text note identifying it. Rules by kind: "
     "A 'character style sheet' defines that character's design, outfit, and "
-    "the illustration art style — follow it exactly. "
+    "the book's art style — follow it exactly. "
     "A 'character photograph' supplies that character's facial likeness only — "
     "clothing, outfit, and character design always come from the style sheet, "
     "never from any photograph. "
     "An 'object reference sheet' defines that object's design, colours, and "
     "proportions in the book's art style — follow it exactly. "
     "An 'object photograph' supplies that object's shape, materials, and "
-    "distinguishing details — render it fully in the book's illustration style, "
-    "never photographically. "
+    "distinguishing details — redraw it fully in the book's art style, "
+    "never as a photograph. "
     "A 'location reference sheet' defines that place's look in the book's art "
     "style — follow it exactly; it is scenery, never a character. "
     "A 'location photograph' shows a real place that is the SETTING of the "
     "scene: reproduce its recognizable architecture, landmarks, and geography, "
-    "rendered fully in the book's illustration style — it is scenery, never a "
-    "character or a person, and never photographic rendering. "
+    "redrawn fully in the book's art style — it is scenery, never a "
+    "character or a person, and never a photograph. "
     "The identification notes are instructions, not story text; never letter "
     "them into the image. "
     "Output only the generated image without additional commentary."
 )
 
 TEXT_SAFE_ZONE_DIRECTIVE = (
-    "Leave the {placement} quarter of the image as a soft, "
+    "Leave the {placement} quarter of the image as a "
     "low-detail, {tone} area suitable for overlaying text. "
     "Do not place any narrative text in the image."
 )
@@ -136,14 +136,12 @@ SHARED_TEXT_BG_NAME = "text-bg-long.png"
 STYLE_ANCHOR = (
     "Art style and character design must match the provided reference "
     "sheet(s) exactly. If a reference photograph of a character is also provided, "
-    "match that character's facial likeness and identity to the photo, but render "
-    "fully in the illustration style of the sheet(s) — never reproduce photographic "
-    "detail. "
+    "match that character's facial likeness and identity to the photo, but redraw "
+    "fully in the art style of the sheet(s) — never reproduce photographic detail. "
     "Each character wears exactly the outfit shown on their reference sheet; "
     "never take clothing or outfit from a photograph. "
     "Consistent character design, {style}. "
-    "Preserve this exact palette, lighting, line treatment, and rendering style "
-    "unchanged across every page of the book."
+    "Keep this exact style identical on every page of the book."
 )
 
 # Ink-and-contrast clause spliced into NATIVE_TEXT_DIRECTIVE.
@@ -153,10 +151,10 @@ STYLE_ANCHOR = (
 #   strands light ink on a light field and is invisible).
 _INK_CLAUSE = {
     "dark": (
-        "warm dark ink, crisp and highly legible against the soft low-detail background"
+        "dark ink, crisp and highly legible against the low-detail background"
     ),
     "light": (
-        "soft warm cream-white ink, crisp and highly legible against a darker, low-detail "
+        "cream-white ink, crisp and highly legible against a darker, low-detail "
         "area of the scene (use a subtle dark tone behind the text, never a light field)"
     ),
 }
@@ -165,12 +163,12 @@ _INK_CLAUSE = {
 # One fixed, detailed letterform descriptor reused verbatim on every page so the
 # lettering style stays consistent book-wide (each page is a separate stateless call
 # with no seed). {font_ref} names a target font family when story.fonts configures one;
-# the descriptor adjectives must stay coherent with that family (rounded sans here).
+# the descriptor adjectives must stay coherent with that family.
 # {ink_clause} carries both ink color and required backdrop (see _INK_CLAUSE above).
 NATIVE_TEXT_DIRECTIVE = (
     "Render this exact story text as part of the illustration, {placement_clause}. "
-    "Letter it in a clean, rounded, child-friendly "
-    "style{font_ref}: even weight, steady baseline, generous letter spacing, {ink_clause} — "
+    "Letter it in a clean, legible style consistent with the book's art style{font_ref}: "
+    "even weight, steady baseline, generous letter spacing, {ink_clause} — "
     "and keep this exact "
     "lettering style identical on every page of the book. Preserve the text's natural "
     "reading direction. Reproduce every word, comma, quotation mark, and dash exactly as "
@@ -182,8 +180,8 @@ NATIVE_TEXT_DIRECTIVE = (
 # control over where the text lands; top/bottom pin it to a band.
 FLOATING_PLACEMENT_CLAUSE = (
     "integrated naturally into the scene wherever it best suits the composition — you choose "
-    "the most visually pleasing, creative placement for a children's storybook (open sky, a "
-    "calm patch of background, along an edge or corner), kept clear of faces and the main "
+    "the most visually pleasing, creative placement for the page (open sky, an uncluttered "
+    "patch of background, along an edge or corner), kept clear of faces and the main "
     "subject and fully legible"
 )
 
@@ -492,16 +490,15 @@ def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
     if not bg_desc:
         bg_desc = story.get("text_background_prompt", "").rstrip(". ")
     if not bg_desc:
-        bg_desc = "A soft decorative background for the story's text pages"
+        bg_desc = "A plain background for the book's text pages"
     return (
         f"{bg_desc}. "
-        "Render a soft, low-detail, calm full-bleed decorative background — "
+        "Render a low-detail, full-bleed background in the book's art style — "
         "no characters, no faces, no lettering, no typography anywhere in the image. "
         "Use the full canvas from edge to edge, and reserve a large, especially "
         "low-detail, lightly-toned central area where story text will be placed. "
         f"Art style: {style}. "
-        "Preserve this exact palette, lighting, line treatment, and rendering style "
-        "unchanged across every page of the book."
+        "Keep this exact style identical on every page of the book."
     )
 
 

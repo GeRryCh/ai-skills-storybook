@@ -2,11 +2,11 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "StoryManifest",
   "type": "object",
-  "required": ["title", "age_band", "style", "style_guide", "cast", "pages"],
+  "required": ["title", "style", "style_guide", "cast", "pages"],
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string", "description": "Book title" },
-    "age_band": { "type": "string", "enum": ["3-5", "5-8"], "x-interview": { "priority": "core", "ask": "Who is the book for — which reader age band?" } },
+    "age_band": { "type": "string", "enum": ["3-5", "5-8", "general"], "default": "general", "x-interview": { "priority": "core", "ask": "Who is the book for — a reader age band, or general/all-ages?" } },
     "style": { "type": "string", "description": "Short human-readable illustration style label, e.g. 'soft watercolor, pastel palette'. Used in prose (image_prompts mention it) and as a quick summary; the paid scripts inject 'style_guide' (required) into every API call, not this field. When the user supplies a style reference image (an illustration or screenshot showing the desired look), view it in-session with the Read tool and derive both 'style' and 'style_guide' from what you see — the image is analyzed in-session, not persisted or passed to the renderer.", "x-interview": { "priority": "core", "ask": "What illustration style? E.g. soft watercolor (default), bold flat cartoon, anime/cel-shaded, pixel art, caricature, comic-book, colored-pencil, paper-cutout collage — describe your own, or share a style reference image to match." } },
     "style_guide": {
       "type": "object",
@@ -20,8 +20,8 @@
           "items": { "type": "string" }
         },
         "line": { "type": "string", "description": "Line-work description, e.g. 'thin sepia ink, even weight, rounded corners'." },
-        "lighting": { "type": "string", "description": "Lighting direction, quality, and color temperature, e.g. 'golden-hour side-light, soft warm shadows, no harsh edges'." },
-        "mood": { "type": "string", "description": "Overall mood and rendering vocabulary, e.g. 'cozy, gentle, storybook calm, slightly naive brushwork'." }
+        "lighting": { "type": "string", "description": "Lighting direction, quality, and color temperature, e.g. 'golden-hour side-light, long shadows' or 'flat even light, no gradients'." },
+        "mood": { "type": "string", "description": "Overall mood and rendering vocabulary, e.g. 'cozy and gentle' or 'graphic, high-contrast, irreverent'." }
       }
     },
     "cast": {
@@ -57,7 +57,7 @@
       "enum": ["overlay", "native", "long"],
       "description": "How page text is rendered. 'native' (default): ask the image model to render the story text directly into the illustration (output goes to page-NN-native.png). 'overlay': generate image with a text-safe zone, then Pillow-composite text via overlay_text.py. 'long': each body page becomes two physical pages — (1) full-bleed art with no text (pages/page-NN-long.png), (2) a separate text-only page with the story text on a centered, feathered semi-transparent panel over ONE shared model-generated background reused book-wide (pages/text-bg-long.png; designed with a reserved low-detail central text area). Cover (page 1) stays a single combined overlay-style page. Cost = N art calls + 1 shared-background call; a page with 'text_background_prompt' gets its own dedicated background instead (+1 call for that page). render_book.py's --text-mode flag overrides this per run. A page-level 'text_mode' field overrides this for that specific page (see pages[].text_mode).",
       "default": "native",
-      "x-interview": { "priority": "core", "ask": "How should the story text appear on the pages? 'long' suits text-heavy books for ages 5-8 (~80+ words per spread)." }
+      "x-interview": { "priority": "core", "ask": "How should the story text appear on the pages? 'long' suits text-heavy books (~80+ words per spread)." }
     },
     "text_background_prompt": {
       "type": "string",

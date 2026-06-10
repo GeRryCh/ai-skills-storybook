@@ -4,7 +4,9 @@ description: >
   Stage 1 of 4 in the storybook pipeline — draft the manuscript.
   Use this skill whenever the user mentions: children's storybook, picture book,
   illustrated kids' book, bedtime story with pictures, story for my kid/child/toddler,
-  "make a book about X", "write a storybook", "generate a kids book", or any request
+  "make a book about X", "write a storybook", "generate a kids book",
+  illustrated book in any art style, comic-style book, graphic-novel-style book,
+  all-ages illustrated book, or any request
   that combines a story idea with the word "illustrate", "pages", or "book".
   Even if the user only describes a character and says "make a story" — use this skill.
   This is the ENTRY POINT: it produces story.json (free, no API). Guides the user through
@@ -19,7 +21,7 @@ metadata:
 
 ## Pipeline
 
-This is the first of four skills. Together they make a fully illustrated picture book:
+This is the first of four skills. Together they make a fully illustrated book:
 
 1. **storybook-story** (this skill, free) — draft `story.json`: per-page text + image prompts + explicit character cast (global + per-page). User edits and approves the text before any money is spent.
 2. **storybook-stylesheet** (paid) — generate `style-sheet-{name}.png`: one reference image per character, the consistency anchors for every page.
@@ -81,7 +83,7 @@ The following algorithm covers **scalar book-level knobs** that churn when the s
 6. **Detect real named places and gather location photos** (see Locations section below) — optional, skip gracefully if Perplexity MCP is unavailable.
 7. Author cast and `style_guide` (from the style answer, a supplied **style reference image** if any, + STYLE_PRIMER).
 8. **Gate 1: Configuration summary — confirm before writing** (see Configuration summary section below). Stop and wait for "go".
-9. Draft page prose and image prompts — word counts per the now-locked `age_band` and `text_mode` (drafting after Gate 1 avoids rework when a summary override changes word-count guidance).
+9. Draft page prose and image prompts — word counts per `text_mode` (and `age_band` when set; see STYLE_PRIMER for age-specific guidance; omit `age_band` for general/all-ages books). Drafting after Gate 1 avoids rework when a summary override changes word-count guidance.
 10. Write `{out_dir}/story.json` following the schema exactly.
 11. **Validate `story.json` against the schema** — run the validator and fix any errors before continuing:
 
@@ -312,7 +314,7 @@ medium → palette → line → lighting → mood) and inject it verbatim into e
 ### Page structure
 
 - **Page 1**: cover. `text` = title only. `image_prompt` = full cover scene.
-- **Pages 2 to N-1**: story body. Spread word counts guided by age (see STYLE_PRIMER).
+- **Pages 2 to N-1**: story body. Spread word counts guided by `text_mode` and reading level; use age-band word counts from STYLE_PRIMER when `age_band` is set.
 - **Page N**: closing spread. One short sentence or just title/end.
 
 ### Per-page `cast` field (required)
@@ -381,7 +383,7 @@ Present the full resolved configuration for confirmation **before writing anythi
 
 | Setting | Value | Source |
 |---------|-------|--------|
-| age_band | {chosen} | answered / default |
+| age_band | {chosen or "general (omitted — all-ages default)"} | answered / default (general) |
 | style | {chosen} | answered / default |
 | text_mode | {chosen} | answered / default |
 | resolution | {value or "unset — 2K used at render time"} | default |
@@ -403,7 +405,7 @@ Validate overrides against the field's `enum`; re-show only the changed rows; th
 
 ### Omission rule
 
-Required fields (`title`, `age_band`, `style`, `style_guide`, `cast`, `pages`) are always written. Every **optional** field is written to `story.json` only when the user's choice diverges from the omission semantics — accepting a default means the key is omitted (preserves the editor's round-trip contract; optional fields that match the documented default are never materialised).
+Required fields (`title`, `style`, `style_guide`, `cast`, `pages`) are always written. Every **optional** field (including `age_band`) is written to `story.json` only when the user's choice diverges from the omission semantics — accepting a default means the key is omitted (preserves the editor's round-trip contract; optional fields that match the documented default are never materialised). `age_band` is omitted when the user accepts the `general` default; only write it when the user specifies `3-5` or `5-8`.
 
 Important edge cases:
 - `saved_formats: []` records a "no book files" preference consumed by Stage 4 (storybook-consolidate) as a hint — this is NOT the same as omitting the field (omitted means "all formats" as default hint). No script reads this field; the consolidate skill uses it as the default answer when asking which formats to export, and the interactive choice there always wins. Only write `[]` when the user explicitly requests no book files.

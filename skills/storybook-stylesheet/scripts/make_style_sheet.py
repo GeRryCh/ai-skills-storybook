@@ -79,25 +79,22 @@ def get_api_key() -> str | None:
     )
 
 
-# Baked-in style directive. The images.edit endpoint forces input_fidelity HIGH
-# and hugs the reference photos, which biases the face photoreal. This front- and
-# back-loads a hard "flat 2D cartoon, NOT a photo" instruction so sheets stay in
-# the book's illustration style while keeping the photo's facial identity.
+# Baked-in anti-photoreal directive. The images.edit endpoint forces input_fidelity HIGH
+# and hugs the reference photos, which biases the output toward photographic rendering.
+# This front- and back-loads a hard "original illustration, NOT a photo" instruction so
+# sheets stay in the book's defined art style while preserving the photo's identity cues.
 STYLE_BOOST_HEAD = (
-    "FLAT 2D HAND-PAINTED CHILDREN'S-BOOK WATERCOLOR ILLUSTRATION — a soft "
-    "storybook cartoon drawing, NOT a photograph. Absolutely no photorealism: "
-    "no photographic skin texture, no realistic pores/shading/lighting, no 3D "
-    "rendering. Use simplified cartoon features, soft watercolor washes, and "
-    "visible thin pen-and-ink outlines. Treat any attached photographs ONLY as "
-    "a reference for the person's facial IDENTITY (face shape, beard, eyes, "
-    "nose, hair) — copy the identity, then REDRAW the whole figure from scratch "
-    "in flat watercolor cartoon style. Never reproduce photographic detail.\n\n"
+    "Render this as an original illustration in the book's defined art style — NOT a "
+    "photograph. Treat any attached photographs ONLY as a reference for identity and "
+    "structure (a person's face shape, features, hair; an object's shape; a place's "
+    "architecture): copy that identity, then REDRAW the whole subject from scratch in "
+    "the book's art style. Do not paste, trace, or reproduce photographic detail, "
+    "texture, or lighting.\n\n"
 )
 STYLE_BOOST_TAIL = (
-    "\n\nFINAL REMINDER: the output must look like a flat, soft, hand-painted "
-    "children's-book watercolor cartoon with ink outlines — never a photo, never "
-    "photorealistic. Likeness comes through cartoon facial features, not "
-    "photographic rendering."
+    "\n\nFINAL REMINDER: the output is an original illustration in the book's art style "
+    "— never a photograph. Likeness comes through the redrawn artwork, not photographic "
+    "rendering."
 )
 
 # Per-kind system prompts: common prefix + kind-specific likeness sentence + tail.
@@ -117,13 +114,14 @@ _KIND_LIKENESS = {
     ),
     "object": (
         "Preserve the subject's recognizable shape, structure, materials, and "
-        "distinguishing features from any provided reference photographs, but render "
-        "fully in the requested illustration style — never photographic. "
+        "distinguishing features from any provided reference photographs, but redraw "
+        "the subject as an original illustration in the book's art style — never "
+        "reproduce photographic detail. "
     ),
     "location": (
         "Preserve the place's recognizable architecture, landmarks, and geography "
-        "from any provided reference photographs, but render fully in the requested "
-        "illustration style — never photographic. "
+        "from any provided reference photographs, but redraw the place as an original "
+        "illustration in the book's art style — never reproduce photographic detail. "
     ),
 }
 
@@ -333,7 +331,7 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
 
     if kind == "object":
         return (
-            f"Object reference sheet for a children's picture book. "
+            f"Object reference sheet for the book. "
             f"Show this one object only: {subject}. "
             f"Show the object from multiple angles, plus a detail close-up of its most "
             f"distinguishing features, consistent design across the sheet. "
@@ -345,7 +343,7 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
                 else ""
             )
             +
-            f"Render in the illustration style (do not composite, paste, trace, or "
+            f"Redraw in the book's art style (do not composite, paste, trace, or "
             f"reproduce the photo itself; no photographic elements). "
             f"Art style: {style}. "
             f"Background must be a single flat, plain, neutral light colour — empty, "
@@ -355,7 +353,7 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
         )
     elif kind == "location":
         return (
-            f"Location reference sheet for a children's picture book. "
+            f"Location reference sheet for the book. "
             f"Show this one place only: {subject}. "
             f"Show a wide establishing view and one or two closer views from different "
             f"angles, plus a detail close-up of its most distinguishing features, "
@@ -368,7 +366,7 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
                 else ""
             )
             +
-            f"Render in the illustration style (do not composite, paste, trace, or "
+            f"Redraw in the book's art style (do not composite, paste, trace, or "
             f"reproduce the photo itself; no photographic elements). "
             f"Art style: {style}. "
             f"No people and no characters anywhere in the scene. "
@@ -377,10 +375,10 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
         )
     else:  # character (default)
         return (
-            f"Character reference sheet for a children's picture book. "
+            f"Character reference sheet for the book. "
             f"Show this one character only: {subject}. "
             f"The sheet must contain exactly four views: "
-            f"(1) full-body front view facing the viewer (анфас), "
+            f"(1) full-body front view facing the viewer, "
             f"(2) full-body left profile view, "
             f"(3) full-body right profile view, "
             f"(4) a close-up of the face. "
@@ -397,7 +395,7 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
                 else ""
             )
             +
-            f"Render in the illustration style (do not composite, paste, trace, or "
+            f"Redraw in the book's art style (do not composite, paste, trace, or "
             f"reproduce the photo itself; no photographic elements). "
             f"Outfit and clothing: use exactly the outfit described above in the character "
             f"description. If no outfit is described, invent one simple, distinctive outfit "

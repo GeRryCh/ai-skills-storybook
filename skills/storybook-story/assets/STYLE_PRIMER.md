@@ -1,6 +1,8 @@
-# Children's Book Style Primer
+# Story Book Style Primer
 
 ## Age → word count guide
+
+Applies only when `age_band` is set. For general/all-ages books omit `age_band` and size text to the story's reading level.
 
 | Age band | Total words | Words per spread (native/overlay) | Words per spread (long mode) | Font size hint |
 |----------|-----------|------------------------------------|-------------------------------|----------------|
@@ -48,6 +50,8 @@ block from it (fixed field order) and inject it verbatim into every call. **Both
 scripts refuse to run when it is missing** — author it for every book. The `style` string
 stays as a short human-readable label used in prose.
 
+This is one genre among many — match the user's requested style, not this example.
+
 ```json
 "style_guide": {
   "medium": "soft watercolor with thin pen-and-ink outline",
@@ -93,7 +97,7 @@ consistency across every separate paid API call.
 ## Illustration style tips
 
 - Name characters consistently in every `image_prompt` (exact same name every page).
-- Mention the style in every prompt: e.g. "soft watercolor, gentle pastel palette, children's picture book".
+- Mention the book's art style (from `style_guide`) in every prompt — match the book's actual style, e.g. "flat cel-shaded cartoon, bold outlines" or "soft watercolor, pastel palette". Put genre / audience / tone in the top-level `premise` field (PER-66), NOT in every `image_prompt` — the renderer injects `premise` into every page automatically.
 - Keep backgrounds simple so text overlay zone has low detail.
 - Resolution default is 2K — good for print at ~8"×8" and screen. Set the optional top-level `resolution` field in `story.json` (`"1K"`, `"2K"`, or `"4K"`) to lock quality for the book; the render CLI `--resolution` flag overrides it. Use `1K` for fast/cheap drafts, `4K` for large-format print.
 - Aspect ratio: square (`1:1`) works well for picture books; portrait (`3:4`, `4:5`) for tall layouts; landscape (`4:3`, `16:9`) for wide spreads. Set the optional top-level `aspect_ratio` field in `story.json` to lock framing book-wide; the render/stylesheet CLI `--aspect-ratio` flag overrides it. When omitted the model picks framing per call.
