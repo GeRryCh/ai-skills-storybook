@@ -195,10 +195,8 @@ is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 Each page also carries an explicit `cast` list (`pages[].cast`) of cast **ids** — not names — naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
 this to send only the relevant per-cast-entry style sheets — the model never sees sheets
-for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it additionally contributes its first `ref_image` (a solo photo or a Stage-1
-reference photo), so the render anchors the hero's facial likeness on the real photo, not only on the
-(lossy) style sheet. **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
-Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped. **Auto-upgrade (PER-58):** `select_refs()` in `render_book.py` runs before the cap is applied — if the effective model is flash and the candidate list has ≥5 images, the page is silently upgraded to `gemini-3-pro-image` for that call only (logged, story.json untouched). The cap/drop logic is in `select_refs`; `collect_input_images` now returns the full uncapped candidate list.
+for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it leads reference ordering into the cap so its style sheet is positioned first and never dropped. Characters contribute only their style sheet (no extra photo). **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
+Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped. **Auto-upgrade (PER-58):** `select_refs()` in `render_book.py` runs before the cap is applied — if the effective model is flash and the candidate list has ≥5 images, the page is silently upgraded to `gemini-3-pro-image` for that call only (logged, story.json untouched). The cap/drop logic is in `select_refs`; `collect_input_images` now returns the full uncapped candidate list.
 
 **Outfit lock (single canonical outfit per character).** For kind=character entries, `appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
@@ -249,7 +247,7 @@ render remains backward-compatible via the photo fallback for books never re-she
 
 **Ref priority and cap (`render_book.py`):**
 
-> hero sheet → hero photo → remaining character sheets (page order) → object refs (page order) → **location refs (sheet, or photo fallback — lowest, first to drop)**
+> hero sheet → remaining character sheets (page order) → object refs (page order) → **location refs (sheet, or photo fallback — lowest, first to drop)**
 
 `collect_input_images()` builds the full prioritized candidate list (no cap). `select_refs(candidates, model)` then: auto-upgrades flash → pro when `len(candidates) > 4`, applies the cap, and returns `(effective_model, selected, dropped)`. Drops are logged, never silent. Flash pages with ≥5 refs are upgraded to pro before any ref is dropped; only past the pro cap (5) are refs dropped. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
 

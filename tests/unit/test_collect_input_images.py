@@ -42,8 +42,8 @@ class TestCollectInputImages(unittest.TestCase):
     # Hero character
     # ------------------------------------------------------------------
 
-    def test_hero_gets_sheet_then_photo(self):
-        """First character-kind entry (hero) contributes sheet + first photo, in that order."""
+    def test_hero_sheet_only_no_photo(self):
+        """Hero with a ref_image photo: sheet only — photo is NOT included (PER-65)."""
         f = self._f("hero-sheet.png", "hero-photo.png")
         story = {"cast": [
             {"id": "pip", "name": "Pip",
@@ -52,23 +52,10 @@ class TestCollectInputImages(unittest.TestCase):
         ]}
         result = render_book.collect_input_images(story, {"cast": ["pip"]}, log=[])
         labels = [l for l, _ in result]
-        self.assertEqual(labels, [
-            "character style sheet for Pip",
-            "real photograph of the character Pip (facial likeness reference)",
-        ])
-
-    def test_hero_only_first_photo_included(self):
-        """Hero has multiple ref_image photos; only the first is included."""
-        f = self._f("sheet.png", "photo1.png", "photo2.png")
-        story = {"cast": [
-            {"id": "pip", "name": "Pip",
-             "style_sheet": f["sheet.png"],
-             "ref_image": [f["photo1.png"], f["photo2.png"]]},
-        ]}
-        result = render_book.collect_input_images(story, {"cast": ["pip"]}, log=[])
-        paths = [p for _, p in result]
-        self.assertIn(f["photo1.png"], paths)
-        self.assertNotIn(f["photo2.png"], paths)
+        self.assertEqual(labels, ["character style sheet for Pip"])
+        self.assertNotIn(
+            "real photograph of the character Pip (facial likeness reference)", labels
+        )
 
     # ------------------------------------------------------------------
     # Non-hero character
@@ -96,7 +83,7 @@ class TestCollectInputImages(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_full_priority_order(self):
-        """hero sheet → hero photo → other char sheet → object ref → location ref."""
+        """hero sheet → other char sheet → object ref → location ref (no hero photo)."""
         f = self._f(
             "char-sheet.png", "char-photo.png",
             "side-sheet.png",
@@ -118,7 +105,6 @@ class TestCollectInputImages(unittest.TestCase):
         labels = [l for l, _ in result]
         self.assertEqual(labels, [
             "character style sheet for Char",
-            "real photograph of the character Char (facial likeness reference)",
             "character style sheet for Sidekick",
             "object reference sheet for Obj",
             "location reference sheet for Loc",
@@ -251,8 +237,9 @@ class TestBaseDirResolution(unittest.TestCase):
         ]}
 
     def test_relative_paths_resolved_against_base_dir(self):
-        """base_dir = story dir → relative sheet + photo + location sheet all found,
-        and the returned paths are the resolved absolute paths."""
+        """base_dir = story dir → relative sheet + location sheet all found,
+        and the returned paths are the resolved absolute paths. Character photo
+        not included (PER-65 — characters are sheet-only at render time)."""
         log = []
         result = render_book.collect_input_images(
             self._story(), {"cast": ["pip", "loc"]}, log=log, base_dir=self.root,
@@ -261,12 +248,10 @@ class TestBaseDirResolution(unittest.TestCase):
         paths = [p for _, p in result]
         self.assertEqual(labels, [
             "character style sheet for Pip",
-            "real photograph of the character Pip (facial likeness reference)",
             "location reference sheet for Loc",
         ])
         self.assertEqual(paths, [
             str(self.root / "sheet.png"),
-            str(self.root / "refs" / "photo.png"),
             str(self.root / "loc-sheet.png"),
         ])
         self.assertEqual(log, [], "No warnings when everything resolves")

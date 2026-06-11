@@ -81,7 +81,7 @@ the entry has no sheet (e.g. a book rendered before Stage 2 was re-run with PER-
 first `ref_image` photo is sent as a fallback instead (logged). Location references take
 the **lowest** priority within the per-model cap (4 flash default / 5 pro):
 
-> hero sheet → hero photo → remaining character sheets → object refs → **location ref (sheet, or photo fallback)**
+> hero sheet → remaining character sheets → object refs → **location ref (sheet, or photo fallback)**
 
 Flash pages whose reference list exceeds 4 are **auto-upgraded to pro** before any ref is
 dropped (see `--model` above). Anything past the pro cap (5) is logged (never silently

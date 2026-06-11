@@ -1275,18 +1275,13 @@ function updatePageBadge(badgeEl, page) {
   badgeEl.textContent = txt;
 }
 
-// Intent-based reference-image count for a page: every cast entry contributes 1,
-// plus 1 if the hero (first character-kind entry) has a ref_image photo.
-// Matches the render priority: character sheet + hero photo + other sheets + object/location refs.
+// Intent-based reference-image count for a page: every cast entry contributes 1
+// (one style sheet or photo-fallback ref per entry — characters are sheet-only).
+// Matches the render priority: character sheets + object/location refs (no hero photo).
 // No disk checks — this is a warning about full-render intent, computed client-side.
 function pageRefCount(page) {
   const cast = page.cast || [];
-  // cast entries are ids (PER-56); resolve to entries via id
-  const entryOf = cid => (story.cast || []).find(c => c.id === cid);
-  const kindOf  = cid => { const e = entryOf(cid); return e ? (e.kind || 'character') : 'character'; };
-  const heroId  = cast.find(cid => kindOf(cid) === 'character');
-  const hero    = heroId ? entryOf(heroId) : null;
-  return cast.length + (hero && refList(hero).length > 0 ? 1 : 0);
+  return cast.length;
 }
 const FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image';
 function updateRefBadge(badgeEl, page) {
@@ -1528,7 +1523,7 @@ function renderPageCast(container, page) {
       ? `<span class="kind-badge" title="${entryKind}">${entryKind.toUpperCase().slice(0,3)}</span>`
       : '';
     entry.innerHTML =
-      `<span>${esc(nameOf(cid))}${isHero ? '<span class="hero-badge" title="First character-kind entry also contributes their reference photo at render time">HERO</span>' : ''}${kindBadge}</span>`;
+      `<span>${esc(nameOf(cid))}${isHero ? '<span class="hero-badge" title="First character-kind entry — leads reference ordering on this page">HERO</span>' : ''}${kindBadge}</span>`;
     listDiv.appendChild(entry);
   });
   container.appendChild(listDiv);

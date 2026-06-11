@@ -561,17 +561,17 @@ def collect_input_images(
 
     page['cast'] is ONE flat name list of mixed kinds (names must match
     story['cast'][].name exactly). Contribution by kind:
-      character — its style sheet; the HERO (first character-kind entry in page
-                  order) additionally contributes its first ref_image photo for
-                  facial likeness. CONVENTION: author the hero/child first.
+      character — its style sheet only. The HERO (first character-kind entry in
+                  page order) still leads the ref-ordering into the cap, but no
+                  longer contributes a photo. CONVENTION: author the hero/child first.
       object    — its reference sheet; falls back to its first ref_image photo
                   when no sheet exists.
       location  — its reference sheet (Stage 2 generates one for every location,
                   from its real-place photos and/or 'appearance' — PER-50); falls
                   back to its first ref_image photo when no sheet exists yet.
 
-    Priority order: hero sheet → hero photo → remaining character sheets (page
-    order) → object refs (page order) → location refs (page order, lowest priority,
+    Priority order: hero sheet → remaining character sheets (page order) →
+    object refs (page order) → location refs (page order, lowest priority,
     first to drop when the cap is applied by the caller).
 
     Returns (label, path) pairs; labels are interleaved identification notes in
@@ -615,7 +615,7 @@ def collect_input_images(
     # Prioritized (label, path) candidates; trimmed to the cap below.
     candidates: list[tuple[str, str]] = []
 
-    for i, (name, entry) in enumerate(characters):
+    for name, entry in characters:
         sheet = entry.get("style_sheet", "")
         sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
         if not sheet:
@@ -627,14 +627,6 @@ def collect_input_images(
             warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
         else:
             candidates.append((f"character style sheet for {name}", str(sheet_path)))
-        # Hero (first character-kind entry in page order) also contributes its
-        # real photo for face fidelity.
-        if i == 0:
-            photos = _ref_photos(entry, base_dir)
-            if photos:
-                candidates.append(
-                    (f"real photograph of the character {name} (facial likeness reference)", photos[0])
-                )
 
     for name, entry in objects:
         sheet = entry.get("style_sheet", "")

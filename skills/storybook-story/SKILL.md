@@ -288,7 +288,7 @@ see **image_prompt rules** below).
 The location reference (its Stage-2 sheet, or the first photo as fallback) is the
 **lowest-priority** reference image within Stage 3's per-model cap (4 flash default / 5 pro):
 
-> hero sheet → hero photo → remaining character sheets → object refs → location sheet
+> hero sheet → remaining character sheets → object refs → location sheet
 
 On pages with 3 or more cast members, the location reference may be dropped from the cap
 (it will be logged — never silently dropped). On pages whose `cast` lists only the place
@@ -323,12 +323,7 @@ Every page MUST have a `cast` array listing the **ids** of all cast members that
 on that page. ids must match `cast[].id` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
-**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero, and Stage
-3 additionally feeds that character's first `ref_image` (a reference photo)
-into the render to lock its facial likeness. List the protagonist (e.g. the child the book is
-about) first on every page they appear; with a 4-ref cap (flash default; 5 with pro), a fifth reference
-may be dropped to make room for the hero's photo. Three-character pages on flash can carry hero
-sheet + hero photo + both supporting sheets without dropping anything.
+**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero and leads the reference-ordering into the cap — its style sheet is positioned first so it is never dropped. List the protagonist (e.g. the child the book is about) first on every page they appear. Characters contribute only their style sheet (no extra photo). With a 4-ref flash cap (5 with pro), a four-character flash page carries all four sheets exactly within the cap; a fifth cast member triggers auto-upgrade to pro before any sheet is dropped.
 
 Example:
 ```json
