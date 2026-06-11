@@ -222,8 +222,9 @@ def _known_keys(schema: dict) -> dict[str, set]:
 
 def resolve_story_rel(path_str: str, story_dir: Path) -> Path:
     """Resolve a story-data path: absolute as-is, relative against the
-    story.json directory (NOT cwd — deliberate divergence from the paid
-    scripts, which assume they run from the story dir)."""
+    story.json directory (NOT cwd). The paid scripts (render_book.py,
+    make_style_sheet.py) carry their own copies of this helper and resolve the
+    same way, so the editor and the scripts agree on relative-path semantics."""
     p = Path(path_str)
     return p if p.is_absolute() else story_dir / p
 

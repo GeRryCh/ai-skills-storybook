@@ -226,5 +226,72 @@ class TestCollectInputImages(unittest.TestCase):
         self.assertGreater(len(log), 0, "Warning must appear in log list")
 
 
+class TestBaseDirResolution(unittest.TestCase):
+    """Relative `style_sheet`/`ref_image` paths resolve against base_dir (the
+    story.json dir), not cwd — PER-68 regression guard."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        # Files created with story-relative names under root.
+        _touch(self.root / "sheet.png")
+        _touch(self.root / "refs" / "photo.png")
+        _touch(self.root / "loc-sheet.png")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _story(self):
+        return {"cast": [
+            {"id": "pip", "name": "Pip",
+             "style_sheet": "sheet.png",            # relative to story dir
+             "ref_image": ["refs/photo.png"]},      # relative to story dir
+            {"id": "loc", "name": "Loc", "kind": "location",
+             "style_sheet": "loc-sheet.png"},
+        ]}
+
+    def test_relative_paths_resolved_against_base_dir(self):
+        """base_dir = story dir → relative sheet + photo + location sheet all found,
+        and the returned paths are the resolved absolute paths."""
+        log = []
+        result = render_book.collect_input_images(
+            self._story(), {"cast": ["pip", "loc"]}, log=log, base_dir=self.root,
+        )
+        labels = [l for l, _ in result]
+        paths = [p for _, p in result]
+        self.assertEqual(labels, [
+            "character style sheet for Pip",
+            "real photograph of the character Pip (facial likeness reference)",
+            "location reference sheet for Loc",
+        ])
+        self.assertEqual(paths, [
+            str(self.root / "sheet.png"),
+            str(self.root / "refs" / "photo.png"),
+            str(self.root / "loc-sheet.png"),
+        ])
+        self.assertEqual(log, [], "No warnings when everything resolves")
+
+    def test_relative_paths_dropped_with_wrong_base_dir(self):
+        """base_dir = some other dir → relative paths don't resolve; the exact bug
+        (sheet not found, photo skipped, location skipped)."""
+        other = Path(self._tmp.name) / "elsewhere"
+        other.mkdir()
+        log = []
+        result = render_book.collect_input_images(
+            self._story(), {"cast": ["pip", "loc"]}, log=log, base_dir=other,
+        )
+        self.assertEqual(result, [])
+        self.assertTrue(any("not found on disk" in w for w in log))
+
+    def test_absolute_paths_unaffected_by_base_dir(self):
+        """Absolute paths pass through resolve_story_rel unchanged regardless of base_dir."""
+        abs_sheet = _touch(self.root / "abs-sheet.png")
+        story = {"cast": [{"id": "pip", "name": "Pip", "style_sheet": abs_sheet}]}
+        result = render_book.collect_input_images(
+            story, {"cast": ["pip"]}, log=[], base_dir=Path("/nonexistent/base"),
+        )
+        self.assertEqual(result, [("character style sheet for Pip", abs_sheet)])
+
+
 if __name__ == "__main__":
     unittest.main()

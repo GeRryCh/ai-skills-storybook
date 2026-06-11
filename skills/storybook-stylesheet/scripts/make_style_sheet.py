@@ -413,7 +413,18 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
         )
 
 
-def collect_ref_images_for_entry(entry: dict) -> list[str]:
+def resolve_story_rel(path_str: str, base_dir: Path) -> Path:
+    """Resolve a story-data path: absolute as-is, relative against the story.json
+    directory (base_dir). Mirrors edit_story.py's resolve_story_rel so the paid
+    scripts and the editor agree on relative-path semantics — a relative
+    `ref_image`/`style_sheet` means "relative to story.json", not to cwd.
+    Keep in sync with the copy in render_book.py.
+    """
+    p = Path(path_str)
+    return p if p.is_absolute() else base_dir / p
+
+
+def collect_ref_images_for_entry(entry: dict, base_dir: Path) -> list[str]:
     """This cast entry's own reference photos, in order, capped at MAX_INPUT_IMAGES.
 
     `ref_image` accepts a single path (string) or a list of paths.
@@ -422,8 +433,10 @@ def collect_ref_images_for_entry(entry: dict) -> list[str]:
     one entry's reference photo never bleeds into another's sheet. The cast-to-photo
     mapping is fixed in Stage 1 (storybook-story).
 
-    Normalize -> dedup (keep order) -> drop missing files -> cap at MAX_INPUT_IMAGES (5
-    for pro), logging any refs dropped to the cap.
+    Normalize -> dedup (keep order) -> resolve each against base_dir (the story.json
+    dir) -> drop missing files -> cap at MAX_INPUT_IMAGES (5 for pro), logging any
+    refs dropped to the cap. Returns resolved (absolute) path strings so byte-reads
+    and the audit log work from any cwd.
     """
     raw = entry.get("ref_image")
     if isinstance(raw, str):
@@ -441,9 +454,12 @@ def collect_ref_images_for_entry(entry: dict) -> list[str]:
             seen.add(r)
             ordered.append(r)
 
-    existing = [r for r in ordered if Path(r).exists()]
+    existing: list[str] = []
     for r in ordered:
-        if not Path(r).exists():
+        resolved = resolve_story_rel(r, base_dir)
+        if resolved.exists():
+            existing.append(str(resolved))
+        else:
             print(f"Warning: ref not found, skipping: {r}", file=sys.stderr)
 
     if len(existing) > MAX_INPUT_IMAGES:
@@ -763,7 +779,7 @@ def main() -> None:
             print(f"MEDIA: {target}")
             continue
 
-        input_images = collect_ref_images_for_entry(entry)
+        input_images = collect_ref_images_for_entry(entry, story_path.parent)
         prompt = build_sheet_prompt(story, entry, has_refs=bool(input_images))
         print(f"\nGenerating sheet for {name!r} (id={cid!r}, kind={kind}) -> {target}")
         print(f"Prompt: {prompt}")

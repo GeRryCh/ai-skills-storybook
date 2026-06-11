@@ -505,12 +505,25 @@ def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
     )
 
 
-def _ref_photos(entry: dict) -> list[str]:
+def resolve_story_rel(path_str: str, base_dir: Path) -> Path:
+    """Resolve a story-data path: absolute as-is, relative against the story.json
+    directory (base_dir). Mirrors edit_story.py's resolve_story_rel so the paid
+    scripts and the editor agree on relative-path semantics — a relative
+    `ref_image`/`style_sheet` means "relative to story.json", not to cwd.
+    Keep in sync with the copy in make_style_sheet.py.
+    """
+    p = Path(path_str)
+    return p if p.is_absolute() else base_dir / p
+
+
+def _ref_photos(entry: dict, base_dir: Path) -> list[str]:
     """This cast entry's own reference photo paths, in order, existing only.
 
     Mirrors collect_ref_images_for_entry() in make_style_sheet.py (the two skills share
-    no module): normalize a string-or-list `ref_image` -> dedup keeping order -> drop
-    missing files. No cap here; the caller's per-model budget governs.
+    no module): normalize a string-or-list `ref_image` -> dedup keeping order ->
+    resolve each against base_dir (the story.json dir) -> drop missing files. No cap
+    here; the caller's per-model budget governs. Returns resolved (absolute) path
+    strings so byte-reads and the audit log work from any cwd.
     """
     raw = entry.get("ref_image")
     if isinstance(raw, str):
@@ -526,17 +539,28 @@ def _ref_photos(entry: dict) -> list[str]:
         if r and r not in seen:
             seen.add(r)
             ordered.append(r)
-    return [r for r in ordered if Path(r).exists()]
+    out: list[str] = []
+    for r in ordered:
+        resolved = resolve_story_rel(r, base_dir)
+        if resolved.exists():
+            out.append(str(resolved))
+    return out
 
 
 def collect_input_images(
     story: dict, page: dict, log: list[str] | None = None,
+    base_dir: Path | None = None,
 ) -> list[tuple[str, str]]:
     """Build the full prioritized reference-image list for one page render call.
 
     Returns ALL candidates in priority order — no cap applied. The caller
     (run_nano_banana via select_refs) decides the effective cap after optionally
     auto-upgrading the model.
+
+    base_dir is the story.json directory; relative `style_sheet`/`ref_image` paths
+    resolve against it (absolute paths pass through). Defaults to cwd when omitted
+    (the historical assumption — kept so callers passing absolute paths are
+    unaffected); main() always passes story_path.parent.
 
     page['cast'] is ONE flat name list of mixed kinds (names must match
     story['cast'][].name exactly). Contribution by kind:
@@ -562,6 +586,9 @@ def collect_input_images(
             log.append(f"  Warning: {msg}")
         else:
             print(f"Warning: {msg}", file=sys.stderr)
+
+    if base_dir is None:
+        base_dir = Path.cwd()
 
     cast_index: dict[str, dict] = {
         c.get("id", ""): c for c in story.get("cast", [])
@@ -593,19 +620,20 @@ def collect_input_images(
 
     for i, (name, entry) in enumerate(characters):
         sheet = entry.get("style_sheet", "")
+        sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
         if not sheet:
             warn(
                 f"character {name!r} has no style_sheet; skipping. "
                 "Run make_style_sheet.py first."
             )
-        elif not Path(sheet).exists():
+        elif not sheet_path.exists():
             warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
         else:
-            candidates.append((f"character style sheet for {name}", sheet))
+            candidates.append((f"character style sheet for {name}", str(sheet_path)))
         # Hero (first character-kind entry in page order) also contributes its
         # real photo for face fidelity.
         if i == 0:
-            photos = _ref_photos(entry)
+            photos = _ref_photos(entry, base_dir)
             if photos:
                 candidates.append(
                     (f"real photograph of the character {name} (facial likeness reference)", photos[0])
@@ -613,15 +641,16 @@ def collect_input_images(
 
     for name, entry in objects:
         sheet = entry.get("style_sheet", "")
-        if sheet and Path(sheet).exists():
-            candidates.append((f"object reference sheet for {name}", sheet))
+        sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
+        if sheet_path and sheet_path.exists():
+            candidates.append((f"object reference sheet for {name}", str(sheet_path)))
         else:
             if sheet:
                 warn(
                     f"object sheet for {name!r} not found on disk ({sheet}); "
                     f"falling back to photo."
                 )
-            photos = _ref_photos(entry)
+            photos = _ref_photos(entry, base_dir)
             if photos:
                 candidates.append(
                     (f"real photograph of the object {name} (appearance reference)", photos[0])
@@ -635,15 +664,16 @@ def collect_input_images(
     # Location refs — lowest priority, first to drop from the cap.
     for name, entry in locations:
         sheet = entry.get("style_sheet", "")
-        if sheet and Path(sheet).exists():
-            candidates.append((f"location reference sheet for {name}", sheet))
+        sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
+        if sheet_path and sheet_path.exists():
+            candidates.append((f"location reference sheet for {name}", str(sheet_path)))
         else:
             if sheet:
                 warn(
                     f"location sheet for {name!r} not found on disk ({sheet}); "
                     f"falling back to photo."
                 )
-            photos = _ref_photos(entry)
+            photos = _ref_photos(entry, base_dir)
             if photos:
                 candidates.append(
                     (f"real photograph of the location {name} (setting reference)", photos[0])
@@ -843,8 +873,13 @@ async def run_nano_banana(
     log: list[str],
     aspect_ratio: str | None = None,
     model: str = IMAGE_MODEL,
+    base_dir: Path | None = None,
 ) -> bool:
-    """Generate one illustration via the Gemini API and write it to raw_path."""
+    """Generate one illustration via the Gemini API and write it to raw_path.
+
+    base_dir is the story.json directory, used to resolve relative
+    `style_sheet`/`ref_image` paths; passed through to collect_input_images.
+    """
     # --composite-only guard: refuse any paid call, return False so the run continues.
     # The caller checks the return value; the run exits 1 via the "N page(s) failed" path.
     if client.composite_only:
@@ -863,7 +898,7 @@ async def run_nano_banana(
     # the behavioural rules for each kind live in IMAGE_SYSTEM_PROMPT.
     contents: list = [prompt]
     contents_desc: list[tuple] = [("text", prompt)]  # mirrors contents for audit log
-    candidates = collect_input_images(story, page, log)
+    candidates = collect_input_images(story, page, log, base_dir=base_dir)
     new_model, ref_pairs, dropped = select_refs(candidates, model)
     if new_model != model:
         log.append(
@@ -1038,7 +1073,7 @@ async def run_text_page(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None) -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, base_dir: Path | None = None) -> bool:
     """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     # Resolve model once: CLI override > page field > story field > default flash.
@@ -1059,7 +1094,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                 raw_path = pages_dir / "raw-page-01-long.png"
                 if not raw_path.exists():
                     prompt = build_image_prompt(page, story, "overlay")
-                    ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model)
+                    ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
                     if not ok or not raw_path.exists():
                         log.append("  ERROR: image generation failed for cover")
                         print("\n" + "\n".join(log))
@@ -1084,7 +1119,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         art_path = pages_dir / f"page-{nn}-long.png"
         if not art_path.exists():
             prompt = build_image_prompt(page, story, "long")
-            ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio, model=model)
+            ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
             if not ok or not art_path.exists():
                 log.append(f"  ERROR: art image generation failed for page {page_num}")
                 print("\n" + "\n".join(log))
@@ -1115,7 +1150,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                     bg_prompt_str = build_text_bg_prompt(story, page)
                     ok = await run_nano_banana(
                         client, bg_prompt_str, bg_path, story, {"cast": []},
-                        resolution, log, aspect_ratio, model=model,
+                        resolution, log, aspect_ratio, model=model, base_dir=base_dir,
                     )
                     if not ok or not bg_path.exists():
                         log.append(f"  ERROR: text bg generation failed for page {page_num}")
@@ -1150,7 +1185,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     if text_mode == "native":
         # In native mode the model bakes text into the illustration — write directly
         # to final_path; no separate raw file needed.
-        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log, aspect_ratio, model=model)
+        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
         if not ok or not final_path.exists():
             log.append(f"  ERROR: image generation failed for page {page_num}")
             print("\n" + "\n".join(log))
@@ -1161,7 +1196,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         # at :762.  Deleting page-NN.png alone (without its raw) triggers a free
         # re-composite; deleting both triggers a paid re-render.
         if not raw_path.exists():
-            ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model)
+            ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
             if not ok or not raw_path.exists():
                 log.append(f"  ERROR: image generation failed for page {page_num}")
                 print("\n" + "\n".join(log))
@@ -1188,7 +1223,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None) -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
@@ -1222,7 +1257,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
             bg_model = resolve_model(story, None, cli_model)
             ok = await run_nano_banana(
                 client, prompt, shared_bg, story, {"cast": []},
-                resolution, log, aspect_ratio, model=bg_model,
+                resolution, log, aspect_ratio, model=bg_model, base_dir=base_dir,
             )
             if ok and shared_bg.exists():
                 log.append(f"  Done: {shared_bg}")
@@ -1236,7 +1271,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     modes = sorted({resolve_text_mode(story, p, cli_text_mode) for p in todo}) if todo else [resolve_text_mode(story, None, cli_text_mode)]
     print(f"\nRendering {len(todo)} page(s) concurrently ({', '.join(modes)} mode(s))...")
     results = await asyncio.gather(
-        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model) for page in todo)
+        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model, base_dir=base_dir) for page in todo)
     )
     return sum(1 for ok in results if not ok)
 
@@ -1378,7 +1413,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:
