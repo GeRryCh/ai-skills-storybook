@@ -916,9 +916,36 @@ def _is_prohibited_block(response) -> bool:
     return False
 
 
+def _build_ref_manifest(ref_pairs: list[tuple[str, str]]) -> str:
+    """Build an ordered reference-image manifest to bind each sheet to its label.
+
+    gpt-image-2's images.edit takes a bare image list with NO labeled-interleaved
+    channel (unlike the Gemini path's "Next image: {label}." parts). Without a
+    binding the model cannot tell which sheet is which named character, and on a
+    multi-character page it collapses two distinct sheets into one design (rendered
+    the same person twice). Prepending this manifest — which respects the same image
+    order passed to images.edit — restores the sheet→name binding. Labels reuse the
+    exact vocabulary from collect_input_images / IMAGE_SYSTEM_PROMPT.
+    """
+    if not ref_pairs:
+        return ""
+    lines = [
+        f"  {i}. {label}" for i, (label, _) in enumerate(ref_pairs, start=1)
+    ]
+    return (
+        "The attached reference images, in this exact order, are:\n"
+        + "\n".join(lines)
+        + "\n\nUse each reference for the named subject ONLY — a character/object/"
+        "location style sheet defines that subject's canonical design; a real "
+        "photograph is a likeness/setting reference to redraw in the book style. "
+        "Render every named subject as its OWN distinct design from its own sheet; "
+        "never duplicate one subject's look onto another.\n\n"
+    )
+
+
 def _openai_fallback_image(
     prompt: str,
-    ref_paths: list[str],
+    ref_pairs: list[tuple[str, str]],
     raw_path: Path,
     resolution: str,
     aspect_ratio: str | None,
@@ -932,12 +959,17 @@ def _openai_fallback_image(
     - moderation="low" via extra_body to reduce false-refusals (same guard that
       prompted this whole fallback — the OpenAI probe confirmed it works).
 
+    Prepends an ordered reference manifest (_build_ref_manifest) so each sheet binds
+    to its named subject — images.edit has no labeled-image channel like the Gemini
+    path, and without the manifest a multi-character page collapses distinct sheets
+    into one design.
+
     Does NOT use STYLE_BOOST or any per-kind system-prompt machinery: those exist
     for Stage 2's job of redrawing a subject from raw photos, which is the opposite
     of what we need here (style sheets are illustrations whose design must be
     reproduced faithfully — STYLE_BOOST instructs "redraw from scratch", which
     would degrade consistency). The resolved page prompt + selected sheets verbatim
-    matches the probe that confirmed this works.
+    (plus the ordered manifest) matches the probe that confirmed this works.
 
     This function is synchronous; callers must wrap it in asyncio.to_thread().
     """
@@ -954,9 +986,11 @@ def _openai_fallback_image(
         return False
 
     size = aspect_to_size(aspect_ratio)
+    ref_paths = [p for _, p in ref_pairs]
+    full_prompt = _build_ref_manifest(ref_pairs) + prompt
 
     # Build audit-log contents_desc before opening handles.
-    contents_desc: list[tuple] = [("text", prompt)]
+    contents_desc: list[tuple] = [("text", full_prompt)]
     for img in ref_paths:
         p = Path(img)
         mime, _ = mimetypes.guess_type(str(p))
@@ -976,7 +1010,7 @@ def _openai_fallback_image(
         resolution=f"{size} (q={OPENAI_IMAGE_QUALITY}; OpenAI fallback; --resolution {resolution} ignored)",
         aspect_ratio=aspect_ratio,
         response_modalities=["IMAGE"],
-        system_instruction="(OpenAI gpt-image-2 fallback — no system channel on images.edit)",
+        system_instruction="(OpenAI gpt-image-2 fallback — no system channel on images.edit; refs labeled inline via manifest)",
         contents_desc=contents_desc,
     )
 
@@ -990,7 +1024,7 @@ def _openai_fallback_image(
                 response = client.images.edit(
                     model=OPENAI_IMAGE_MODEL,
                     image=handles,
-                    prompt=prompt,
+                    prompt=full_prompt,
                     size=size,
                     quality=OPENAI_IMAGE_QUALITY,
                     n=1,
@@ -999,7 +1033,7 @@ def _openai_fallback_image(
             else:
                 response = client.images.generate(
                     model=OPENAI_IMAGE_MODEL,
-                    prompt=prompt,
+                    prompt=full_prompt,
                     size=size,
                     quality=OPENAI_IMAGE_QUALITY,
                     n=1,
@@ -1235,7 +1269,7 @@ async def run_nano_banana(
                     ok = await asyncio.to_thread(
                         _openai_fallback_image,
                         prompt,
-                        [p for _, p in ref_pairs],
+                        ref_pairs,
                         raw_path,
                         resolution,
                         aspect_ratio,

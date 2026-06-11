@@ -142,6 +142,42 @@ class TestAspectToSize(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Tests: _build_ref_manifest
+# ---------------------------------------------------------------------------
+
+class TestBuildRefManifest(unittest.TestCase):
+
+    def test_empty_returns_empty_string(self):
+        """No refs → empty manifest (images.generate path, nothing to bind)."""
+        self.assertEqual(render_book._build_ref_manifest([]), "")
+
+    def test_single_ref_numbered(self):
+        m = render_book._build_ref_manifest([("character style sheet for Gera", "/x/g.png")])
+        self.assertIn("1. character style sheet for Gera", m)
+        self.assertNotIn("2.", m)
+
+    def test_order_preserved_and_numbered(self):
+        """Manifest numbers labels in the exact order passed (matches image= order)."""
+        pairs = [
+            ("character style sheet for Gera", "/x/g.png"),
+            ("character style sheet for Borya", "/x/b.png"),
+            ("object reference sheet for Suitcase", "/x/s.png"),
+        ]
+        m = render_book._build_ref_manifest(pairs)
+        # Order: Gera before Borya before Suitcase, with 1./2./3.
+        i_g = m.index("1. character style sheet for Gera")
+        i_b = m.index("2. character style sheet for Borya")
+        i_s = m.index("3. object reference sheet for Suitcase")
+        self.assertLess(i_g, i_b)
+        self.assertLess(i_b, i_s)
+
+    def test_mentions_distinct_design_instruction(self):
+        """Manifest tells the model to render each subject as its own distinct design."""
+        m = render_book._build_ref_manifest([("character style sheet for Gera", "/x/g.png")])
+        self.assertIn("distinct", m.lower())
+
+
+# ---------------------------------------------------------------------------
 # Tests: get_api_key
 # ---------------------------------------------------------------------------
 

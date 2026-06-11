@@ -102,7 +102,12 @@ not one model end-to-end. Both declare their SDK as a PEP-723 inline dependency.
   prompt — those are Stage-2 apparatus for redrawing from photos; style-sheet refs must be
   reproduced faithfully). Uses `images.edit` (multiple refs) or `images.generate` (no refs),
   `quality="medium"`, `moderation="low"` via `extra_body`. Size from `aspect_to_size(aspect_ratio)`
-  (kept in sync with `make_style_sheet.py`). Fallback only fires when `fallback_vendor="openai"`
+  (kept in sync with `make_style_sheet.py`). Because `images.edit` has **no labeled-interleaved
+  channel** like the Gemini path's `"Next image: {label}."` parts, an **ordered reference manifest**
+  (`_build_ref_manifest`) is prepended to the prompt — it numbers each sheet by its label in
+  `image=[...]` order so the model binds each sheet to its named subject. Without it a
+  multi-character page collapses two distinct sheets into one design (renders the same character
+  twice). Fallback only fires when `fallback_vendor="openai"`
   (the default) AND `STORYBOOK_SKILL_OPENAI_API_KEY` or `OPENAI_API_KEY` is present; otherwise
   the page fails as today. Vendor recorded in `log.txt` via `model=gpt-image-2` (distinguishable
   from `gemini-*` entries). Transient 5xx/429 errors are NOT affected — they keep the Gemini
