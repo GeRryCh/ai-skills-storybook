@@ -687,6 +687,43 @@ def collect_input_images(
     return candidates
 
 
+def missing_character_sheets(
+    story: dict, page: dict, base_dir: Path | None = None,
+) -> list[tuple[str, str, str]]:
+    """kind=character cast ids on this page whose style_sheet is absent or not on disk.
+
+    PER-69 hard gate: a character MUST have a usable style sheet to render — its sheet
+    defines the canonical design/outfit, and there is no legitimate fallback (objects
+    and locations keep their real-photo fallback, so they are NOT checked here).
+
+    Returns (id, display_name, sheet_str) tuples; sheet_str is "" when no style_sheet
+    field is set, else the raw (unresolved) path for the error message. base_dir is the
+    story.json dir for relative-path resolution (defaults to cwd, matching
+    collect_input_images).
+    """
+    if base_dir is None:
+        base_dir = Path.cwd()
+    cast_index: dict[str, dict] = {
+        c.get("id", ""): c for c in story.get("cast", [])
+        if isinstance(c, dict) and c.get("id")
+    }
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for cid in page.get("cast", []):
+        entry = cast_index.get(cid)
+        if entry is None:
+            continue  # unknown id is handled (warned) in collect_input_images
+        kind = (entry.get("kind") or "character").strip() or "character"
+        if kind != "character":
+            continue
+        sheet = entry.get("style_sheet", "")
+        if not (sheet and resolve_story_rel(sheet, base_dir).exists()):
+            if cid not in seen:
+                seen.add(cid)
+                out.append((cid, entry.get("name") or cid, sheet))
+    return out
+
+
 def select_refs(
     candidates: list[tuple[str, str]], model: str,
 ) -> tuple[str, list[tuple[str, str]], list[str]]:
@@ -887,6 +924,24 @@ async def run_nano_banana(
             f"  ERROR: {raw_path.name} requires a paid Gemini call, but --composite-only "
             "is set. Delete only the composite output (not the raw/art file) and re-run, "
             "or run without --composite-only to generate the image."
+        )
+        return False
+
+    # PER-69 hard gate: every character on this page must have a usable style sheet.
+    # Characters have no legitimate fallback (their sheet defines the canonical
+    # design/outfit); objects/locations keep their photo fallback and are not checked.
+    # Fail the page with an actionable error and make NO paid call. Pages with an
+    # empty cast (e.g. the shared text background) pass trivially.
+    missing = missing_character_sheets(story, page, base_dir)
+    if missing:
+        for cid, name, sheet in missing:
+            where = f"not found on disk ({sheet})" if sheet else "no style_sheet set"
+            log.append(
+                f"  ERROR: character {name!r} (id={cid}) has no usable style sheet: {where}."
+            )
+        log.append(
+            "  Run make_style_sheet.py to generate character sheets before rendering "
+            "(characters require a sheet; objects/locations may fall back to a photo)."
         )
         return False
 
