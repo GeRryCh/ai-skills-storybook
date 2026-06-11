@@ -16,7 +16,10 @@ Both paid scripts skip work whose output already exists. `make_style_sheet.py` s
 
 ## Keep duplicated helpers in sync
 
-`build_style_block()`, `append_api_log()`, `require_cast_ids()`, and `CAST_ID_MIGRATION_MESSAGE` are intentionally duplicated in both `render_book.py` and `make_style_sheet.py`. Any change to any of these must be applied to both copies.
+`build_style_block()`, `append_api_log()`, `require_cast_ids()`, `CAST_ID_MIGRATION_MESSAGE`,
+`aspect_to_size()` (+ `_PORTRAIT_RATIOS` / `_LANDSCAPE_RATIOS`), and `get_api_key()` are
+intentionally duplicated in both `render_book.py` and `make_style_sheet.py`. Any change to
+any of these must be applied to both copies.
 
 ## No migration shim for legacy keys
 

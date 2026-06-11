@@ -89,12 +89,25 @@ not one model end-to-end. Both declare their SDK as a PEP-723 inline dependency.
   Call size comes from `aspect_to_size(aspect_ratio)` — the `--resolution` 1K/2K/4K flag is
   Gemini-era and **ignored** here (logged only). Requires `STORYBOOK_SKILL_OPENAI_API_KEY`
   (preferred) or `OPENAI_API_KEY`. Returned image is `response.data[0].b64_json`.
-- **`render_book.py` (Stage 3) → Google Gemini** via the `google-genai` SDK. Builds a
-  `genai.Client` (lazily, on first paid call) with `api_key` from the environment; configurable
-  model — default `gemini-3.1-flash-image` (4-ref cap) or `gemini-3-pro-image` (5-ref cap),
-  set per-page, book-wide, or via `--model` CLI flag (auto-upgrade flash→pro when refs ≥5).
-  Sends the prompt plus reference images as `types.Part.from_bytes`, extracts the returned
-  image from `part.inline_data.data`. Requires `GEMINI_API_KEY`.
+- **`render_book.py` (Stage 3) → Google Gemini (default) + OpenAI `gpt-image-2` (fallback)**
+  via the `google-genai` + `openai` SDKs. Builds a `genai.Client` (lazily, on first paid call)
+  with `api_key` from the environment; configurable model — default `gemini-3.1-flash-image`
+  (4-ref cap) or `gemini-3-pro-image` (5-ref cap), set per-page, book-wide, or via `--model`
+  CLI flag (auto-upgrade flash→pro when refs ≥5). Sends the prompt plus reference images as
+  `types.Part.from_bytes`, extracts the returned image from `part.inline_data.data`. Requires
+  `GEMINI_API_KEY`. **OpenAI fallback (PER-67):** when Gemini returns
+  `finish_reason=PROHIBITED_CONTENT` (a deterministic content-policy block, not a transient
+  error), the page is automatically retried on OpenAI `gpt-image-2` using the exact same
+  resolved prompt and selected style-sheet references (no `STYLE_BOOST`, no per-kind system
+  prompt — those are Stage-2 apparatus for redrawing from photos; style-sheet refs must be
+  reproduced faithfully). Uses `images.edit` (multiple refs) or `images.generate` (no refs),
+  `quality="medium"`, `moderation="low"` via `extra_body`. Size from `aspect_to_size(aspect_ratio)`
+  (kept in sync with `make_style_sheet.py`). Fallback only fires when `fallback_vendor="openai"`
+  (the default) AND `STORYBOOK_SKILL_OPENAI_API_KEY` or `OPENAI_API_KEY` is present; otherwise
+  the page fails as today. Vendor recorded in `log.txt` via `model=gpt-image-2` (distinguishable
+  from `gemini-*` entries). Transient 5xx/429 errors are NOT affected — they keep the Gemini
+  retry path. Controlled by `--fallback-vendor openai|none` (CLI) or `fallback_vendor` story.json
+  field; precedence: CLI > story field > `openai` default.
 
 **Consistency implication:** the Stage-2 sheet PNG (OpenAI) is fed as a *reference image*
 into the Stage-3 render (Gemini) — a different model interprets it. The verbatim `style`
@@ -149,7 +162,10 @@ uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 `saved_formats`; default when neither set: all formats),
 `--composite-only` (abort instead of making any paid Gemini call; only rebuild free Pillow
 composites from existing raw/art/bg files — needs no `GEMINI_API_KEY`; pages that would
-require a new image fail with a clear message naming the missing prerequisite, exit 1).
+require a new image fail with a clear message naming the missing prerequisite, exit 1),
+`--fallback-vendor openai|none` (vendor to try when Gemini returns `PROHIBITED_CONTENT`;
+default `openai` — auto-retry on `gpt-image-2` when an OpenAI key is present, else fail
+as today; `none` disables the fallback; precedence: CLI > story `fallback_vendor` field > `openai`).
 Pages are independent and all fired concurrently via `asyncio` (one async Gemini
 request per page, no thread pool, no concurrency cap). Transient 429/5xx are retried
 with exponential backoff + jitter, so wall-clock ≈ the slowest single page.

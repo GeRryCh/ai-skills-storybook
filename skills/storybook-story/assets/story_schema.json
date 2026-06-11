@@ -112,6 +112,13 @@
       "default": ["pdf", "epub"],
       "x-interview": { "priority": "advanced", "ask": "Which finished book files to export at the end (Stage 4 default — changeable at export time)." }
     },
+    "fallback_vendor": {
+      "type": "string",
+      "enum": ["openai", "none"],
+      "default": "openai",
+      "description": "Optional fallback vendor for page rendering (Stage 3). When Gemini returns finish_reason=PROHIBITED_CONTENT (a deterministic content-policy block, not a transient error), render_book.py automatically retries the page on this vendor. 'openai' (default): retry on OpenAI gpt-image-2 with moderation='low', using the exact same resolved prompt and selected style sheets — only fires when STORYBOOK_SKILL_OPENAI_API_KEY or OPENAI_API_KEY is set in the environment; if no key is present the page fails as normal. 'none': disable the fallback entirely. Transient 5xx/429 Gemini errors are not affected by this setting. Precedence: render CLI --fallback-vendor flag > this field > 'openai'.",
+      "x-interview": { "priority": "advanced", "ask": "Fallback vendor when Gemini blocks a page — 'openai' (auto-retry on gpt-image-2 when key present) or 'none' (disable)." }
+    },
     "pages": {
       "type": "array",
       "minItems": 1,

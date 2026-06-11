@@ -3,6 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "google-genai",
+#     "openai>=1.40",
 #     "Pillow",
 # ]
 # ///
@@ -24,6 +25,9 @@ In long mode, per-artifact skip checks mean a missing text page can be rebuilt w
 re-firing the paid art call — and without needing GEMINI_API_KEY when no paid call is made.
 
 Requires GEMINI_API_KEY in the environment when a paid Gemini call is needed.
+When the OpenAI fallback is enabled (--fallback-vendor openai, the default), also
+reads STORYBOOK_SKILL_OPENAI_API_KEY (preferred) or OPENAI_API_KEY; if neither key
+is present the fallback is silently skipped and the page fails as normal.
 
 This script produces page images only. Assembly into PDF/EPUB is Stage 4
 (storybook-consolidate skill: merge_pdf.py / merge_epub.py / package_book.py — free,
@@ -52,11 +56,21 @@ Text modes:
             (pages/page-NN-long-bg.png, +1 call for that page). Text-page composition
             itself is free Pillow work. Cost: N art calls + 1 shared bg call.
 
+OpenAI gpt-image-2 fallback (PER-67):
+  When Gemini returns finish_reason=PROHIBITED_CONTENT (a hard policy block, not a
+  transient error), the page is automatically retried once on OpenAI gpt-image-2 using
+  the exact same resolved prompt + selected style-sheet references. Triggered only for
+  PROHIBITED_CONTENT; transient 5xx/429 errors keep their Gemini retry path. Controlled
+  by --fallback-vendor (default: openai — automatic when STORYBOOK_SKILL_OPENAI_API_KEY
+  or OPENAI_API_KEY is set; set to 'none' to disable). Audit log records vendor via
+  model=gpt-image-2 (distinguishable from gemini-* entries).
+
 Usage:
   uv run render_book.py --story /path/to/story.json [--out-dir DIR]
                         [--from N] [--only N] [--resolution 1K|2K|4K]
                         [--aspect-ratio RATIO] [--text-mode overlay|native|long]
                         [--model gemini-3.1-flash-image|gemini-3-pro-image]
+                        [--fallback-vendor openai|none]
                         [--saved-formats pdf epub|none]
 """
 
@@ -85,6 +99,14 @@ MODEL_MAX_INPUT_IMAGES = {
     PRO_IMAGE_MODEL: 5,    # Gemini 3 Pro Image: up to 5 reference images per call
 }
 MAX_INPUT_IMAGES = 4  # safe fallback cap for unrecognised models
+
+# OpenAI gpt-image-2 fallback config (PER-67).
+# Used only when Gemini returns finish_reason=PROHIBITED_CONTENT and fallback_vendor=="openai".
+# Keep OPENAI_IMAGE_MODEL / OPENAI_IMAGE_QUALITY / OPENAI_IMAGE_MODERATION in sync with
+# make_style_sheet.py (script-authoring.md keep-in-sync list).
+OPENAI_IMAGE_MODEL = "gpt-image-2"
+OPENAI_IMAGE_QUALITY = "medium"
+OPENAI_IMAGE_MODERATION = "low"
 
 # Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all
 # at once, so a single 429 must not silently drop a page.
@@ -793,9 +815,10 @@ class _LazyClient:
     with a clear error message — guaranteeing zero API spend.
     """
 
-    def __init__(self, composite_only: bool = False) -> None:
+    def __init__(self, composite_only: bool = False, fallback_vendor: str = "openai") -> None:
         self._client = None
         self.composite_only = composite_only
+        self.fallback_vendor = fallback_vendor
 
     def get(self):
         if self._client is None:
@@ -828,6 +851,185 @@ def _ensure_png(data: bytes) -> bytes:
     buf = io.BytesIO()
     Image.open(io.BytesIO(data)).save(buf, format="PNG")
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# OpenAI gpt-image-2 fallback helpers (PER-67)
+# Keep aspect_to_size / get_api_key in sync with make_style_sheet.py.
+# ---------------------------------------------------------------------------
+
+_PORTRAIT_RATIOS = {"2:3", "3:4", "4:5", "9:16"}
+_LANDSCAPE_RATIOS = {"3:2", "4:3", "5:4", "16:9", "21:9"}
+
+
+def aspect_to_size(aspect: str | None) -> str:
+    """Map a story.json aspect_ratio string to a gpt-image-2 pixel size.
+
+    gpt-image-2 takes a 'size' string, not an aspect-ratio enum.
+    Keep in sync with the copy in make_style_sheet.py.
+    """
+    if not aspect:
+        return "auto"
+    a = aspect.strip()
+    if a == "1:1":
+        return "1024x1024"
+    if a in _PORTRAIT_RATIOS:
+        return "1024x1536"
+    if a in _LANDSCAPE_RATIOS:
+        return "1536x1024"
+    return "auto"
+
+
+def get_api_key() -> str | None:
+    """Return the OpenAI API key: project-specific var first, then the standard one.
+
+    Keep in sync with the copy in make_style_sheet.py.
+    """
+    return os.environ.get("STORYBOOK_SKILL_OPENAI_API_KEY") or os.environ.get(
+        "OPENAI_API_KEY"
+    )
+
+
+def _is_prohibited_block(response) -> bool:
+    """Return True when a 200 Gemini response signals a PROHIBITED_CONTENT block.
+
+    Checks both finish_reason on candidates[0] and prompt_feedback.block_reason.
+    Robust to enum vs string form — compares via getattr(..., "name", str(...)).
+    Only PROHIBITED_CONTENT returns True; SAFETY/RECITATION/other reasons return
+    False so they keep the existing transient-retry path.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    if candidates:
+        finish = getattr(candidates[0], "finish_reason", None)
+        if finish is not None:
+            finish_name = getattr(finish, "name", str(finish))
+            if "PROHIBITED_CONTENT" in finish_name:
+                return True
+    # Also check prompt-level block_reason (no candidates path).
+    if not candidates:
+        feedback = getattr(response, "prompt_feedback", None)
+        blocked = getattr(feedback, "block_reason", None)
+        if blocked is not None:
+            blocked_name = getattr(blocked, "name", str(blocked))
+            if "PROHIBITED_CONTENT" in blocked_name:
+                return True
+    return False
+
+
+def _openai_fallback_image(
+    prompt: str,
+    ref_paths: list[str],
+    raw_path: Path,
+    resolution: str,
+    aspect_ratio: str | None,
+    log: list[str],
+) -> bool:
+    """Generate one illustration via OpenAI gpt-image-2 as a Gemini fallback.
+
+    Mirrors the call shape of make_style_sheet.py's generate_image():
+    - images.edit when reference sheets are provided (multi-image likeness path).
+    - images.generate when no references (bare prompt).
+    - moderation="low" via extra_body to reduce false-refusals (same guard that
+      prompted this whole fallback — the OpenAI probe confirmed it works).
+
+    Does NOT use STYLE_BOOST or any per-kind system-prompt machinery: those exist
+    for Stage 2's job of redrawing a subject from raw photos, which is the opposite
+    of what we need here (style sheets are illustrations whose design must be
+    reproduced faithfully — STYLE_BOOST instructs "redraw from scratch", which
+    would degrade consistency). The resolved page prompt + selected sheets verbatim
+    matches the probe that confirmed this works.
+
+    This function is synchronous; callers must wrap it in asyncio.to_thread().
+    """
+    import base64
+
+    from openai import OpenAI
+
+    api_key = get_api_key()
+    if not api_key:
+        log.append(
+            "  ERROR: OpenAI fallback requested but no API key found "
+            "(set STORYBOOK_SKILL_OPENAI_API_KEY or OPENAI_API_KEY)."
+        )
+        return False
+
+    size = aspect_to_size(aspect_ratio)
+
+    # Build audit-log contents_desc before opening handles.
+    contents_desc: list[tuple] = [("text", prompt)]
+    for img in ref_paths:
+        p = Path(img)
+        mime, _ = mimetypes.guess_type(str(p))
+        if not mime:
+            mime = "image/png"
+        try:
+            n = p.stat().st_size
+        except OSError:
+            n = 0
+        contents_desc.append(("image", str(p), mime, n))
+
+    append_api_log(
+        raw_path.parent.parent / "log.txt",
+        script="render_book.py",
+        target=raw_path,
+        model=OPENAI_IMAGE_MODEL,
+        resolution=f"{size} (q={OPENAI_IMAGE_QUALITY}; OpenAI fallback; --resolution {resolution} ignored)",
+        aspect_ratio=aspect_ratio,
+        response_modalities=["IMAGE"],
+        system_instruction="(OpenAI gpt-image-2 fallback — no system channel on images.edit)",
+        contents_desc=contents_desc,
+    )
+
+    client = OpenAI(api_key=api_key, timeout=300.0, max_retries=2)
+    handles = []
+    try:
+        for img in ref_paths:
+            handles.append(open(Path(img), "rb"))
+        try:
+            if handles:
+                response = client.images.edit(
+                    model=OPENAI_IMAGE_MODEL,
+                    image=handles,
+                    prompt=prompt,
+                    size=size,
+                    quality=OPENAI_IMAGE_QUALITY,
+                    n=1,
+                    extra_body={"moderation": OPENAI_IMAGE_MODERATION},
+                )
+            else:
+                response = client.images.generate(
+                    model=OPENAI_IMAGE_MODEL,
+                    prompt=prompt,
+                    size=size,
+                    quality=OPENAI_IMAGE_QUALITY,
+                    n=1,
+                    extra_body={"moderation": OPENAI_IMAGE_MODERATION},
+                )
+        except Exception as e:
+            log.append(f"  ERROR: both vendors failed — OpenAI gpt-image-2 error: {e}")
+            return False
+    finally:
+        for fh in handles:
+            try:
+                fh.close()
+            except Exception:
+                pass
+
+    try:
+        b64 = response.data[0].b64_json
+    except Exception:
+        log.append("  ERROR: both vendors failed — OpenAI returned no image data.")
+        return False
+    if not b64:
+        log.append("  ERROR: both vendors failed — OpenAI returned empty b64_json.")
+        return False
+
+    try:
+        raw_path.write_bytes(_ensure_png(base64.b64decode(b64)))
+    except Exception as e:
+        log.append(f"  ERROR: failed to write OpenAI fallback image: {e}")
+        return False
+    return True
 
 
 def append_api_log(
@@ -1020,6 +1222,43 @@ async def run_nano_banana(
             if image_data is not None:
                 break
             reason = _empty_response_reason(response)
+            # PER-67: PROHIBITED_CONTENT is a deterministic policy block — retrying
+            # Gemini N times wastes time and always fails. Short-circuit immediately
+            # and fall back to OpenAI gpt-image-2 (moderation="low").
+            # SAFETY/RECITATION/other reasons keep the existing transient-retry path.
+            if _is_prohibited_block(response):
+                log.append(
+                    f"  Gemini blocked page ({reason}). "
+                    "Attempting OpenAI gpt-image-2 fallback (moderation=low)..."
+                )
+                if client.fallback_vendor == "openai" and get_api_key():
+                    ok = await asyncio.to_thread(
+                        _openai_fallback_image,
+                        prompt,
+                        [p for _, p in ref_pairs],
+                        raw_path,
+                        resolution,
+                        aspect_ratio,
+                        log,
+                    )
+                    if ok:
+                        log.append(
+                            f"  Generated via OpenAI gpt-image-2 fallback: {raw_path.name}"
+                        )
+                    return ok
+                elif client.fallback_vendor == "none":
+                    log.append(
+                        f"  ERROR: Gemini blocked ({reason}) and --fallback-vendor is 'none'. "
+                        "Set fallback_vendor to 'openai' or provide an OpenAI key to enable "
+                        "the automatic gpt-image-2 fallback."
+                    )
+                else:
+                    log.append(
+                        f"  ERROR: Gemini blocked ({reason}) but no OpenAI API key found "
+                        "(set STORYBOOK_SKILL_OPENAI_API_KEY or OPENAI_API_KEY to enable "
+                        "the automatic gpt-image-2 fallback)."
+                    )
+                return False
             if attempt == MAX_RETRIES - 1:
                 log.append(f"  ERROR: API returned no image after {MAX_RETRIES} attempts ({reason}).")
                 return False
@@ -1267,7 +1506,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None, fallback_vendor: str = "openai") -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
@@ -1277,7 +1516,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     When composite_only=True, any page that would require a paid Gemini call fails with
     a clear error; free pages (existing raw/art/bg → overlay only) succeed normally.
     """
-    client = _LazyClient(composite_only=composite_only)
+    client = _LazyClient(composite_only=composite_only, fallback_vendor=fallback_vendor)
 
     # Long mode: the shared text-page background is one per book — generate it once,
     # sequentially, BEFORE the pages fire (pages only consume it; generating it inside
@@ -1384,6 +1623,22 @@ def main() -> None:
             "with a message naming the missing prerequisite file."
         ),
     )
+    parser.add_argument(
+        "--fallback-vendor",
+        dest="fallback_vendor",
+        choices=["openai", "none"],
+        default=None,
+        help=(
+            "Vendor to try when Gemini returns finish_reason=PROHIBITED_CONTENT "
+            "(a deterministic policy block). 'openai' (default): automatically retry "
+            "on OpenAI gpt-image-2 with moderation='low', using the same resolved "
+            "prompt and style sheets. Only fires when STORYBOOK_SKILL_OPENAI_API_KEY "
+            "or OPENAI_API_KEY is set; otherwise the page fails as normal. 'none': "
+            "disable the fallback — page fails as today with a clear message. "
+            "Precedence: CLI flag > story.json 'fallback_vendor' field > 'openai'. "
+            "Transient 5xx/429 errors are NOT affected — they keep their Gemini retry path."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -1396,6 +1651,8 @@ def main() -> None:
     resolution = args.resolution or story.get("resolution") or "2K"
     # CLI flag > story.json field > unset (model chooses framing).
     aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or None
+    # CLI flag > story.json field > built-in default (openai).
+    fallback_vendor = args.fallback_vendor or story.get("fallback_vendor") or "openai"
     # text_mode: resolved per page via resolve_text_mode(story, page, args.text_mode).
     # CLI --text-mode overrides all pages; page field > story field > "native" otherwise.
 
@@ -1457,7 +1714,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent, fallback_vendor=fallback_vendor)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
     if errors:
