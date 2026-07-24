@@ -141,10 +141,6 @@ IMAGE_SYSTEM_PROMPT = (
     "never as a photograph. "
     "A 'location reference sheet' defines that place's look in the book's art "
     "style — follow it exactly; it is scenery, never a character. "
-    "A 'location photograph' shows a real place that is the SETTING of the "
-    "scene: reproduce its recognizable architecture, landmarks, and geography, "
-    "redrawn fully in the book's art style — it is scenery, never a "
-    "character or a person, and never a photograph. "
     "The identification notes are instructions, not story text; never letter "
     "them into the image. "
     "Output only the generated image without additional commentary."
@@ -669,6 +665,9 @@ def collect_input_images(
 
     # Location refs — object lane, but rank above objects (PER-83): a wrong-style
     # background poisons the whole frame; a slightly-off prop does not.
+    # PER-84: locations have no photo fallback (a raw photo is a photoreal-bleed
+    # vector) — missing_required_sheets fails the page before any paid call reaches
+    # here; this branch is a defensive backstop, warn-only, never a photo candidate.
     for name, entry in locations:
         sheet = entry.get("style_sheet", "")
         sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
@@ -676,22 +675,13 @@ def collect_input_images(
             candidates.append(
                 (f"location reference sheet for {name}", str(sheet_path), "object")
             )
+        elif sheet:
+            warn(f"location sheet for {name!r} not found on disk ({sheet}); skipping.")
         else:
-            if sheet:
-                warn(
-                    f"location sheet for {name!r} not found on disk ({sheet}); "
-                    f"falling back to photo."
-                )
-            photos = _ref_photos(entry, base_dir)
-            if photos:
-                candidates.append(
-                    (f"real photograph of the location {name} (setting reference)", photos[0], "object")
-                )
-            else:
-                warn(
-                    f"location {name!r} has neither a style_sheet nor a "
-                    f"ref_image; skipping."
-                )
+            warn(
+                f"location {name!r} has no style_sheet; skipping. "
+                "Run make_style_sheet.py first."
+            )
 
     # Object refs — object lane, lowest priority overall (first to drop from
     # the object lane's cap).
@@ -722,19 +712,22 @@ def collect_input_images(
     return candidates
 
 
-def missing_character_sheets(
+def missing_required_sheets(
     story: dict, page: dict, base_dir: Path | None = None,
-) -> list[tuple[str, str, str]]:
-    """kind=character cast ids on this page whose style_sheet is absent or not on disk.
+) -> list[tuple[str, str, str, str]]:
+    """kind=character/location cast ids on this page whose style_sheet is absent or missing.
 
-    PER-69 hard gate: a character MUST have a usable style sheet to render — its sheet
-    defines the canonical design/outfit, and there is no legitimate fallback (objects
-    and locations keep their real-photo fallback, so they are NOT checked here).
+    PER-69 hard gate, extended to locations by PER-84: a character or location MUST have
+    a usable style sheet to render — a character's sheet defines the canonical
+    design/outfit, a location's sheet is the only style-safe render reference (a raw
+    photo is a photoreal-bleed vector). Objects keep their real-photo fallback and are
+    NOT checked here — a slightly-off prop does not poison a frame the way a wrong-style
+    background does.
 
-    Returns (id, display_name, sheet_str) tuples; sheet_str is "" when no style_sheet
-    field is set, else the raw (unresolved) path for the error message. base_dir is the
-    story.json dir for relative-path resolution (defaults to cwd, matching
-    collect_input_images).
+    Returns (id, display_name, kind, sheet_str) tuples; sheet_str is "" when no
+    style_sheet field is set, else the raw (unresolved) path for the error message.
+    base_dir is the story.json dir for relative-path resolution (defaults to cwd,
+    matching collect_input_images).
     """
     if base_dir is None:
         base_dir = Path.cwd()
@@ -742,20 +735,20 @@ def missing_character_sheets(
         c.get("id", ""): c for c in story.get("cast", [])
         if isinstance(c, dict) and c.get("id")
     }
-    out: list[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str, str]] = []
     seen: set[str] = set()
     for cid in page.get("cast", []):
         entry = cast_index.get(cid)
         if entry is None:
             continue  # unknown id is handled (warned) in collect_input_images
         kind = (entry.get("kind") or "character").strip() or "character"
-        if kind != "character":
+        if kind not in ("character", "location"):
             continue
         sheet = entry.get("style_sheet", "")
         if not (sheet and resolve_story_rel(sheet, base_dir).exists()):
             if cid not in seen:
                 seen.add(cid)
-                out.append((cid, entry.get("name") or cid, sheet))
+                out.append((cid, entry.get("name") or cid, kind, sheet))
     return out
 
 
@@ -1203,21 +1196,23 @@ async def run_nano_banana(
         )
         return False
 
-    # PER-69 hard gate: every character on this page must have a usable style sheet.
-    # Characters have no legitimate fallback (their sheet defines the canonical
-    # design/outfit); objects/locations keep their photo fallback and are not checked.
-    # Fail the page with an actionable error and make NO paid call. Pages with an
-    # empty cast (e.g. the shared text background) pass trivially.
-    missing = missing_character_sheets(story, page, base_dir)
+    # PER-69 hard gate, extended to locations by PER-84: every character or location on
+    # this page must have a usable style sheet. Neither has a legitimate fallback — a
+    # character's sheet defines the canonical design/outfit, a location's sheet is the
+    # only style-safe render reference (a raw photo is a photoreal-bleed vector); objects
+    # keep their photo fallback and are not checked. Fail the page with an actionable
+    # error and make NO paid call. Pages with an empty cast (e.g. the shared text
+    # background) pass trivially.
+    missing = missing_required_sheets(story, page, base_dir)
     if missing:
-        for cid, name, sheet in missing:
+        for cid, name, kind, sheet in missing:
             where = f"not found on disk ({sheet})" if sheet else "no style_sheet set"
             log.append(
-                f"  ERROR: character {name!r} (id={cid}) has no usable style sheet: {where}."
+                f"  ERROR: {kind} {name!r} (id={cid}) has no usable style sheet: {where}."
             )
         log.append(
-            "  Run make_style_sheet.py to generate character sheets before rendering "
-            "(characters require a sheet; objects/locations may fall back to a photo)."
+            "  Run make_style_sheet.py to generate style sheets before rendering "
+            "(characters and locations require a sheet; objects may fall back to a photo)."
         )
         return False
 

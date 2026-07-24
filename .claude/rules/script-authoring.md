@@ -45,14 +45,15 @@ For `kind=character` entries, `appearance` must name exactly one outfit. The sty
 
 ## Keep label wording in sync with `IMAGE_SYSTEM_PROMPT`
 
-Each reference image in `run_nano_banana` is preceded by a `"Next image: {label}."` text part. The 6 label kinds are defined in `IMAGE_SYSTEM_PROMPT`. If you change a label string, update the system prompt's "kind" vocabulary to match (and vice versa):
+Each reference image in `run_nano_banana` is preceded by a `"Next image: {label}."` text part. The 5 label kinds are defined in `IMAGE_SYSTEM_PROMPT`. If you change a label string, update the system prompt's "kind" vocabulary to match (and vice versa):
 
 - `"character style sheet for {name}"`
 - `"real photograph of the character {name} (facial likeness reference)"`
 - `"object reference sheet for {name}"`
 - `"real photograph of the object {name} (appearance reference)"`
 - `"location reference sheet for {name}"`
-- `"real photograph of the location {name} (setting reference)"`
+
+Locations have **no** render-side photo-fallback label (PER-84 — `missing_required_sheets` hard-requires a `style_sheet` for every location before render; unlike objects, there is no legitimate raw-photo path into a page render call). `make_style_sheet.py`'s Stage-2-only input-photo label (`"real photograph of the location {name} (setting reference)"`) is a separate, OpenAI-side vocabulary used only when *building* the sheet — it never reaches `render_book.py`.
 
 ## `STYLE_ANCHOR` — preserve "of a character"
 

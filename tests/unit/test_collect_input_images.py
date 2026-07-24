@@ -157,8 +157,10 @@ class TestCollectInputImages(unittest.TestCase):
     # Location fallback
     # ------------------------------------------------------------------
 
-    def test_location_no_sheet_falls_back_to_photo(self):
-        """Location without a style_sheet falls back to its first ref_image photo."""
+    def test_location_no_sheet_warns_and_skips(self):
+        """PER-84: location without a style_sheet has NO photo fallback — warn + skip.
+        (The render gate, missing_required_sheets, fails the page before this is ever
+        reached in practice; this branch is a defensive backstop.)"""
         f = self._f("loc-photo.jpg")
         story = {"cast": [
             {"id": "loc", "name": "Loc", "kind": "location",
@@ -166,10 +168,8 @@ class TestCollectInputImages(unittest.TestCase):
         ]}
         log = []
         result = render_book.collect_input_images(story, {"cast": ["loc"]}, log=log)
-        labels = [l for l, _, _ in result]
-        self.assertEqual(labels, [
-            "real photograph of the location Loc (setting reference)"
-        ])
+        self.assertEqual(result, [])
+        self.assertTrue(any("no style_sheet" in w for w in log))
 
     # ------------------------------------------------------------------
     # Warning and skip cases
@@ -287,9 +287,10 @@ class TestBaseDirResolution(unittest.TestCase):
         self.assertEqual(result, [("character style sheet for Pip", abs_sheet, "character")])
 
 
-class TestMissingCharacterSheets(unittest.TestCase):
-    """render_book.missing_character_sheets — PER-69 hard gate: characters need a
-    sheet (no fallback); objects/locations are exempt (photo fallback)."""
+class TestMissingRequiredSheets(unittest.TestCase):
+    """render_book.missing_required_sheets — PER-69 hard gate, extended to locations
+    by PER-84: characters and locations need a sheet (no fallback); objects are
+    exempt (photo fallback)."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -302,51 +303,62 @@ class TestMissingCharacterSheets(unittest.TestCase):
         sheet = _touch(self.root / "pip.png")
         story = {"cast": [{"id": "pip", "name": "Pip", "style_sheet": sheet}]}
         self.assertEqual(
-            render_book.missing_character_sheets(story, {"cast": ["pip"]}), [])
+            render_book.missing_required_sheets(story, {"cast": ["pip"]}), [])
 
     def test_no_style_sheet_field_is_missing(self):
         story = {"cast": [{"id": "pip", "name": "Pip"}]}
-        result = render_book.missing_character_sheets(story, {"cast": ["pip"]})
-        self.assertEqual(result, [("pip", "Pip", "")])
+        result = render_book.missing_required_sheets(story, {"cast": ["pip"]})
+        self.assertEqual(result, [("pip", "Pip", "character", "")])
 
     def test_sheet_path_set_but_absent_is_missing(self):
         story = {"cast": [{"id": "pip", "name": "Pip", "style_sheet": "/nope/x.png"}]}
-        result = render_book.missing_character_sheets(story, {"cast": ["pip"]})
-        self.assertEqual(result, [("pip", "Pip", "/nope/x.png")])
+        result = render_book.missing_required_sheets(story, {"cast": ["pip"]})
+        self.assertEqual(result, [("pip", "Pip", "character", "/nope/x.png")])
 
-    def test_object_and_location_exempt(self):
-        """Objects/locations with no sheet are NOT flagged — they keep photo fallback."""
+    def test_location_no_sheet_is_missing(self):
+        """PER-84: a location with no style_sheet is now flagged, same as a character."""
+        story = {"cast": [{"id": "valley", "name": "Valley", "kind": "location"}]}
+        result = render_book.missing_required_sheets(story, {"cast": ["valley"]})
+        self.assertEqual(result, [("valley", "Valley", "location", "")])
+
+    def test_location_present_sheet_not_missing(self):
+        sheet = _touch(self.root / "valley.png")
         story = {"cast": [
-            {"id": "ball", "name": "Ball", "kind": "object"},
-            {"id": "valley", "name": "Valley", "kind": "location"},
+            {"id": "valley", "name": "Valley", "kind": "location", "style_sheet": sheet},
         ]}
         self.assertEqual(
-            render_book.missing_character_sheets(story, {"cast": ["ball", "valley"]}), [])
+            render_book.missing_required_sheets(story, {"cast": ["valley"]}), [])
+
+    def test_object_exempt(self):
+        """Objects with no sheet are NOT flagged — they keep the photo fallback."""
+        story = {"cast": [{"id": "ball", "name": "Ball", "kind": "object"}]}
+        self.assertEqual(
+            render_book.missing_required_sheets(story, {"cast": ["ball"]}), [])
 
     def test_relative_sheet_resolves_against_base_dir(self):
         _touch(self.root / "pip.png")
         story = {"cast": [{"id": "pip", "name": "Pip", "style_sheet": "pip.png"}]}
         # Correct base dir → not missing.
         self.assertEqual(
-            render_book.missing_character_sheets(
+            render_book.missing_required_sheets(
                 story, {"cast": ["pip"]}, base_dir=self.root), [])
         # Wrong base dir → missing (relative path doesn't resolve).
         self.assertEqual(
-            render_book.missing_character_sheets(
+            render_book.missing_required_sheets(
                 story, {"cast": ["pip"]}, base_dir=self.root / "elsewhere"),
-            [("pip", "Pip", "pip.png")])
+            [("pip", "Pip", "character", "pip.png")])
 
     def test_dedup_and_unknown_id(self):
         story = {"cast": [{"id": "pip", "name": "Pip"}]}
         # Same char listed twice → reported once; unknown id ignored.
-        result = render_book.missing_character_sheets(
+        result = render_book.missing_required_sheets(
             story, {"cast": ["pip", "pip", "ghost"]})
-        self.assertEqual(result, [("pip", "Pip", "")])
+        self.assertEqual(result, [("pip", "Pip", "character", "")])
 
     def test_empty_cast_passes(self):
         """Shared text-bg call uses cast=[] → nothing required."""
         story = {"cast": [{"id": "pip", "name": "Pip"}]}
-        self.assertEqual(render_book.missing_character_sheets(story, {"cast": []}), [])
+        self.assertEqual(render_book.missing_required_sheets(story, {"cast": []}), [])
 
 
 if __name__ == "__main__":

@@ -359,9 +359,15 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
             f"angles, plus a detail close-up of its most distinguishing features, "
             f"consistent design across the sheet. "
             + (
-                f"The attached reference photographs show the real place: {name or 'the subject'}. "
-                f"Match its recognisable architecture, landmarks, and geography from the "
-                f"photographs exactly — it must read as the very same place. "
+                # PER-84: Gemini-style style-transfer framing — style ranks above
+                # photographic fidelity, while still preserving the place's identity
+                # (the documented exception to the no-scenery rule: geography IS the
+                # subject on a location sheet).
+                f"Transform the attached reference photograph(s) of {name or 'the subject'} "
+                f"into the book's art style: preserve the original composition and the "
+                f"place's recognisable architecture, landmarks, and geography, but render "
+                f"everything fully in the book's illustration style — the art style takes "
+                f"priority over photographic fidelity. "
                 if has_refs
                 else ""
             )

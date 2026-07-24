@@ -279,16 +279,28 @@ once per photo (PER-50).
 
 **Stage 2 policy (changed in PER-50):** `make_style_sheet.py` generates a sheet for
 **every** location entry — from the real-place photos in `ref_image` when present
-(architecture/landmarks/geography anchored, rendered in the book style), from `appearance`
-alone otherwise (fictional recurring place). The sheet is the render reference; the raw
-photo is only the render-time fallback. Note for pre-PER-50 books: re-running Stage 2 on a
-story whose location carried only a photo makes one extra paid call and writes `style_sheet`;
-render remains backward-compatible via the photo fallback for books never re-sheeted.
+(architecture/landmarks/geography anchored, rendered in the book style, style-transfer
+framing — PER-84), from `appearance` alone otherwise (fictional recurring place). The
+location-sheet prompt ranks the book's art style above photographic fidelity while still
+preserving the place's recognisable architecture/landmarks/geography (the documented
+exception to the no-scenery rule: geography IS the subject on a location sheet).
+
+**Hard-require a location style sheet before render (PER-84, extends PER-69's character
+gate).** A raw location photo is a photoreal-bleed vector — one "redraw in book style"
+sentence has to fight a full photographic reference, and it can fail either way (dropped
+at the ref cap → unanchored hallucination; sent → photoreal pull surviving into the
+render). There is **no render-time photo fallback for locations**: a page whose location
+cast entry has no usable `style_sheet` fails that page (`render_book.py`'s
+`missing_required_sheets`, before any paid call; error names the place and points at
+`make_style_sheet.py`) — other pages still render, run exits 1. Pre-PER-50/PER-84 books
+whose locations carry only a photo must re-run Stage 2 (builds the missing sheets) before
+those pages will render. Objects are unaffected — they keep the photo fallback (a
+slightly-off prop does not poison a frame the way a wrong-style background does).
 
 **Ref priority and lanes (`render_book.py`, PER-83):**
 
 > **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets (page order)
-> **object lane** (cap 10, both models): location refs (sheet, or photo fallback — page order) → object refs (sheet, or photo fallback — page order, lowest, first to drop)
+> **object lane** (cap 10, both models): location refs (sheet only, hard-required — PER-84 — page order) → object refs (sheet, or photo fallback — page order, lowest, first to drop)
 
 `collect_input_images()` builds the full prioritized candidate list (no cap), tagged
 `(label, path, lane)`. `select_refs(candidates, model)` then: auto-upgrades flash → pro when
@@ -299,16 +311,16 @@ object lane's tail. Drops are logged, never silent. Flash pages with a 5th chara
 upgraded to pro before any character is dropped; only past the pro character-lane cap (5) are
 characters dropped. Object-lane overflow (>10 objects+locations) never triggers an upgrade —
 its cap is the same on both models. On scenery-only pages (`cast: []` or only non-character
-entries) with a location set, the location photo is the sole reference image.
+entries) with a location set, the location style sheet is the sole reference image (PER-84 —
+no photo fallback for locations).
 
-**Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds. Keep label wording in sync with the system prompt's "kind" vocabulary:
+**Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 5 label kinds (locations have no photo-fallback label render-side — PER-84; Stage 2 still labels input photos when *building* the sheet). Keep label wording in sync with the system prompt's "kind" vocabulary:
 
 - `"character style sheet for {name}"` → defines design, outfit, art style
 - `"real photograph of the character {name} (facial likeness reference)"` → face only, outfit from sheet
 - `"object reference sheet for {name}"` → defines object design, colours, proportions
 - `"real photograph of the object {name} (appearance reference)"` → shape/materials/details reference
 - `"location reference sheet for {name}"` → defines place's look in book style
-- `"real photograph of the location {name} (setting reference)"` → setting, rendered in book style
 
 `STYLE_ANCHOR` contains `"of a character"` in the photo-matching sentence to prevent the anchor from instructing the model to extract a face from a landmark photo on scenery-only pages.
 
