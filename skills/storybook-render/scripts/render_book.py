@@ -34,16 +34,21 @@ This script produces page images only. Assembly into PDF/EPUB is Stage 4
 no API cost, run independently after reviewing the rendered pages).
 
 Model selection (precedence: CLI --model > page 'model' > story 'model' > default flash):
-  gemini-3.1-flash-image — default; faster/cheaper, up to 4 reference images per call.
-  gemini-3-pro-image     — higher quality, up to 5 reference images per call.
+  gemini-3.1-flash-image — default; faster/cheaper, character lane caps at 4.
+  gemini-3-pro-image     — higher quality, character lane caps at 5.
   Use --model or set page-level/book-level 'model' in story.json to override.
   Style sheets (Stage 2) always use gemini-3-pro-image regardless of this setting.
-  Auto-upgrade: when a page's reference list has ≥5 images and the effective model is
-  flash (including an explicit CLI or per-page flash override), that page is silently
-  upgraded to gemini-3-pro-image for that call only. Logged as:
-    "auto-upgraded page N to gemini-3-pro-image (5 refs > flash cap 4)"
+
+  Reference images ride two independent lanes (PER-83), not one flat cap:
+  a character lane (4 flash / 5 pro, high-resemblance) and an object lane
+  (up to 10, shared by object + location refs, both models), 14 total.
+  Auto-upgrade: when a page's CHARACTER lane has ≥5 entries and the effective
+  model is flash (including an explicit CLI or per-page flash override), that
+  page is silently upgraded to gemini-3-pro-image for that call only. Logged as:
+    "auto-upgraded page N to gemini-3-pro-image (5 characters > flash character-lane cap 4)"
   story.json is never modified. Manually pinning a page's model to pro solely to
-  avoid the 4-ref cap is therefore no longer necessary.
+  avoid the character-lane cap is therefore unnecessary. Object/location refs never
+  trigger an upgrade — their lane cap (10) is the same on both models.
 
 Text modes:
   overlay — safe-zone art + Pillow text overlay → pages/page-NN.png
@@ -94,11 +99,16 @@ FLASH_IMAGE_MODEL = "gemini-3.1-flash-image"
 PRO_IMAGE_MODEL = "gemini-3-pro-image"
 IMAGE_MODEL = FLASH_IMAGE_MODEL  # default; overridable per page/book/CLI
 IMAGE_MODELS = [FLASH_IMAGE_MODEL, PRO_IMAGE_MODEL]  # keep in sync with story_schema.json
-MODEL_MAX_INPUT_IMAGES = {
-    FLASH_IMAGE_MODEL: 4,  # Gemini 3.1 Flash Image: up to 4 reference images per call
-    PRO_IMAGE_MODEL: 5,    # Gemini 3 Pro Image: up to 5 reference images per call
+# Ref-image envelope is lane-based (PER-83), not one flat cap: a character lane
+# (high-resemblance) and an object lane (shared by object + location refs), up to
+# 14 total per call. Character lane cap varies by model; object lane cap does not.
+CHARACTER_LANE_CAP = {
+    FLASH_IMAGE_MODEL: 4,  # Gemini 3.1 Flash Image: up to 4 character refs per call
+    PRO_IMAGE_MODEL: 5,    # Gemini 3 Pro Image: up to 5 character refs per call
 }
-MAX_INPUT_IMAGES = 4  # safe fallback cap for unrecognised models
+MAX_CHARACTER_LANE = 4  # safe fallback character-lane cap for unrecognised models
+OBJECT_LANE_CAP = 10    # object + location refs share this lane; same for both models
+TOTAL_REF_CAP = 14      # character lane + object lane combined, both models
 
 # OpenAI gpt-image-2 fallback config (PER-67).
 # Used only when Gemini returns finish_reason=PROHIBITED_CONTENT and fallback_vendor=="openai".
@@ -569,12 +579,12 @@ def _ref_photos(entry: dict, base_dir: Path) -> list[str]:
 def collect_input_images(
     story: dict, page: dict, log: list[str] | None = None,
     base_dir: Path | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, str]]:
     """Build the full prioritized reference-image list for one page render call.
 
     Returns ALL candidates in priority order — no cap applied. The caller
-    (run_nano_banana via select_refs) decides the effective cap after optionally
-    auto-upgrading the model.
+    (run_nano_banana via select_refs) decides the effective per-lane cap after
+    optionally auto-upgrading the model (PER-83: two lanes, not one flat cap).
 
     base_dir is the story.json directory; relative `style_sheet`/`ref_image` paths
     resolve against it (absolute paths pass through). Defaults to cwd when omitted
@@ -584,21 +594,26 @@ def collect_input_images(
     page['cast'] is ONE flat name list of mixed kinds (names must match
     story['cast'][].name exactly). Contribution by kind:
       character — its style sheet only. The HERO (first character-kind entry in
-                  page order) still leads the ref-ordering into the cap, but no
-                  longer contributes a photo. CONVENTION: author the hero/child first.
-      object    — its reference sheet; falls back to its first ref_image photo
-                  when no sheet exists.
+                  page order) still leads the ref-ordering into the character lane,
+                  but no longer contributes a photo. CONVENTION: author the
+                  hero/child first.
       location  — its reference sheet (Stage 2 generates one for every location,
                   from its real-place photos and/or 'appearance' — PER-50); falls
                   back to its first ref_image photo when no sheet exists yet.
+      object    — its reference sheet; falls back to its first ref_image photo
+                  when no sheet exists.
 
     Priority order: hero sheet → remaining character sheets (page order) →
-    object refs (page order) → location refs (page order, lowest priority,
-    first to drop when the cap is applied by the caller).
+    location refs (page order) → object refs (page order). Location outranks
+    object (PER-83): a wrong-style background poisons the whole frame; a
+    slightly-off prop does not. Within the object lane (locations + objects,
+    up to OBJECT_LANE_CAP), locations are first to survive, objects first to
+    drop when the caller applies the cap.
 
-    Returns (label, path) pairs; labels are interleaved identification notes in
-    run_nano_banana. Label vocabulary must stay in sync with IMAGE_SYSTEM_PROMPT's
-    rules-by-kind.
+    Returns (label, path, lane) triples; lane is "character" or "object"
+    (location refs share the object lane per Gemini's reference-image envelope).
+    Labels are interleaved identification notes in run_nano_banana. Label
+    vocabulary must stay in sync with IMAGE_SYSTEM_PROMPT's rules-by-kind.
     """
     def warn(msg: str) -> None:
         if log is not None:
@@ -634,8 +649,8 @@ def collect_input_images(
         else:  # character (default)
             characters.append((name, entry))
 
-    # Prioritized (label, path) candidates; trimmed to the cap below.
-    candidates: list[tuple[str, str]] = []
+    # Prioritized (label, path, lane) candidates; trimmed per-lane by the caller.
+    candidates: list[tuple[str, str, str]] = []
 
     for name, entry in characters:
         sheet = entry.get("style_sheet", "")
@@ -648,36 +663,19 @@ def collect_input_images(
         elif not sheet_path.exists():
             warn(f"style sheet for {name!r} not found on disk ({sheet}); skipping.")
         else:
-            candidates.append((f"character style sheet for {name}", str(sheet_path)))
+            candidates.append(
+                (f"character style sheet for {name}", str(sheet_path), "character")
+            )
 
-    for name, entry in objects:
-        sheet = entry.get("style_sheet", "")
-        sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
-        if sheet_path and sheet_path.exists():
-            candidates.append((f"object reference sheet for {name}", str(sheet_path)))
-        else:
-            if sheet:
-                warn(
-                    f"object sheet for {name!r} not found on disk ({sheet}); "
-                    f"falling back to photo."
-                )
-            photos = _ref_photos(entry, base_dir)
-            if photos:
-                candidates.append(
-                    (f"real photograph of the object {name} (appearance reference)", photos[0])
-                )
-            else:
-                warn(
-                    f"object {name!r} has neither a usable style_sheet nor a "
-                    f"ref_image; skipping. Run make_style_sheet.py first."
-                )
-
-    # Location refs — lowest priority, first to drop from the cap.
+    # Location refs — object lane, but rank above objects (PER-83): a wrong-style
+    # background poisons the whole frame; a slightly-off prop does not.
     for name, entry in locations:
         sheet = entry.get("style_sheet", "")
         sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
         if sheet_path and sheet_path.exists():
-            candidates.append((f"location reference sheet for {name}", str(sheet_path)))
+            candidates.append(
+                (f"location reference sheet for {name}", str(sheet_path), "object")
+            )
         else:
             if sheet:
                 warn(
@@ -687,12 +685,38 @@ def collect_input_images(
             photos = _ref_photos(entry, base_dir)
             if photos:
                 candidates.append(
-                    (f"real photograph of the location {name} (setting reference)", photos[0])
+                    (f"real photograph of the location {name} (setting reference)", photos[0], "object")
                 )
             else:
                 warn(
                     f"location {name!r} has neither a style_sheet nor a "
                     f"ref_image; skipping."
+                )
+
+    # Object refs — object lane, lowest priority overall (first to drop from
+    # the object lane's cap).
+    for name, entry in objects:
+        sheet = entry.get("style_sheet", "")
+        sheet_path = resolve_story_rel(sheet, base_dir) if sheet else None
+        if sheet_path and sheet_path.exists():
+            candidates.append(
+                (f"object reference sheet for {name}", str(sheet_path), "object")
+            )
+        else:
+            if sheet:
+                warn(
+                    f"object sheet for {name!r} not found on disk ({sheet}); "
+                    f"falling back to photo."
+                )
+            photos = _ref_photos(entry, base_dir)
+            if photos:
+                candidates.append(
+                    (f"real photograph of the object {name} (appearance reference)", photos[0], "object")
+                )
+            else:
+                warn(
+                    f"object {name!r} has neither a usable style_sheet nor a "
+                    f"ref_image; skipping. Run make_style_sheet.py first."
                 )
 
     return candidates
@@ -736,22 +760,49 @@ def missing_character_sheets(
 
 
 def select_refs(
-    candidates: list[tuple[str, str]], model: str,
+    candidates: list[tuple[str, str, str]], model: str,
 ) -> tuple[str, list[tuple[str, str]], list[str]]:
-    """Apply the per-model ref cap, auto-upgrading flash → pro when candidates
-    exceed the flash cap (runtime-only; story.json is never modified).
+    """Apply the per-lane ref caps (PER-83), auto-upgrading flash → pro when the
+    CHARACTER lane exceeds the flash cap (runtime-only; story.json is never
+    modified). Object-lane overflow (location + object refs) never triggers an
+    upgrade — its cap (OBJECT_LANE_CAP) is the same on both models.
 
-    If the effective model is flash and the candidate list exceeds the flash cap (4),
-    the model is silently promoted to gemini-3-pro-image before the cap is applied.
-    The caller is responsible for logging the upgrade.
+    Lanes are independent: character lane candidates compete only against the
+    character cap; object lane candidates (locations + objects, in that
+    priority order — see collect_input_images) compete only against
+    OBJECT_LANE_CAP. A TOTAL_REF_CAP backstop trims the object lane's tail
+    further in the rare case both lanes are simultaneously maxed (5 pro-cap
+    characters + 10 object-lane refs = 15 > 14).
 
-    Returns (effective_model, selected_pairs, dropped_labels).
+    The caller is responsible for logging the upgrade and any drops.
+
+    Returns (effective_model, selected_pairs, dropped_labels). selected_pairs
+    strips the lane tag back down to (label, path), in priority order
+    (character lane first, then object lane) — unchanged shape for callers.
     """
-    flash_cap = MODEL_MAX_INPUT_IMAGES[FLASH_IMAGE_MODEL]
-    if model == FLASH_IMAGE_MODEL and len(candidates) > flash_cap:
+    character = [c for c in candidates if c[2] == "character"]
+    object_lane = [c for c in candidates if c[2] == "object"]
+
+    if model == FLASH_IMAGE_MODEL and len(character) > CHARACTER_LANE_CAP[FLASH_IMAGE_MODEL]:
         model = PRO_IMAGE_MODEL
-    cap = MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES)
-    return model, candidates[:cap], [label for label, _ in candidates[cap:]]
+    char_cap = CHARACTER_LANE_CAP.get(model, MAX_CHARACTER_LANE)
+
+    selected_chars, dropped_chars = character[:char_cap], character[char_cap:]
+    selected_objs, dropped_objs = object_lane[:OBJECT_LANE_CAP], object_lane[OBJECT_LANE_CAP:]
+
+    # Combined-envelope backstop: only bites when both lanes are maxed at once.
+    overflow = (len(selected_chars) + len(selected_objs)) - TOTAL_REF_CAP
+    if overflow > 0:
+        dropped_objs = selected_objs[-overflow:] + dropped_objs
+        selected_objs = selected_objs[:-overflow]
+
+    selected = selected_chars + selected_objs
+    dropped = dropped_chars + dropped_objs
+    return (
+        model,
+        [(label, path) for label, path, _lane in selected],
+        [label for label, _path, _lane in dropped],
+    )
 
 
 def _retry_delay(attempt: int, exc: Exception) -> float:
@@ -1181,15 +1232,18 @@ async def run_nano_banana(
     candidates = collect_input_images(story, page, log, base_dir=base_dir)
     new_model, ref_pairs, dropped = select_refs(candidates, model)
     if new_model != model:
+        char_count = sum(1 for _label, _path, lane in candidates if lane == "character")
         log.append(
             f"  Note: auto-upgraded page {page.get('page_num', '?')} to {new_model} "
-            f"({len(candidates)} refs > flash cap {MODEL_MAX_INPUT_IMAGES[FLASH_IMAGE_MODEL]})"
+            f"({char_count} characters > flash character-lane cap "
+            f"{CHARACTER_LANE_CAP[FLASH_IMAGE_MODEL]})"
         )
         model = new_model
     if dropped:
         log.append(
-            f"  Note: cap ({MODEL_MAX_INPUT_IMAGES.get(model, MAX_INPUT_IMAGES)}) reached; "
-            f"dropped: {', '.join(dropped)}"
+            f"  Note: character-lane cap "
+            f"({CHARACTER_LANE_CAP.get(model, MAX_CHARACTER_LANE)}) / object-lane cap "
+            f"({OBJECT_LANE_CAP}) reached; dropped: {', '.join(dropped)}"
         )
     for label, img_path in ref_pairs:
         p = Path(img_path)

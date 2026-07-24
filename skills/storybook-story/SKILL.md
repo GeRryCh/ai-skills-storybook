@@ -323,7 +323,7 @@ Every page MUST have a `cast` array listing the **ids** of all cast members that
 on that page. ids must match `cast[].id` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
-**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero and leads the reference-ordering into the cap — its style sheet is positioned first so it is never dropped. List the protagonist (e.g. the child the book is about) first on every page they appear. Characters contribute only their style sheet (no extra photo). With a 4-ref flash cap (5 with pro), a four-character flash page carries all four sheets exactly within the cap; a fifth cast member triggers auto-upgrade to pro before any sheet is dropped.
+**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero and leads the reference-ordering into the character lane — its style sheet is positioned first so it is never dropped. List the protagonist (e.g. the child the book is about) first on every page they appear. Characters contribute only their style sheet (no extra photo). References ride two independent lanes (PER-83): a character lane (4-ref flash cap, 5 with pro) and a separate object lane for objects + locations (up to 10, same on both models). A four-character flash page carries all four sheets exactly within the character-lane cap; a fifth character triggers auto-upgrade to pro before any sheet is dropped. Object/location refs on the same page don't count against the character lane at all — they only compete against the 10-slot object lane.
 
 Example:
 ```json

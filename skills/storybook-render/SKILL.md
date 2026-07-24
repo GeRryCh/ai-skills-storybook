@@ -44,7 +44,7 @@ uv run {skillDir}/scripts/render_book.py \
 - `--only N` — render a single page (good for testing one page before a full run, or re-doing one page).
 - `--resolution 1K|2K|4K` — override the resolution from `story.json` for this run. Resolution is normally configured in `story.json` via the top-level `resolution` field (default `2K` when not set); pass this flag to override it ad-hoc. `1K` is faster/cheaper for drafts; `4K` for large-format print.
 - `--aspect-ratio RATIO` — override the aspect ratio from `story.json` for this run (choices: `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`). Aspect ratio is normally configured via the top-level `aspect_ratio` field in `story.json`; when neither is set the model chooses framing per call.
-- `--model gemini-3.1-flash-image|gemini-3-pro-image` — override the image model for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--model` flag > `pages[].model` > top-level `model` > flash default). Flash (default): faster/cheaper, 4-ref cap. Pro: higher quality, 5-ref cap. Style sheets always use pro regardless. **Auto-upgrade:** when a page's reference list has ≥5 images and the effective model is flash (including an explicit `--model gemini-3.1-flash-image` or per-page override), that page is automatically upgraded to `gemini-3-pro-image` for that call only; logged as `auto-upgraded page N to gemini-3-pro-image (5 refs > flash cap 4)`; `story.json` is never modified. Manually pinning a page's model to pro solely to avoid the 4-ref cap is therefore no longer needed. **Retry workflow:** set a page's `model` to `gemini-3-pro-image` in `story.json`, then `rm pages/page-NN*.png` and re-run `--only N`.
+- `--model gemini-3.1-flash-image|gemini-3-pro-image` — override the image model for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--model` flag > `pages[].model` > top-level `model` > flash default). Flash (default): faster/cheaper, character-lane cap 4. Pro: higher quality, character-lane cap 5. Style sheets always use pro regardless. References ride two lanes (PER-83): a character lane and an object lane (objects + locations, cap 10 on both models, 14 total). **Auto-upgrade:** when a page's **character** lane has ≥5 images and the effective model is flash (including an explicit `--model gemini-3.1-flash-image` or per-page override), that page is automatically upgraded to `gemini-3-pro-image` for that call only; logged as `auto-upgraded page N to gemini-3-pro-image (5 characters > flash character-lane cap 4)`; `story.json` is never modified. Manually pinning a page's model to pro solely to avoid the character-lane cap is therefore no longer needed. Object-lane overflow never triggers an upgrade. **Retry workflow:** set a page's `model` to `gemini-3-pro-image` in `story.json`, then `rm pages/page-NN*.png` and re-run `--only N`.
 - `--text-mode overlay|native|long` — override the text mode for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--text-mode` flag > `pages[].text_mode` > top-level `text_mode` > native default). A page-level `text_mode` field in `story.json` lets individual pages differ from the book default without this flag — e.g. one long-mode page in an otherwise native book. This flag overrides all page-level and book-level fields for the entire run. Mixed-mode books produce mixed filename suffixes in `pages/` (e.g. some `page-NN-native.png`, some `page-NN-long.png` pairs).
 - `--saved-formats pdf epub|none` — override `story.json`'s `saved_formats` for this run: which book file(s) to assemble after a full render. `epub` is a fixed-layout EPUB3 (pre-paginated, full-bleed pages). `none` skips assembly entirely (useful for partial `--from` runs where more pages are coming). `saved_formats` is normally configured in `story.json` (default: all formats when omitted).
 
@@ -78,14 +78,18 @@ If `story.json` has `cast` entries with `kind: "location"` and a page lists one 
 ids in its `pages[].cast` array, that place's Stage-2 reference sheet (`style_sheet`) is
 sent as an additional reference image — the same mechanism as characters and objects. When
 the entry has no sheet (e.g. a book rendered before Stage 2 was re-run with PER-50), the
-first `ref_image` photo is sent as a fallback instead (logged). Location references take
-the **lowest** priority within the per-model cap (4 flash default / 5 pro):
+first `ref_image` photo is sent as a fallback instead (logged). Location references ride
+the **object lane** (PER-83) — the same lane as objects, cap 10 on both models — and
+**outrank** objects within it: a wrong-style background poisons the whole frame, a
+slightly-off prop does not.
 
-> hero sheet → remaining character sheets → object refs → **location ref (sheet, or photo fallback)**
+> **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets
+> **object lane** (cap 10, both models): **location ref (sheet, or photo fallback)** → object refs
 
-Flash pages whose reference list exceeds 4 are **auto-upgraded to pro** before any ref is
-dropped (see `--model` above). Anything past the pro cap (5) is logged (never silently
-dropped). On scenery-only pages
+Flash pages whose **character** lane exceeds 4 are **auto-upgraded to pro** before any
+character is dropped (see `--model` above). Anything past the pro character-lane cap (5),
+or past the object-lane cap (10), is logged (never silently dropped). Object-lane overflow
+never triggers an upgrade. On scenery-only pages
 (`"cast": []`) the location photo is the sole reference image.
 
 Each reference is sent with a short identifying note in the Gemini call so the model knows

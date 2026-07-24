@@ -3,6 +3,10 @@
 collect_input_images reads disk via Path(...).exists() for every sheet/photo.
 Tests use real empty temp files (only existence is checked — no real PNG needed).
 Pass a log list to capture warnings without polluting stderr.
+
+PER-83: results are (label, path, lane) triples, lane in {"character", "object"}
+(locations share the object lane with objects, but rank above them — a wrong-style
+background poisons the whole frame, a slightly-off prop does not).
 """
 import sys
 import tempfile
@@ -51,7 +55,7 @@ class TestCollectInputImages(unittest.TestCase):
              "ref_image": [f["hero-photo.png"]]},
         ]}
         result = render_book.collect_input_images(story, {"cast": ["pip"]}, log=[])
-        labels = [l for l, _ in result]
+        labels = [l for l, _, _ in result]
         self.assertEqual(labels, ["character style sheet for Pip"])
         self.assertNotIn(
             "real photograph of the character Pip (facial likeness reference)", labels
@@ -72,7 +76,7 @@ class TestCollectInputImages(unittest.TestCase):
         result = render_book.collect_input_images(
             story, {"cast": ["hero", "sidekick"]}, log=[]
         )
-        labels = [l for l, _ in result]
+        labels = [l for l, _, _ in result]
         self.assertIn("character style sheet for Sidekick", labels)
         self.assertNotIn(
             "real photograph of the character Sidekick (facial likeness reference)", labels
@@ -83,7 +87,10 @@ class TestCollectInputImages(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_full_priority_order(self):
-        """hero sheet → other char sheet → object ref → location ref (no hero photo)."""
+        """hero sheet → other char sheet → location ref → object ref (no hero
+        photo). PER-83: location outranks object within the shared object lane —
+        a wrong-style background poisons the whole frame, a slightly-off prop
+        does not."""
         f = self._f(
             "char-sheet.png", "char-photo.png",
             "side-sheet.png",
@@ -102,13 +109,15 @@ class TestCollectInputImages(unittest.TestCase):
         result = render_book.collect_input_images(
             story, {"cast": ["char", "sidekick", "obj", "loc"]}, log=[]
         )
-        labels = [l for l, _ in result]
+        labels = [l for l, _, _ in result]
+        lanes = [lane for _, _, lane in result]
         self.assertEqual(labels, [
             "character style sheet for Char",
             "character style sheet for Sidekick",
-            "object reference sheet for Obj",
             "location reference sheet for Loc",
+            "object reference sheet for Obj",
         ])
+        self.assertEqual(lanes, ["character", "character", "object", "object"])
 
     # ------------------------------------------------------------------
     # Object fallback
@@ -123,7 +132,7 @@ class TestCollectInputImages(unittest.TestCase):
         ]}
         log = []
         result = render_book.collect_input_images(story, {"cast": ["obj"]}, log=log)
-        labels = [l for l, _ in result]
+        labels = [l for l, _, _ in result]
         self.assertEqual(labels, [
             "real photograph of the object Obj (appearance reference)"
         ])
@@ -138,7 +147,7 @@ class TestCollectInputImages(unittest.TestCase):
         ]}
         log = []
         result = render_book.collect_input_images(story, {"cast": ["obj"]}, log=log)
-        labels = [l for l, _ in result]
+        labels = [l for l, _, _ in result]
         self.assertEqual(labels, [
             "real photograph of the object Obj (appearance reference)"
         ])
@@ -157,7 +166,7 @@ class TestCollectInputImages(unittest.TestCase):
         ]}
         log = []
         result = render_book.collect_input_images(story, {"cast": ["loc"]}, log=log)
-        labels = [l for l, _ in result]
+        labels = [l for l, _, _ in result]
         self.assertEqual(labels, [
             "real photograph of the location Loc (setting reference)"
         ])
@@ -244,8 +253,8 @@ class TestBaseDirResolution(unittest.TestCase):
         result = render_book.collect_input_images(
             self._story(), {"cast": ["pip", "loc"]}, log=log, base_dir=self.root,
         )
-        labels = [l for l, _ in result]
-        paths = [p for _, p in result]
+        labels = [l for l, _, _ in result]
+        paths = [p for _, p, _ in result]
         self.assertEqual(labels, [
             "character style sheet for Pip",
             "location reference sheet for Loc",
@@ -275,7 +284,7 @@ class TestBaseDirResolution(unittest.TestCase):
         result = render_book.collect_input_images(
             story, {"cast": ["pip"]}, log=[], base_dir=Path("/nonexistent/base"),
         )
-        self.assertEqual(result, [("character style sheet for Pip", abs_sheet)])
+        self.assertEqual(result, [("character style sheet for Pip", abs_sheet, "character")])
 
 
 class TestMissingCharacterSheets(unittest.TestCase):

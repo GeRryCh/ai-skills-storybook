@@ -27,7 +27,10 @@ an explicitly user-named path is used verbatim):
    rendering — a wrong sheet poisons every page that character appears on.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the cast entries listed in that page's `cast` field
-   (per-page selection, cap 4 flash default / 5 pro; auto-upgrades flash→pro when refs ≥5 — PER-58; overridable per page or book via the `model` field or `--model` CLI flag), then overlays text. Three text modes:
+   (per-page selection, two ref lanes — character lane 4 flash / 5 pro, object lane
+   (objects + locations) up to 10, 14 total — PER-83; auto-upgrades flash→pro when the
+   character lane exceeds 4 — PER-58; overridable per page or book via the `model`
+   field or `--model` CLI flag), then overlays text. Three text modes:
    - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
    - `native`: `pages/page-NN-native.png` (model bakes text into art)
    - `long`: `pages/page-NN-long.png` (full-bleed art, no text) + `pages/page-NN-long-text.png`
@@ -92,8 +95,10 @@ not one model end-to-end. Both declare their SDK as a PEP-723 inline dependency.
 - **`render_book.py` (Stage 3) → Google Gemini (default) + OpenAI `gpt-image-2` (fallback)**
   via the `google-genai` + `openai` SDKs. Builds a `genai.Client` (lazily, on first paid call)
   with `api_key` from the environment; configurable model — default `gemini-3.1-flash-image`
-  (4-ref cap) or `gemini-3-pro-image` (5-ref cap), set per-page, book-wide, or via `--model`
-  CLI flag (auto-upgrade flash→pro when refs ≥5). Sends the prompt plus reference images as
+  (character-lane cap 4) or `gemini-3-pro-image` (character-lane cap 5), set per-page,
+  book-wide, or via `--model` CLI flag (auto-upgrade flash→pro when the character lane
+  exceeds 4; the object lane — objects + locations, cap 10 on both models — never
+  triggers an upgrade — PER-83). Sends the prompt plus reference images as
   `types.Part.from_bytes`, extracts the returned image from `part.inline_data.data`. Requires
   `GEMINI_API_KEY`. **OpenAI fallback (PER-67):** when Gemini returns
   `finish_reason=PROHIBITED_CONTENT` (a deterministic content-policy block, not a transient
@@ -216,8 +221,22 @@ is fixed in Stage 1, so one character's photo never bleeds into another's sheet.
 Each page also carries an explicit `cast` list (`pages[].cast`) of cast **ids** — not names — naming which
 cast members appear on it. `render_book.py`'s `collect_input_images(story, page)` uses
 this to send only the relevant per-cast-entry style sheets — the model never sees sheets
-for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it leads reference ordering into the cap so its style sheet is positioned first and never dropped. Characters contribute only their style sheet (no extra photo). **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
-Priority into the per-model cap (4 flash default / 5 pro) is: hero sheet → remaining character sheets (page order) → object refs (page order) → location refs (page order, lowest, first to drop from cap); anything past the cap is logged, never silently dropped. **Auto-upgrade (PER-58):** `select_refs()` in `render_book.py` runs before the cap is applied — if the effective model is flash and the candidate list has ≥5 images, the page is silently upgraded to `gemini-3-pro-image` for that call only (logged, story.json untouched). The cap/drop logic is in `select_refs`; `collect_input_images` now returns the full uncapped candidate list.
+for cast entries not on the page. The **hero** is the first cast entry of `kind: "character"` (or kind absent, defaulting to character) in `pages[].cast`: it leads reference ordering into the character lane so its style sheet is positioned first and never dropped. Characters contribute only their style sheet (no extra photo). **Convention: author the hero/child first among the character-kind entries in each page's `cast` list.**
+
+**Two ref lanes, not one flat cap (PER-83).** The real Gemini reference-image envelope is
+lane-based: a **character lane** (4 flash / 5 pro, high-resemblance) and an **object lane**
+(objects + locations, cap 10 on both models), 14 total. Priority within each lane:
+character lane = hero sheet → remaining character sheets (page order); object lane =
+**location refs first** (page order), then object refs (page order) — location outranks
+object because a wrong-style background poisons the whole frame while a slightly-off prop
+does not (flip of the pre-PER-83 object-before-location order). Anything past its lane's
+cap is logged, never silently dropped. **Auto-upgrade (PER-58, narrowed by PER-83):**
+`select_refs()` in `render_book.py` runs before either cap is applied — if the effective
+model is flash and the **character lane** has >4 entries, the page is silently upgraded to
+`gemini-3-pro-image` for that call only (logged, story.json untouched). Object-lane overflow
+never triggers an upgrade — its cap (10) is the same on both models. The lane/cap/drop logic
+is in `select_refs`; `collect_input_images` returns the full uncapped candidate list tagged
+with `(label, path, lane)`.
 
 **Outfit lock (single canonical outfit per character).** For kind=character entries, `appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
@@ -266,11 +285,21 @@ photo is only the render-time fallback. Note for pre-PER-50 books: re-running St
 story whose location carried only a photo makes one extra paid call and writes `style_sheet`;
 render remains backward-compatible via the photo fallback for books never re-sheeted.
 
-**Ref priority and cap (`render_book.py`):**
+**Ref priority and lanes (`render_book.py`, PER-83):**
 
-> hero sheet → remaining character sheets (page order) → object refs (page order) → **location refs (sheet, or photo fallback — lowest, first to drop)**
+> **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets (page order)
+> **object lane** (cap 10, both models): location refs (sheet, or photo fallback — page order) → object refs (sheet, or photo fallback — page order, lowest, first to drop)
 
-`collect_input_images()` builds the full prioritized candidate list (no cap). `select_refs(candidates, model)` then: auto-upgrades flash → pro when `len(candidates) > 4`, applies the cap, and returns `(effective_model, selected, dropped)`. Drops are logged, never silent. Flash pages with ≥5 refs are upgraded to pro before any ref is dropped; only past the pro cap (5) are refs dropped. On scenery-only pages (`cast: []` or only non-character entries) with a location set, the location photo is the sole reference image.
+`collect_input_images()` builds the full prioritized candidate list (no cap), tagged
+`(label, path, lane)`. `select_refs(candidates, model)` then: auto-upgrades flash → pro when
+the **character lane** has `> 4` entries, applies each lane's cap independently, and returns
+`(effective_model, selected, dropped)`. A `TOTAL_REF_CAP` of 14 backstops the rare case both
+lanes are simultaneously maxed (5 pro-cap characters + 10 object-lane refs = 15), trimming the
+object lane's tail. Drops are logged, never silent. Flash pages with a 5th character are
+upgraded to pro before any character is dropped; only past the pro character-lane cap (5) are
+characters dropped. Object-lane overflow (>10 objects+locations) never triggers an upgrade —
+its cap is the same on both models. On scenery-only pages (`cast: []` or only non-character
+entries) with a location set, the location photo is the sole reference image.
 
 **Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds. Keep label wording in sync with the system prompt's "kind" vocabulary:
 
@@ -327,9 +356,11 @@ collects valid `<id>` tokens in first-appearance order, `_syncPageCast()` reconc
 add/remove/reorder UI), render-status badges, **per-page image preview, generation
 history browser, a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
 and hit Regenerate to retry that page on the stronger model without touching the rest), **a
-per-page ref-count warning badge** (PER-58: amber "5 refs → pro required" when the intent-based
-ref count is 5 and the effective model is flash — render auto-upgrades at runtime; red "N refs >
-pro cap 5 — refs will drop" when count ≥ 6 regardless of model), and
+per-page ref-count warning badge** (PER-58, made lane-aware in PER-83: amber "5 refs → pro
+required" when the intent-based **character** count is 5 and the effective model is flash —
+render auto-upgrades at runtime; red "N refs > pro cap 5 — refs will drop" when character
+count exceeds 5, or the object-lane (objects + locations) count exceeds 10, regardless of
+model), and
 **a per-page text mode picker** (unset = same as book; override lets individual pages render in a
 different mode than the book default). Fields that have no effect given the current effective text mode
 are greyed-out (user may still pre-set them); the `floating` placement option is hard-hidden

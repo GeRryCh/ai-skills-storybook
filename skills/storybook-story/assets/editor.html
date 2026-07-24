@@ -1275,26 +1275,42 @@ function updatePageBadge(badgeEl, page) {
   badgeEl.textContent = txt;
 }
 
-// Intent-based reference-image count for a page: every cast entry contributes 1
-// (one style sheet or photo-fallback ref per entry — characters are sheet-only).
-// Matches the render priority: character sheets + object/location refs (no hero photo).
-// No disk checks — this is a warning about full-render intent, computed client-side.
-function pageRefCount(page) {
+// Intent-based reference-image lane counts for a page (PER-83): references ride
+// two independent lanes — a character lane (character-kind cast entries; sheet-only,
+// no hero photo) and an object lane (object + location entries share one lane,
+// same cap on both models). Matches the render-time split in collect_input_images /
+// select_refs (render_book.py). No disk checks — this is a warning about full-render
+// intent, computed client-side.
+function pageRefLaneCounts(page) {
   const cast = page.cast || [];
-  return cast.length;
+  const castById = {};
+  (story.cast || []).forEach(c => { if (c.id) castById[c.id] = c; });
+  let characters = 0, objectLane = 0;
+  cast.forEach(cid => {
+    const c = castById[cid];
+    const kind = c ? (c.kind || 'character') : 'character';
+    if (kind === 'character') characters++;
+    else objectLane++;
+  });
+  return { characters, objectLane };
 }
 const FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image';
+const OBJECT_LANE_CAP = 10;
+const TOTAL_REF_CAP = 14;
 function updateRefBadge(badgeEl, page) {
-  const n = pageRefCount(page);
+  const { characters, objectLane } = pageRefLaneCounts(page);
+  const total = characters + objectLane;
   const effModel = (page.model) || story.model || defaultFor('model');
-  if (n > 5) {
+  if (characters > 5 || objectLane > OBJECT_LANE_CAP || total > TOTAL_REF_CAP) {
     badgeEl.className = 'badge-refs over';
-    badgeEl.textContent = `${n} refs > pro cap 5 — refs will drop`;
-    badgeEl.title = 'Even gemini-3-pro-image accepts at most 5 reference images. The lowest-priority refs (locations first, then objects) are dropped at render and logged.';
-  } else if (n === 5 && effModel === FLASH_IMAGE_MODEL) {
+    badgeEl.textContent = characters > 5
+      ? `${characters} characters > pro character-lane cap 5 — refs will drop`
+      : `${objectLane} objects/locations > object-lane cap ${OBJECT_LANE_CAP} — refs will drop`;
+    badgeEl.title = 'References ride two lanes: a character lane (4 flash / 5 pro) and an object lane (objects + locations, cap 10, both models). The lowest-priority refs in the overflowing lane are dropped at render and logged.';
+  } else if (characters === 5 && effModel === FLASH_IMAGE_MODEL) {
     badgeEl.className = 'badge-refs warn';
-    badgeEl.textContent = '5 refs → pro required';
-    badgeEl.title = 'Flash cap is 4 reference images. Render auto-upgrades this page to gemini-3-pro-image at runtime (story.json unchanged). No manual action needed.';
+    badgeEl.textContent = '5 characters → pro required';
+    badgeEl.title = 'Flash character-lane cap is 4. Render auto-upgrades this page to gemini-3-pro-image at runtime (story.json unchanged). No manual action needed. Object/location refs ride a separate lane and never force this upgrade.';
   } else {
     badgeEl.className = 'badge-refs';
     badgeEl.textContent = '';
