@@ -19,18 +19,32 @@ an explicitly user-named path is used verbatim):
 1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), optionally analyzes a **style reference image** in-session to seed `style_guide` (PER-9: free, no API, same Claude-vision seam as cast photos), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
    (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
-2. **storybook-stylesheet** (paid, 1 image call per cast entry) — generates one
-   `style-sheet-{slug}.png` per cast entry from the `cast` array (characters, objects, and
+2. **storybook-stylesheet** (paid, 1 image call per cast entry + 1 book-wide) — generates
+   one `style-sheet-{slug}.png` per cast entry from the `cast` array (characters, objects, and
    locations all get sheets; location sheets are built from the entry's downloaded real-place
    photos when present, else from `appearance` — PER-50), writes each entry's `style_sheet`
-   path back into `story.json`. **Approval gate**: show all sheets, get confirmation before
-   rendering — a wrong sheet poisons every page that character appears on.
+   path back into `story.json`. Also generates one book-wide `style-frame.png` (PER-82,
+   "Lever B" — an abstract style board: palette swatches, a line/texture sample, a lighting
+   study; no characters, no places, no scenery), written to the top-level `style_frame`
+   field; a full run only (skipped under `--only`, whose contract is exactly one top-level
+   diff — see the editor's per-cast regenerate flow below), idempotent (skipped if already
+   present). **Approval
+   gate**: show all sheets and the style frame, get confirmation before rendering — a wrong
+   sheet poisons every page that character appears on, and a wrong style frame poisons
+   every page in the book.
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the cast entries listed in that page's `cast` field
    (per-page selection, two ref lanes — character lane 4 flash / 5 pro, object lane
-   (objects + locations) up to 10, 14 total — PER-83; auto-upgrades flash→pro when the
+   (objects + locations + the book-wide style frame, lowest priority) up to 10, 14 total —
+   PER-83, PER-82; auto-upgrades flash→pro when the
    character lane exceeds 4 — PER-58; overridable per page or book via the `model`
-   field or `--model` CLI flag), then overlays text. Three text modes:
+   field or `--model` CLI flag), then overlays text. When `story.json`'s top-level
+   `style_frame` is set (Stage 2 output — PER-82, "Lever B"), it's sent as the
+   lowest-priority object-lane reference on **every** page call (including scenery-only
+   pages and the long-mode text-background calls) to anchor the look of everything that
+   isn't cast — backgrounds, crowds, lighting, props — which text alone (`style_guide` +
+   `premise`) doesn't fully lock down. Soft: an absent or missing-on-disk frame just warns
+   and is skipped, unlike PER-84's hard-required location sheet. Three text modes:
    - `overlay`: `pages/page-NN.png` (art + Pillow text panel)
    - `native`: `pages/page-NN-native.png` (model bakes text into art)
    - `long`: `pages/page-NN-long.png` (full-bleed art, no text) + `pages/page-NN-long-text.png`
@@ -74,6 +88,8 @@ change for pre-existing `story.json` files; add the field to render old books. T
 string remains as a short human label only.
 
 An optional top-level `premise` string (PER-66) is the **textual analogue of the verbatim style block** — the narrative consistency anchor. It is injected verbatim into every page render prompt immediately after `STYLE_ANCHOR`, for all three text modes (overlay / native / long), via `book_premise(story)` in `render_book.py`'s `build_image_prompt`. **Abstract atmosphere/intent only:** genre, audience age, tone, season, time-of-day arc, narrative register. **NEVER** plot, scenes, named places, or per-page objects — those bleed into every page (the PER-33 location-bleed bug class). Empty/absent premise → zero behavioural change. `premise` is deliberately **NOT** part of `build_style_block()` (which also feeds Stage 2 OpenAI stylesheet calls — narrative premise is noise there) and is not injected into the long-mode text background prompt.
+
+An optional top-level `style_frame` string (PER-82, "Lever B") is `premise`'s **visual counterpart** — the image analogue of the verbatim style block, instead of the textual one. It's a path to one book-wide `style-frame.png` (an abstract style board: palette swatches, a line/texture sample, a lighting study), generated once by `make_style_sheet.py` (Stage 2) and written back into `story.json`. `render_book.py` sends it as the lowest-priority object-lane reference image on every page render call (see "Ref priority and lanes" below) to anchor the look of everything that isn't cast — backgrounds, crowds, lighting, props — which text alone doesn't fully lock down. **Abstract style samples only, same PER-33 discipline as `premise`:** NEVER a scene, a story location, or any narrative content — a book-wide reference depicting an environment bleeds into every page, including pages set elsewhere. Absent/missing-on-disk → zero behavioural change (soft, unlike PER-84's hard-required location sheet).
 
 Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`, `locations`, `pages[].characters`, `pages[].location`) with `exit 2` and a migration message — no shim, clean break.
 
@@ -300,7 +316,7 @@ slightly-off prop does not poison a frame the way a wrong-style background does)
 **Ref priority and lanes (`render_book.py`, PER-83):**
 
 > **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets (page order)
-> **object lane** (cap 10, both models): location refs (sheet only, hard-required — PER-84 — page order) → object refs (sheet, or photo fallback — page order, lowest, first to drop)
+> **object lane** (cap 10, both models): location refs (sheet only, hard-required — PER-84 — page order) → object refs (sheet, or photo fallback — page order) → **book-wide style frame** (PER-82, lowest priority, first to drop)
 
 `collect_input_images()` builds the full prioritized candidate list (no cap), tagged
 `(label, path, lane)`. `select_refs(candidates, model)` then: auto-upgrades flash → pro when
@@ -309,18 +325,30 @@ the **character lane** has `> 4` entries, applies each lane's cap independently,
 lanes are simultaneously maxed (5 pro-cap characters + 10 object-lane refs = 15), trimming the
 object lane's tail. Drops are logged, never silent. Flash pages with a 5th character are
 upgraded to pro before any character is dropped; only past the pro character-lane cap (5) are
-characters dropped. Object-lane overflow (>10 objects+locations) never triggers an upgrade —
-its cap is the same on both models. On scenery-only pages (`cast: []` or only non-character
-entries) with a location set, the location style sheet is the sole reference image (PER-84 —
-no photo fallback for locations).
+characters dropped. Object-lane overflow (>10 objects+locations+style frame) never triggers an
+upgrade — its cap is the same on both models. On scenery-only pages (`cast: []` or only
+non-character entries) with a location set, the location style sheet is the sole
+per-page-cast reference image (PER-84 — no photo fallback for locations); the book-wide style
+frame, if set, is still attached on top of it (it's sourced from `story`, not `page.cast`).
 
-**Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 5 label kinds (locations have no photo-fallback label render-side — PER-84; Stage 2 still labels input photos when *building* the sheet). Keep label wording in sync with the system prompt's "kind" vocabulary:
+**Book-wide style frame (PER-82, "Lever B").** `story.json`'s top-level `style_frame`
+(written by `make_style_sheet.py`, Stage 2 — one abstract style board per book: palette
+swatches, a line/texture sample, a lighting study; no characters, no places, no scenery) is
+read directly from `story`, not `page['cast']`, so `collect_input_images()` attaches it on
+**every** call for that book — including the long-mode text-background calls
+(`run_nano_banana(..., story, {"cast": []}, ...)`), since a style board is an apt reference
+for a style-matched background too. Soft, unlike PER-84's hard-required location sheet: an
+absent or missing-on-disk frame just warns and is skipped — it never fails a render. It
+never contributes to the flash→pro auto-upgrade (only the character lane does).
+
+**Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds (locations have no photo-fallback label render-side — PER-84; Stage 2 still labels input photos when *building* the sheet). Keep label wording in sync with the system prompt's "kind" vocabulary:
 
 - `"character style sheet for {name}"` → defines design, outfit, art style
 - `"real photograph of the character {name} (facial likeness reference)"` → face only, outfit from sheet
 - `"object reference sheet for {name}"` → defines object design, colours, proportions
 - `"real photograph of the object {name} (appearance reference)"` → shape/materials/details reference
 - `"location reference sheet for {name}"` → defines place's look in book style
+- `"book style reference — match its rendering technique, palette, and line treatment exactly; it depicts no specific scene"` (PER-82) → matches rendering technique/palette/line treatment only; never copy its layout, swatches, or any depicted object
 
 `STYLE_ANCHOR` contains `"of a character"` in the photo-matching sentence to prevent the anchor from instructing the model to extract a face from a landmark photo on scenery-only pages.
 
@@ -432,7 +460,10 @@ accepted trade-off. Renaming a cast entry changes the slug → old-stem history 
 
 **GET /api/status** now includes ALL named cast entries (not only those with a `style_sheet`):
 `cast[name] = {style_sheet_exists: bool, regen: {status, error}}`. The `regen` field lets
-a reloaded client resume an in-flight sheet poll.
+a reloaded client resume an in-flight sheet poll. It also includes a top-level
+`style_frame_exists: bool` (PER-82) — read-only preview flag for the book-wide style frame;
+no regen job to track (the editor has no generate/regenerate UI for it — override is
+`rm style-frame.png` + re-run `make_style_sheet.py`, same as sheets).
 
 **`make_style_sheet.py --only NAME`** (PER-59): process only the named cast entry; the slug
 walk still runs for ALL entries so filenames stay stable. Exit 2 if name not found.
@@ -440,7 +471,11 @@ This is NOT equivalent to delete-PNG + full run: the full run rewrites `style_sh
 every entry (absolute paths), which would desync the client's single-field mtime patch.
 
 **Known limitations:** pages using a regenerated sheet are stale but show no stale badge
-(badge tracks session edits, not sheet changes). The confirm-dialog warns the user.
+(badge tracks session edits, not sheet changes). The confirm-dialog warns the user. The
+book-wide style frame preview (PER-82) reflects the last full `/api/status` fetch (page
+load, after a save, or after a sheet regen completes) — if `make_style_sheet.py` is run in
+another terminal while the editor is open, the preview and ref-count badge only pick up the
+new frame after a page reload.
 
 ### Image manipulation endpoints (PER-41, PER-47)
 

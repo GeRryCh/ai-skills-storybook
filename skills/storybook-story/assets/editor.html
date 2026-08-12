@@ -286,6 +286,7 @@ const dirtyPages  = new Set(); // unsaved changes — header dot + beforeunload 
 const editedPages = new Set(); // edited since last render — amber badge (not cleared on save)
 let renderStatus = {};
 let charStatusData = {};
+let styleFrameExists = false; // PER-82: book-wide style frame — read-only preview flag
 // ── Auto-save state ────────────────────────────────────────────────────────
 let autoSaveTimer  = null;  // debounce handle
 let saveInFlight   = false; // one PUT at a time
@@ -463,8 +464,9 @@ async function init() {
     window._schema = schema;
     storyMtime = storyResp.headers.get('X-Story-Mtime');
     const status = await statusResp.json();
-    renderStatus   = status.pages || {};
-    charStatusData = status.cast || {};
+    renderStatus     = status.pages || {};
+    charStatusData   = status.cast || {};
+    styleFrameExists = !!status.style_frame_exists;
   } catch (e) {
     document.getElementById('main').innerHTML =
       `<p style="color:red">Failed to load: ${e.message}</p>`;
@@ -1097,8 +1099,9 @@ async function fetchSheetVersions(cid) {
         try {
           const sr = await fetch('/api/status');
           const sd = await sr.json();
-          renderStatus   = sd.pages  || {};
-          charStatusData = sd.cast   || {};
+          renderStatus     = sd.pages  || {};
+          charStatusData   = sd.cast   || {};
+          styleFrameExists = !!sd.style_frame_exists;
         } catch (_) {}
         // Re-render the sheet preview for this cast entry only.
         const i3 = _sheetIdx(cid);
@@ -1292,6 +1295,11 @@ function pageRefLaneCounts(page) {
     if (kind === 'character') characters++;
     else objectLane++;
   });
+  // PER-82: the book-wide style frame (if set and on disk) is attached to EVERY
+  // page render as the lowest-priority object-lane ref, regardless of this
+  // page's cast — mirrors collect_input_images, which sources it from `story`,
+  // not `page`.
+  if (story.style_frame && styleFrameExists) objectLane++;
   return { characters, objectLane };
 }
 const FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image';
@@ -1620,6 +1628,11 @@ function renderBook() {
       <div class="field"><label>Mood</label><input type="text" id="sg-mood"></div>
     </fieldset>
 
+    <div class="field">
+      <label>Book style frame <small style="color:#94a3b8">(read-only — PER-82: an abstract style board sent as the lowest-priority reference on every page render; generated once by make_style_sheet.py, Stage 2. To regenerate: delete the file and re-run Stage 2)</small></label>
+      <div id="style-frame-preview"></div>
+    </div>
+
     <div class="grid3">
       <div class="field"><label>Text mode</label><select id="book-text-mode"></select></div>
       <div class="field"><label>Resolution</label><select id="book-resolution"></select></div>
@@ -1692,10 +1705,33 @@ function renderBook() {
   // Palette
   renderPaletteRows(b.querySelector('#palette-container'));
 
+  // Book style frame — read-only preview (PER-82).
+  renderStyleFramePreview();
+
   // Saved formats moved to the Consolidate Story modal — rendered there on open.
 
   // Apply field-dependency rules (PER-48).
   applyDeps(b, null);
+}
+
+// PER-82: read-only preview of the book-wide style frame. Not a form field —
+// style_frame is written by make_style_sheet.py (Stage 2), never hand-authored,
+// so this never calls bindText/markDirty. To regenerate: delete the file and
+// re-run Stage 2 (same override convention as per-cast-entry style sheets).
+function renderStyleFramePreview() {
+  const el = document.getElementById('style-frame-preview');
+  if (!el) return;
+  if (story.style_frame) {
+    const imgSrc = `/img?path=${encodeURIComponent(story.style_frame)}`;
+    el.innerHTML =
+      `<img class="ref-thumb" src="${esc(imgSrc)}" title="${esc(story.style_frame)}" style="max-height:120px;display:block">` +
+      (styleFrameExists
+        ? ''
+        : `<div style="color:#b45309;font-size:12px;margin-top:4px">⚠ File not found on disk (${esc(story.style_frame)}) — re-run make_style_sheet.py</div>`);
+  } else {
+    el.innerHTML =
+      `<div style="color:#94a3b8;font-size:13px">Not yet generated — run make_style_sheet.py (Stage 2) to create it.</div>`;
+  }
 }
 
 // ── Smart-regenerate button logic ──────────────────────────────────────────
@@ -2306,11 +2342,12 @@ async function triggerSave(auto = false) {
     } else if (!auto) {
       hideStatus();
     }
-    // Refetch status after save (style_sheet may now exist)
+    // Refetch status after save (style_sheet / style_frame may now exist)
     const sr = await fetch('/api/status');
     const sd = await sr.json();
-    renderStatus   = sd.pages || {};
-    charStatusData = sd.cast || {};
+    renderStatus     = sd.pages || {};
+    charStatusData   = sd.cast || {};
+    styleFrameExists = !!sd.style_frame_exists;
     renderPages();
   } catch (e) {
     if (!auto) showStatus('error', ['Network error: ' + e.message]);

@@ -221,6 +221,72 @@ class TestCollectInputImages(unittest.TestCase):
         self.assertGreater(len(log), 0, "Warning must appear in log list")
 
 
+class TestStyleFrame(unittest.TestCase):
+    """PER-82 — book-wide style frame, sourced from story['style_frame'] (not
+    page['cast']). Lowest-priority candidate, lane 'object'."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_absent_style_frame_no_change(self):
+        """No style_frame key: candidate list identical to pre-PER-82 behavior."""
+        sheet = _touch(self.root / "char-sheet.png")
+        story = {"cast": [{"id": "char", "name": "Char", "style_sheet": sheet}]}
+        result = render_book.collect_input_images(story, {"cast": ["char"]}, log=[])
+        self.assertEqual(
+            result, [("character style sheet for Char", sheet, "character")]
+        )
+
+    def test_present_and_on_disk_appended_last(self):
+        """style_frame set + exists: appended after object refs, lane 'object',
+        exact ticket-specified label wording."""
+        obj_sheet = _touch(self.root / "obj-sheet.png")
+        frame = _touch(self.root / "style-frame.png")
+        story = {
+            "style_frame": frame,
+            "cast": [
+                {"id": "obj", "name": "Obj", "kind": "object", "style_sheet": obj_sheet},
+            ],
+        }
+        result = render_book.collect_input_images(story, {"cast": ["obj"]}, log=[])
+        self.assertEqual(result, [
+            ("object reference sheet for Obj", obj_sheet, "object"),
+            (
+                "book style reference — match its rendering technique, palette, "
+                "and line treatment exactly; it depicts no specific scene",
+                frame,
+                "object",
+            ),
+        ])
+
+    def test_missing_on_disk_warns_and_skipped(self):
+        """style_frame set but file absent: warning logged, not added as a candidate."""
+        story = {"style_frame": "/nonexistent/style-frame.png", "cast": []}
+        log: list[str] = []
+        result = render_book.collect_input_images(story, {"cast": []}, log=log)
+        self.assertEqual(result, [])
+        self.assertTrue(any("style_frame not found on disk" in w for w in log))
+
+    def test_included_on_empty_cast_page(self):
+        """Synthetic cast:[] calls (long-mode text backgrounds) still get the
+        frame — it's sourced from story, not page['cast']."""
+        frame = _touch(self.root / "style-frame.png")
+        story = {"style_frame": frame, "cast": [{"id": "pip", "name": "Pip"}]}
+        result = render_book.collect_input_images(story, {"cast": []}, log=[])
+        self.assertEqual(result, [
+            (
+                "book style reference — match its rendering technique, palette, "
+                "and line treatment exactly; it depicts no specific scene",
+                frame,
+                "object",
+            ),
+        ])
+
+
 class TestBaseDirResolution(unittest.TestCase):
     """Relative `style_sheet`/`ref_image` paths resolve against base_dir (the
     story.json dir), not cwd — PER-68 regression guard."""

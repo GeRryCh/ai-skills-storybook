@@ -24,6 +24,7 @@
         "mood": { "type": "string", "description": "Overall mood and rendering vocabulary, e.g. 'cozy and gentle' or 'graphic, high-contrast, irreverent'." }
       }
     },
+    "style_frame": { "type": "string", "description": "Path to the book-wide 'style frame' PNG (PER-82, Lever B) — filled in by make_style_sheet.py, not user-authored. An abstract style board (palette swatches, a line/texture sample, a lighting study; no characters, no places, no scenery) sent as the lowest-priority reference on every Stage 3 page render call to anchor the look of everything that isn't cast. Omit for no style frame — Stage 2 always attempts to generate one once per book." },
     "cast": {
       "type": "array",
       "description": "Explicit unified cast: every recurring visual subject in the book — characters, recognisable objects, and named places. ONE entry per REAL subject. Drives Stage 2 (one reference sheet per eligible entry) and Stage 3 (per-page reference selection). Never rely on auto-extraction from prose.",

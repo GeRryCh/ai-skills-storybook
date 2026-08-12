@@ -141,6 +141,11 @@ IMAGE_SYSTEM_PROMPT = (
     "never as a photograph. "
     "A 'location reference sheet' defines that place's look in the book's art "
     "style — follow it exactly; it is scenery, never a character. "
+    "A 'book style reference' is an abstract style board — palette swatches, a "
+    "texture/line-treatment sample, and a lighting study, with no specific "
+    "scene, character, or place depicted — match its rendering technique, "
+    "palette, and line treatment exactly, but never copy its layout, swatches, "
+    "or any object shown on it into the image. "
     "The identification notes are instructions, not story text; never letter "
     "them into the image. "
     "Output only the generated image without additional commentary."
@@ -506,7 +511,11 @@ def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
     One shared background per book by default (pages/text-bg-long.png); a page with
     text_background_prompt set gets its own dedicated background instead. No character
     references are sent for this call, so STYLE_ANCHOR is not used. The style block is
-    injected verbatim for book-wide visual consistency.
+    injected verbatim for book-wide visual consistency. This call goes through
+    run_nano_banana(..., story, {"cast": []}, ...), so collect_input_images still
+    attaches the book-wide style frame (PER-82) if story['style_frame'] is set — it's
+    sourced from story, not page['cast'], and a style board is an apt reference for a
+    style-matched background too.
 
     Description precedence: page-level text_background_prompt (when page is given) ->
     top-level text_background_prompt -> generic default.
@@ -600,16 +609,25 @@ def collect_input_images(
                   when no sheet exists.
 
     Priority order: hero sheet → remaining character sheets (page order) →
-    location refs (page order) → object refs (page order). Location outranks
-    object (PER-83): a wrong-style background poisons the whole frame; a
-    slightly-off prop does not. Within the object lane (locations + objects,
-    up to OBJECT_LANE_CAP), locations are first to survive, objects first to
-    drop when the caller applies the cap.
+    location refs (page order) → object refs (page order) → book-wide style
+    frame (PER-82, "Lever B" — see below). Location outranks object (PER-83):
+    a wrong-style background poisons the whole frame; a slightly-off prop does
+    not. Within the object lane (locations + objects + the style frame, up to
+    OBJECT_LANE_CAP), locations are first to survive, then objects, and the
+    style frame is first to drop when the caller applies the cap.
 
     Returns (label, path, lane) triples; lane is "character" or "object"
-    (location refs share the object lane per Gemini's reference-image envelope).
-    Labels are interleaved identification notes in run_nano_banana. Label
-    vocabulary must stay in sync with IMAGE_SYSTEM_PROMPT's rules-by-kind.
+    (location refs and the style frame share the object lane per Gemini's
+    reference-image envelope). Labels are interleaved identification notes in
+    run_nano_banana. Label vocabulary must stay in sync with
+    IMAGE_SYSTEM_PROMPT's rules-by-kind.
+
+    Book-wide style frame (PER-82): sourced from story['style_frame'], not
+    page['cast'] — so it's attached on EVERY call for this book, including the
+    cast:[] synthetic calls that generate the long-mode text-page background(s)
+    (a style board is exactly the right reference for those too). Soft — an
+    absent or missing-on-disk frame just warns and is skipped, unlike PER-84's
+    hard-required location sheet (the frame is additive, never load-bearing).
     """
     def warn(msg: str) -> None:
         if log is not None:
@@ -708,6 +726,26 @@ def collect_input_images(
                     f"object {name!r} has neither a usable style_sheet nor a "
                     f"ref_image; skipping. Run make_style_sheet.py first."
                 )
+
+    # Book-wide style frame (PER-82) — sourced from story, not page['cast'], so
+    # it's attached on every call for this book regardless of that page's cast
+    # (including the cast:[] text-background calls). Lowest priority overall:
+    # appended last within the object lane, so it's the first thing dropped
+    # when that lane's cap is reached. Soft — missing/absent just warns.
+    style_frame = story.get("style_frame")
+    if style_frame:
+        frame_path = resolve_story_rel(style_frame, base_dir)
+        if frame_path.exists():
+            candidates.append(
+                (
+                    "book style reference — match its rendering technique, palette, "
+                    "and line treatment exactly; it depicts no specific scene",
+                    str(frame_path),
+                    "object",
+                )
+            )
+        else:
+            warn(f"style_frame not found on disk ({style_frame}); skipping.")
 
     return candidates
 
@@ -982,6 +1020,11 @@ def _build_ref_manifest(ref_pairs: list[tuple[str, str]]) -> str:
         + "\n\nUse each reference for the named subject ONLY — a character/object/"
         "location style sheet defines that subject's canonical design; a real "
         "photograph is a likeness/setting reference to redraw in the book style. "
+        "The 'book style reference' is different from the others: it is a "
+        "rendering-technique reference only (palette, texture/line treatment, "
+        "lighting) — never a subject, never a scene to depict; match its "
+        "technique but never copy its layout, swatches, or any object shown on "
+        "it into the image. "
         "Render every named subject as its OWN distinct design from its own sheet; "
         "never duplicate one subject's look onto another.\n\n"
     )
@@ -1235,10 +1278,14 @@ async def run_nano_banana(
         )
         model = new_model
     if dropped:
+        # Truncate long labels for log legibility only (e.g. the PER-82 style-frame
+        # label is a full sentence) — the untruncated label is still what's sent to
+        # the model via ref_pairs; this only affects this one log line.
+        short_dropped = [d if len(d) <= 60 else d[:57] + "..." for d in dropped]
         log.append(
             f"  Note: character-lane cap "
             f"({CHARACTER_LANE_CAP.get(model, MAX_CHARACTER_LANE)}) / object-lane cap "
-            f"({OBJECT_LANE_CAP}) reached; dropped: {', '.join(dropped)}"
+            f"({OBJECT_LANE_CAP}) reached; dropped: {', '.join(short_dropped)}"
         )
     for label, img_path in ref_pairs:
         p = Path(img_path)

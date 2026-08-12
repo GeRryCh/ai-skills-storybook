@@ -7,7 +7,13 @@ consistency or quality improvements.
 
 ## Global style-frame image (B) — opt-in experiment
 
-**Status:** researched, not implemented. See Linear issue PER-33 for the full analysis.
+**Status: IMPLEMENTED — PER-82 ("Lever B").** See `story.json`'s top-level `style_frame`
+field, `make_style_sheet.py`'s book-wide style-frame generation step, and
+`render_book.py`'s `collect_input_images()`. The sketch below is left for historical
+context; the shipped design corrects three things it got wrong (see the note at the
+bottom) and is stricter on one point the ticket's own summary was ambiguous about — see
+CLAUDE.md's `style_frame` paragraph and the PER-82 plan for the reasoning. Originally
+researched under Linear issue PER-33.
 
 ### What it is
 
@@ -55,6 +61,45 @@ at most one representative prop — flat plain background, no scenery, no charac
 
 A/B: render the same page twice — once without `style_frame`, once with — and compare.
 Look for tighter palette/lighting lock without unexpected environment leakage.
+
+### What actually shipped differently (PER-82)
+
+The sketch above predates PER-65, PER-83, and PER-84, and is stale in three ways the
+PER-82 implementation corrects:
+
+- **Vendor:** step 4 says "one-time Gemini call" — Stage 2 moved to OpenAI `gpt-image-2`
+  before this shipped. The frame is generated via `make_style_sheet.py`'s existing
+  `generate_image()` (OpenAI), not Gemini.
+- **Priority chain:** step 3's `hero sheet → hero photo → style frame → remaining cast
+  sheets` includes a hero *photo* — PER-65 removed hero photos from render-time refs
+  entirely (characters contribute sheets only). The shipped priority is: character lane
+  (unaffected) → location refs → object refs → **style frame last**, within the object
+  lane, not interleaved into the character lane.
+- **Cap model:** step 3's "4-slot cap" is the old flat cap. PER-83 replaced it with two
+  independent lanes (character 4 flash/5 pro, object+location 10, total 14). The style
+  frame rides the **object lane**, tagged lowest priority — it never competes with or
+  upgrades the character lane.
+- **`--only` interaction (not in the sketch at all):** the shipped frame-generation step
+  is skipped when `make_style_sheet.py` is invoked with `--only ID`. `--only`'s contract
+  is exactly one top-level diff (that entry's `style_sheet`) — the visual editor's
+  per-cast regenerate flow (`edit_story.py`'s `_run_sheet_regen` + `editor.html`'s
+  `fetchSheetVersions`) resyncs only that one field into the client's in-memory
+  `story` object after an `--only` run, refreshing `storyMtime` to match disk without
+  refetching everything. A second, unsynced top-level field write (the frame, on its
+  first-ever generation) would silently vanish on the next editor save — the client's
+  stale in-memory copy would overwrite the on-disk field, and the mtime guard wouldn't
+  catch it because `storyMtime` was already refreshed. The frame is a full-run-only
+  asset for this reason; this is the constraint most likely to get silently re-broken
+  by a future edit, since it isn't visible from reading `collect_input_images` or the
+  schema alone.
+
+One more thing worth flagging for the next reader: the ticket's own one-line summary
+("a sample environment + palette swatches + a patch of linework") is in tension with its
+own next clause ("no scenery that could bleed"). The shipped prompt follows the stricter
+reading — **no environment at all**, only palette/texture/lighting samples — consistent
+with the "Critical design rule" above and with `.claude/rules/script-authoring.md`'s
+per-page-location-only rule. If a future revision wants literal "sample environment"
+content, that's a deliberate reopening of the PER-33 bleed question, not a bug to fix.
 
 ---
 

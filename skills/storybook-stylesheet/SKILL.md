@@ -6,9 +6,11 @@ description: >
   wants to build, regenerate, or fix the character reference sheets — e.g. "make the
   style sheet", "regenerate the character sheets", "the characters look inconsistent /
   wrong", "redo the style sheet". Produces one style-sheet-{id}.png per character,
-  which render_book.py selects per page for consistency. Requires an existing story.json
-  with a 'cast' array. Costs one image API call per eligible cast entry. If no story.json
-  exists yet, run storybook-story first.
+  which render_book.py selects per page for consistency, plus one book-wide
+  style-frame.png (PER-82) sent as a reference on every page render. Requires an
+  existing story.json with a 'cast' array. Costs one image API call per eligible cast
+  entry, plus one for the book-wide style frame. If no story.json exists yet, run
+  storybook-story first.
 metadata:
   requires:
     bins:
@@ -73,14 +75,28 @@ uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 visual editor's "↻ Regenerate sheet" button invokes (it deletes the PNG first, then calls
 `--only ID` via the server).
 
+**Book-wide style frame (PER-82, "Lever B").** After the cast loop, a **full run** (no
+`--only`) also generates ONE `style-frame.png` per book — an abstract style board (palette
+swatches, a line/texture sample, a lighting study; no characters, no places, no scenery) —
+and writes its path into the top-level `style_frame` field. `render_book.py` sends it as
+the lowest-priority reference on every page render to anchor the look of everything that
+isn't cast (backgrounds, crowds, lighting, props). Idempotent (skipped if `style-frame.png`
+already exists). **Skipped under `--only ID`**: `--only`'s contract is exactly one
+top-level diff (that entry's `style_sheet`), which the visual editor's per-cast regenerate
+flow depends on to resync safely without a full reload — generating the frame there too
+would add an unsynced second field write. To force a regenerate: `rm style-frame.png` and
+re-run a full (no `--only`) invocation.
+
 ---
 
 ## Approval gate
 
-After generation, the script prints `MEDIA:` lines for every sheet. Show **all** sheets
-to the user and ask them to confirm every character looks right **before** rendering pages.
-Each sheet anchors that character on every page it appears — a wrong sheet poisons those
-pages.
+After generation, the script prints `MEDIA:` lines for every sheet **and for the style
+frame**. Show **all** of them to the user and ask them to confirm every character looks
+right **before** rendering pages. Each character sheet anchors that character on every page
+it appears — a wrong sheet poisons those pages. The style frame is sent on *every* page, so
+a bad frame is strictly worse: it poisons the whole book, not just the pages one character
+appears on.
 
 If a sheet is wrong:
 1. Fix that character's entry in the `cast` array in `story.json` (sharpen
@@ -88,7 +104,10 @@ If a sheet is wrong:
 2. Delete only that character's sheet file (e.g. `rm style-sheet-{id}.png`).
 3. Re-run the command above.
 
-Do not proceed to Stage 3 until the user approves all sheets.
+If the style frame is wrong (e.g. it depicts a scene or leaks narrative content), fix
+`style_guide` if needed, `rm style-frame.png`, and re-run.
+
+Do not proceed to Stage 3 until the user approves all sheets and the style frame.
 
 ---
 

@@ -84,17 +84,27 @@ the **object lane** (PER-83) — the same lane as objects, cap 10 on both models
 slightly-off prop does not.
 
 > **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets
-> **object lane** (cap 10, both models): **location ref (sheet, or photo fallback)** → object refs
+> **object lane** (cap 10, both models): **location ref (sheet, or photo fallback)** → object refs → **book-wide style frame** (lowest priority)
 
 Flash pages whose **character** lane exceeds 4 are **auto-upgraded to pro** before any
 character is dropped (see `--model` above). Anything past the pro character-lane cap (5),
 or past the object-lane cap (10), is logged (never silently dropped). Object-lane overflow
 never triggers an upgrade. On scenery-only pages
-(`"cast": []`) the location photo is the sole reference image.
+(`"cast": []`) the location photo is the sole reference image (plus the style frame, if set).
 
 Each reference is sent with a short identifying note in the Gemini call so the model knows
 a location sheet or photo is the setting, not a character. Unknown ids and missing
 files degrade to a logged warning and skip — they never fail the render.
+
+**Book-wide style frame (PER-82, "Lever B").** When `story.json`'s top-level `style_frame`
+is set (written by `make_style_sheet.py`, Stage 2) and the file exists on disk, it's sent as
+the lowest-priority object-lane reference on **every** page call for the book — including
+scenery-only pages and the long-mode text-background calls, since it's sourced from the book
+level, not from that page's `cast`. It anchors the look of everything that isn't cast
+(backgrounds, crowds, lighting, props), which otherwise drifts from text alone toward the
+model's world-knowledge default. It's an abstract style board (palette/texture/lighting
+samples), never a scene — a missing or absent frame is just today's behavior (soft, not a
+hard requirement like a location's sheet).
 
 ## `<id>` placeholder substitution (PER-56)
 
@@ -104,7 +114,7 @@ files degrade to a logged warning and skip — they never fail the render.
 
 ## Cost & failure notes
 
-- Each page = one Gemini image call. 8 pages = 8 calls. Long mode adds 1 call for the shared text-page background (8 pages = 9 calls), plus 1 per page that sets `text_background_prompt`.
+- Each page = one Gemini image call. 8 pages = 8 calls. Long mode adds 1 call for the shared text-page background (8 pages = 9 calls), plus 1 per page that sets `text_background_prompt`. The book-wide style frame (PER-82) is generated once in **Stage 2**, not here — it costs no extra Stage 3 calls, only 1 extra ref slot/page (free under the object-lane cap unless that lane is already maxed).
 - **Strongly suggest** a 2-page proof run first: `--only 2` then `--only 3`.
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
 - API errors: check `GEMINI_API_KEY` is set, `uv` installed, and Gemini account has credits.

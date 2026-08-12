@@ -17,8 +17,10 @@ Endpoints:
                                422 with {errors, warnings} when validation blocks the save)
   GET  /api/schema            assets/story_schema.json — the client derives enum options,
                                defaults, and required-field sets from it
-  GET  /api/status            per-page rendered flags (pages/page-NN[-native].png exists)
-                               and per-character style_sheet existence
+  GET  /api/status            per-page rendered flags (pages/page-NN[-native].png exists),
+                               per-character style_sheet existence, and (PER-82) top-level
+                               style_frame_exists (book-wide style frame — read-only, no
+                               regen job)
   GET  /api/versions?page=N   list generated versions for a page; pure read (no disk mutation).
                                Returns {ok, versions: [{id, path, mtime, in_use}], regen: {…}}
   GET  /img?path=…            image preview. Absolute paths are served as-is; relative
@@ -1449,8 +1451,19 @@ def make_handler(story_path: Path, schema: dict):
                     "style_sheet_exists": style_sheet_exists,
                     "regen": sheet_jobs.get(cid, {"status": None, "error": None}),
                 }
+            # PER-82: book-wide style frame — read-only preview, no regen job to track.
+            frame = story.get("style_frame")
+            style_frame_exists = (
+                isinstance(frame, str) and resolve_story_rel(frame, story_dir).exists()
+            )
             self._send_json(
-                200, {"ok": True, "pages": page_status, "cast": cast_status}
+                200,
+                {
+                    "ok": True,
+                    "pages": page_status,
+                    "cast": cast_status,
+                    "style_frame_exists": style_frame_exists,
+                },
             )
 
         def _get_versions(self, url) -> None:

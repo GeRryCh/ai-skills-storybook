@@ -151,5 +151,48 @@ class TestMakeStyleSheetCLI(unittest.TestCase):
             p.unlink(missing_ok=True)
 
 
+class TestMakeStyleSheetStyleFrameOnly(unittest.TestCase):
+    """PER-82: --only must skip book-wide style-frame generation entirely — no API
+    call, no story.json write. --only's contract is exactly one top-level diff (the
+    named entry's style_sheet); the editor's per-cast regenerate flow (edit_story.py's
+    _run_sheet_regen + editor.html's fetchSheetVersions) resyncs only that one field
+    after an --only run, so a second unsynced top-level write would silently vanish
+    on the next editor save.
+
+    Zero-API: the cast entry's sheet already exists on disk (skip-if-exists branch,
+    no generate_image call), and --only skips the frame block outright — no code path
+    in this test reaches generate_image, so no OPENAI_API_KEY is needed regardless of
+    what's set in the host environment.
+    """
+
+    def test_only_id_does_not_write_style_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sheet = root / "style-sheet-pip.png"
+            sheet.touch()
+            story_path = root / "story.json"
+            story = {
+                "title": "T", "style": "s",
+                "style_guide": {"medium": "watercolor"},
+                "cast": [{"id": "pip", "name": "Pip", "appearance": "a hedgehog",
+                          "style_sheet": str(sheet)}],
+                "pages": [{"page_num": 1, "cast": ["pip"], "text": "t",
+                           "image_prompt": "<pip> runs"}],
+            }
+            story_path.write_text(json.dumps(story, indent=2))
+
+            r = _run(MAKE_SHEET, "--story", str(story_path), "--only", "pip")
+            self.assertEqual(
+                r.returncode, 0,
+                f"stdout: {r.stdout}\nstderr: {r.stderr}",
+            )
+            updated = json.loads(story_path.read_text())
+            self.assertNotIn(
+                "style_frame", updated,
+                "--only must not write the book-wide style_frame field (would desync "
+                "the editor's single-field resync and get silently dropped on save)",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

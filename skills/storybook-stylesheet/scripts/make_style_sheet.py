@@ -30,6 +30,15 @@ Eligible entries (every cast entry gets a sheet):
 Idempotent: skips entries whose style-sheet-{slug}.png already exists. To force
 a regenerate for one entry, delete that entry's file and re-run.
 
+Also generates ONE book-wide style-frame.png (PER-82, "Lever B") — an abstract
+style board (palette swatches, a line/texture sample, a lighting study; no
+characters, no places, no scenery) written to the top-level 'style_frame' field.
+render_book.py sends it as the lowest-priority reference on every page call to
+anchor the look of everything that isn't cast. Idempotent (skips if it already
+exists). Skipped under --only (a full run generates it) — --only's contract is
+exactly one top-level diff (that entry's style_sheet), which the editor's
+per-cast regenerate flow depends on to resync safely without a full reload.
+
 Requires STORYBOOK_SKILL_OPENAI_API_KEY (or OPENAI_API_KEY) in the environment.
 
 Usage:
@@ -123,11 +132,22 @@ _KIND_LIKENESS = {
         "from any provided reference photographs, but redraw the place as an original "
         "illustration in the book's art style — never reproduce photographic detail. "
     ),
+    # PER-82 (Lever B): not a cast kind, used only for the one book-wide style-frame
+    # call. No likeness subject at all — this is an abstract style board, and the
+    # likeness clause is replaced with an explicit "no scene" directive instead.
+    "style": (
+        "This is an abstract style reference board only, not a scene or a page of the "
+        "book. It must contain no characters, no people, no animals, no named or "
+        "recognisable places, no scenery, and no background environment of any kind — "
+        "only palette swatches, a texture/line-treatment sample, and a small lighting "
+        "study on a flat neutral background. "
+    ),
 }
 
 
 def image_system_prompt(kind: str) -> str:
-    """Return the system prompt for a given cast-entry kind."""
+    """Return the system prompt for a given cast-entry kind (or "style", PER-82's
+    book-wide style-frame kind — not a cast kind, see _KIND_LIKENESS)."""
     likeness = _KIND_LIKENESS.get(kind, _KIND_LIKENESS["character"])
     return _IMAGE_SYSTEM_PROMPT_PREFIX + likeness + _IMAGE_SYSTEM_PROMPT_TAIL
 
@@ -415,6 +435,37 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
             f"No text, no labels, no speech bubbles. "
             f"Clear consistent visual design so this character is recognisable across many pages."
         )
+
+
+def build_style_frame_prompt(story: dict) -> str:
+    """Prompt for the ONE book-wide 'style frame' image (PER-82, "Lever B").
+
+    NOT a scene, NOT a page of the book, NOT tied to any story location — it
+    depicts no cast member and no environment at all. This is deliberately
+    stricter than the ticket's one-line summary ("sample environment + palette
+    swatches"): the PER-33 lesson is that any book-wide scenery reference bleeds
+    into every page, including pages set elsewhere, so this board contains only
+    abstract style samples (palette, texture/line treatment, lighting), never a
+    depicted place. It anchors the look of everything that isn't cast —
+    backgrounds, crowds, lighting, props — which today is generated from text
+    alone and drifts toward the model's world-knowledge default.
+    """
+    style = build_style_block(story)
+    return (
+        "Book style reference board — NOT a scene, NOT a page of the book, and NOT "
+        "tied to any place in the story. "
+        "Show only: a palette swatch strip of 5-8 solid colour blocks, a patch of "
+        "representative line/texture work (brushwork, linework, or shading technique "
+        "sample), and a small lighting study (a simple sphere or gradient showing how "
+        "light and shadow render in this style). "
+        f"Art style: {style}. "
+        "Absolutely no characters, no people, no animals, no named or recognisable "
+        "story location, no scenery, no background environment, and no text, labels, "
+        "or captions anywhere in the image. "
+        "Flat, plain, neutral background behind the swatches and samples. "
+        "This board exists only to document the book's rendering technique, palette, "
+        "and line treatment for reference on every page — it is never itself a scene."
+    )
 
 
 def resolve_story_rel(path_str: str, base_dir: Path) -> Path:
@@ -809,8 +860,40 @@ def main() -> None:
         entry["style_sheet"] = str(target)
         print(f"MEDIA: {target}")
 
+    # Book-wide style frame (PER-82, "Lever B") — one per book. Skipped under
+    # --only: the editor's per-cast-entry regenerate flow (edit_story.py's
+    # _run_sheet_regen -> editor.html's fetchSheetVersions) resyncs only that
+    # one entry's style_sheet field after an --only run, on the documented
+    # assumption that --only touches exactly one top-level diff (see
+    # CLAUDE.md's "--only NAME" note). Generating the frame here too would add
+    # a second, unsynced top-level field write — the editor's in-memory story
+    # wouldn't pick it up, and a subsequent save would silently drop it from
+    # disk. The frame is a book-level asset generated by full (non---only)
+    # runs, same as Stage 2's normal first-pass workflow.
+    if only_id is None:
+        frame_target = out_dir / "style-frame.png"
+        if frame_target.exists():
+            print(f"\nSkipping style frame — already exists: {frame_target}")
+            story["style_frame"] = str(frame_target)
+            print(f"MEDIA: {frame_target}")
+        else:
+            frame_prompt = build_style_frame_prompt(story)
+            print(f"\nGenerating book-wide style frame -> {frame_target}")
+            print(f"Prompt: {frame_prompt}")
+            ok = generate_image(
+                frame_prompt, [], frame_target, resolution, aspect_ratio,
+                system_prompt=image_system_prompt("style"),
+                ref_label=None,
+            )
+            if not ok or not frame_target.exists():
+                print("ERROR: style frame PNG not produced.", file=sys.stderr)
+                any_failed = True
+            else:
+                story["style_frame"] = str(frame_target)
+                print(f"MEDIA: {frame_target}")
+
     save_story(story, story_path)
-    print("\nstory.json updated with per-entry style_sheet paths.")
+    print("\nstory.json updated with per-entry style_sheet paths and the style_frame path.")
 
     if any_failed:
         sys.exit(1)
