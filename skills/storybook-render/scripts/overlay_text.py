@@ -137,7 +137,8 @@ def _load_font(font_ref: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(font_ref, size)
 
 
-def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+def _wrap_paragraph(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+    """Greedy word-wrap of a single paragraph (no newlines) to max_width."""
     words = text.split()
     lines: list[str] = []
     current = ""
@@ -155,7 +156,29 @@ def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Im
     return lines
 
 
-def _pick_font_size(img_w: int, img_h: int, word_count: int, font_ref: str) -> int:
+def _word_wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+    """Wrap story text to max_width, preserving the author's line structure.
+
+    Every newline is a hard break, so a dialogue line stays on its own line; a blank
+    line additionally yields an empty output line, keeping paragraphs visually apart.
+    Runs of blank lines collapse to one spacer, and spacers never lead or trail the
+    block. The returned list may therefore contain "" entries — callers must advance
+    by one line height for them without drawing anything.
+    """
+    lines: list[str] = []
+    for block in text.split("\n"):
+        block = block.strip()
+        if not block:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        lines.extend(_wrap_paragraph(block, font, max_width, draw))
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _pick_font_size(img_w: int, img_h: int, text: str, font_ref: str) -> int:
     max_w = int(img_w * (1 - 2 * H_PAD_FRACTION))
     zone_h = img_h * TEXT_ZONE_FRACTION       # comfortable preferred height
     cap_h = img_h * MAX_BOX_FRACTION           # hard ceiling (1/3 page)
@@ -165,7 +188,9 @@ def _pick_font_size(img_w: int, img_h: int, word_count: int, font_ref: str) -> i
         font = _load_font(font_ref, size)
         dummy_img = Image.new("RGBA", (img_w, img_h))
         draw = ImageDraw.Draw(dummy_img)
-        lines = _word_wrap("X " * word_count, font, max_w, draw)
+        # Measure the real text: paragraph spacers add lines that a synthetic
+        # word-count string would not, and undercounting here overflows the panel.
+        lines = _word_wrap(text, font, max_w, draw)
         line_h = draw.textbbox((0, 0), "Ag", font=font)[3] + 8
         total_h = len(lines) * line_h + V_PAD_TOP + V_PAD_BOTTOM
         return total_h <= limit
@@ -227,9 +252,8 @@ def overlay(
         return out_path
 
     w, h = img.size
-    word_count = len(text.split())
     font_ref = _resolve_font_ref(font, font_name)
-    font_size = _pick_font_size(w, h, word_count, font_ref)
+    font_size = _pick_font_size(w, h, text, font_ref)
     pil_font = _load_font(font_ref, font_size)
 
     max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
@@ -288,12 +312,14 @@ def overlay(
     text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
     text_y = box_y0 + V_PAD_TOP
     for line in lines:
-        if align == "center":
-            line_w = text_draw.textlength(line, font=pil_font)
-            x = int((w - line_w) / 2)
-        else:
-            x = h_pad
-        text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
+        # "" is a paragraph spacer: it occupies a line but draws nothing.
+        if line:
+            if align == "center":
+                line_w = text_draw.textlength(line, font=pil_font)
+                x = int((w - line_w) / 2)
+            else:
+                x = h_pad
+            text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
         text_y += line_h
         if text_y > box_y1 - V_PAD_BOTTOM:
             break
@@ -438,12 +464,14 @@ def text_page(
     text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
     text_y = box_y0 + v_pad
     for line in lines:
-        if align == "center":
-            line_w = text_draw.textlength(line, font=pil_font)
-            x = int((w - line_w) / 2)
-        else:
-            x = h_pad
-        text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
+        # "" is a paragraph spacer: it occupies a line but draws nothing.
+        if line:
+            if align == "center":
+                line_w = text_draw.textlength(line, font=pil_font)
+                x = int((w - line_w) / 2)
+            else:
+                x = h_pad
+            text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
         text_y += line_h
         if text_y > box_y1 - v_pad:
             break
