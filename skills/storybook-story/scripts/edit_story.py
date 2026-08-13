@@ -231,6 +231,65 @@ def resolve_story_rel(path_str: str, story_dir: Path) -> Path:
     return p if p.is_absolute() else story_dir / p
 
 
+def read_cost_ledger(ledger_path: Path) -> list[dict]:
+    """Read out_dir/costs.jsonl (PER-35) into a list of records, skipping
+    unparseable lines. Missing file -> []. Read-only counterpart of the
+    render_book.py / make_style_sheet.py copies (which also append) — this
+    editor never writes cost records, only summarizes them for /api/status.
+    """
+    if not ledger_path.exists():
+        return []
+    records: list[dict] = []
+    try:
+        with ledger_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    return records
+
+
+def summarize_costs_for_status(records: list[dict]) -> dict:
+    """Reduce costs.jsonl records into the `costs` block of GET /api/status.
+
+    `unpriced` counts records whose `usd` is None (unrecognised model — never
+    silently folded into the total); `estimated` is True if any record used a
+    fallback token split (see render_book.py's gemini_call_cost). A `by_script`
+    breakdown backs the top-bar readout's tooltip.
+    """
+    total = 0.0
+    unpriced = 0
+    estimated = False
+    by_script: dict[str, float] = {}
+    as_of = None
+    for r in records:
+        usd = r.get("usd")
+        if usd is None:
+            unpriced += 1
+        else:
+            total += usd
+            script = r.get("script") or "unknown"
+            by_script[script] = round(by_script.get(script, 0.0) + usd, 6)
+        if r.get("estimated"):
+            estimated = True
+        if r.get("pricing_as_of"):
+            as_of = r["pricing_as_of"]
+    return {
+        "total_usd": round(total, 4),
+        "calls": len(records),
+        "unpriced": unpriced,
+        "estimated": estimated,
+        "by_script": by_script,
+        "as_of": as_of,
+    }
+
+
 def _ref_image_list(char: dict) -> list:
     """Normalize the string-or-array ref_image polymorphism to a list."""
     ref = char.get("ref_image")
@@ -1456,6 +1515,10 @@ def make_handler(story_path: Path, schema: dict):
             style_frame_exists = (
                 isinstance(frame, str) and resolve_story_rel(frame, story_dir).exists()
             )
+            # PER-35: book-lifetime cost readout. out_dir == story_dir here — the
+            # editor never passes --out-dir to either paid script. Missing ledger
+            # (book never rendered) -> all zeros, not an error.
+            costs = summarize_costs_for_status(read_cost_ledger(story_dir / "costs.jsonl"))
             self._send_json(
                 200,
                 {
@@ -1463,6 +1526,7 @@ def make_handler(story_path: Path, schema: dict):
                     "pages": page_status,
                     "cast": cast_status,
                     "style_frame_exists": style_frame_exists,
+                    "costs": costs,
                 },
             )
 

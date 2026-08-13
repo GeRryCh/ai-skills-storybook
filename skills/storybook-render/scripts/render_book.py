@@ -118,6 +118,23 @@ OPENAI_IMAGE_MODEL = "gpt-image-2"
 OPENAI_IMAGE_QUALITY = "medium"
 OPENAI_IMAGE_MODERATION = "low"
 
+# Per-1M-token USD rates (PER-35). Keep identical to make_style_sheet.py's copy
+# (script-authoring.md keep-in-sync list) so the two files never drift on a shared price.
+# Source: OpenAI + Google's published per-1M-token image-generation pricing.
+PRICING = {
+    FLASH_IMAGE_MODEL: {"input": 0.50, "output_text": 3.00, "output_image": 60.00},
+    PRO_IMAGE_MODEL: {"input": 2.00, "output_text": 12.00, "output_image": 120.00},
+    OPENAI_IMAGE_MODEL: {"text_input": 5.00, "image_input": 8.00, "output_image": 30.00},
+}
+PRICING_AS_OF = "2026-08-13"
+
+# Cost records for every API response received this run. Pages render concurrently via
+# asyncio (single-threaded event loop) plus the OpenAI fallback via asyncio.to_thread —
+# list.append is atomic under the GIL either way, so no lock is needed. Summarized at the
+# end of main() for the "Cost this run" stdout line; the full out_dir/costs.jsonl ledger
+# (this run's records plus every prior run's) backs the "Book total" line.
+_RUN_COST_RECORDS: list[dict] = []
+
 # Retry policy for transient failures (429 rate-limit / 5xx). Pages are fired all
 # at once, so a single 429 must not silently drop a page.
 MAX_RETRIES = 5
@@ -1136,6 +1153,21 @@ def _openai_fallback_image(
             except Exception:
                 pass
 
+    # PER-35: record cost as soon as a response is in hand — the call is billed
+    # whether or not the b64 extraction below succeeds.
+    usd, tokens, estimated = openai_call_cost(getattr(response, "usage", None), OPENAI_IMAGE_MODEL)
+    append_cost_record(
+        raw_path.parent.parent / "costs.jsonl",
+        script="render_book.py",
+        vendor="openai",
+        model=OPENAI_IMAGE_MODEL,
+        target=raw_path,
+        ok=True,
+        usd=usd,
+        estimated=estimated,
+        tokens=tokens,
+    )
+
     try:
         b64 = response.data[0].b64_json
     except Exception:
@@ -1210,6 +1242,192 @@ def append_api_log(
             os.close(fd)
     except Exception as e:
         print(f"WARNING: failed to write API log {log_path}: {e}", file=sys.stderr)
+
+
+def gemini_call_cost(usage_metadata, model: str) -> tuple[float | None, dict, bool]:
+    """Compute USD cost from a Gemini generate_content response's usage_metadata.
+
+    Returns (usd, tokens, estimated). `usd` is None when `model` has no PRICING
+    entry — never guess a price for an unrecognised model.
+
+    Gemini's `candidates_tokens_details` (a per-modality breakdown) is Optional;
+    when present it gives an exact image/text output split. When absent, the
+    whole `candidates_token_count` is treated as image output (the dominant
+    cost driver for an image-generation call) and `estimated=True` is set so
+    callers can flag the figure rather than silently presenting it as exact.
+    `thoughts_token_count` (pro model's thinking step) is billed at the text/
+    thinking output rate, matching Google's published pricing table. Not
+    duplicated elsewhere — make_style_sheet.py never calls Gemini.
+    """
+    if usage_metadata is None:
+        return None, {}, False
+    input_tokens = getattr(usage_metadata, "prompt_token_count", None) or 0
+    thoughts = getattr(usage_metadata, "thoughts_token_count", None) or 0
+    candidates_total = getattr(usage_metadata, "candidates_token_count", None) or 0
+    details = getattr(usage_metadata, "candidates_tokens_details", None)
+    estimated = False
+    if details:
+        image_tokens = sum(
+            (d.token_count or 0) for d in details if str(getattr(d, "modality", "")).upper() == "IMAGE"
+        )
+        text_tokens = sum(
+            (d.token_count or 0) for d in details if str(getattr(d, "modality", "")).upper() == "TEXT"
+        )
+    else:
+        image_tokens = candidates_total
+        text_tokens = 0
+        estimated = True
+    tokens = {
+        "input": input_tokens,
+        "output_image": image_tokens,
+        "output_text": text_tokens,
+        "thoughts": thoughts,
+    }
+    rates = PRICING.get(model)
+    if not rates:
+        return None, tokens, estimated
+    usd = (
+        input_tokens * rates["input"]
+        + (text_tokens + thoughts) * rates["output_text"]
+        + image_tokens * rates["output_image"]
+    ) / 1_000_000
+    return round(usd, 6), tokens, estimated
+
+
+def openai_call_cost(usage, model: str) -> tuple[float | None, dict, bool]:
+    """Compute USD cost from an OpenAI images.edit/generate response's `usage` object.
+
+    Returns (usd, tokens, estimated). `usd` is None when `model` has no PRICING
+    entry — never guess a price for an unrecognised model. `estimated` is always
+    False here: OpenAI's usage object always separates input text/image tokens
+    and reports total output tokens directly, so no inference is ever needed
+    (contrast gemini_call_cost above, whose modality breakdown is optional).
+    Keep in sync with the copy in make_style_sheet.py.
+    """
+    if usage is None:
+        return None, {}, False
+    details = getattr(usage, "input_tokens_details", None)
+    text_in = getattr(details, "text_tokens", 0) or 0
+    image_in = getattr(details, "image_tokens", 0) or 0
+    output = getattr(usage, "output_tokens", 0) or 0
+    tokens = {"input_text": text_in, "input_image": image_in, "output": output}
+    rates = PRICING.get(model)
+    if not rates:
+        return None, tokens, False
+    usd = (
+        text_in * rates["text_input"]
+        + image_in * rates["image_input"]
+        + output * rates["output_image"]
+    ) / 1_000_000
+    return round(usd, 6), tokens, False
+
+
+def append_cost_record(
+    ledger_path: Path,
+    *,
+    script: str,
+    vendor: str,
+    model: str,
+    target: Path,
+    ok: bool,
+    usd: float | None,
+    estimated: bool,
+    tokens: dict,
+) -> None:
+    """Append one cost record to out_dir/costs.jsonl and this run's in-memory tally.
+
+    One record per API response actually received — not per page. A retried
+    Gemini call that came back empty (SAFETY/RECITATION) or blocked
+    (PROHIBITED_CONTENT) still spent tokens and gets its own record (`ok=False`);
+    only network/HTTP failures that never bound a response are unrecorded (no
+    usage data exists for them). Best-effort — a logging failure must never
+    fail a paid call. Same atomic single-os.write-to-O_APPEND-fd idiom as
+    append_api_log(). Keep in sync with the copy in make_style_sheet.py.
+    """
+    record = {
+        "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "script": script,
+        "vendor": vendor,
+        "model": model,
+        "target": target.name,
+        "ok": ok,
+        "usd": usd,
+        "estimated": estimated,
+        "pricing_as_of": PRICING_AS_OF,
+        "tokens": tokens,
+    }
+    _RUN_COST_RECORDS.append(record)
+    try:
+        line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+        fd = os.open(ledger_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except Exception as e:
+        print(f"WARNING: failed to write cost ledger {ledger_path}: {e}", file=sys.stderr)
+
+
+def read_cost_ledger(ledger_path: Path) -> list[dict]:
+    """Read costs.jsonl into a list of records, skipping unparseable lines.
+
+    Missing file -> []. A malformed line (partial write, hand-edit) is skipped
+    rather than raising — the ledger is a best-effort read side, never a
+    correctness gate. Keep in sync with the copy in make_style_sheet.py.
+    """
+    if not ledger_path.exists():
+        return []
+    records: list[dict] = []
+    try:
+        with ledger_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    return records
+
+
+def summarize_cost_records(records: list[dict]) -> tuple[float, int, int, bool]:
+    """Reduce a list of cost records to (total_usd, calls, unpriced, estimated).
+
+    `unpriced` counts records whose `usd` is None (unrecognised model — never
+    silently folded into the total). `estimated` is True if any record used a
+    fallback token split. Keep in sync with the copy in make_style_sheet.py.
+    """
+    total = 0.0
+    unpriced = 0
+    estimated = False
+    for r in records:
+        usd = r.get("usd")
+        if usd is None:
+            unpriced += 1
+        else:
+            total += usd
+        if r.get("estimated"):
+            estimated = True
+    return round(total, 4), len(records), unpriced, estimated
+
+
+def format_cost_line(
+    label: str, total_usd: float, calls: int, unpriced: int, estimated: bool, suffix: str = ""
+) -> str:
+    """Render one 'Cost this run' / 'Book total' stdout line.
+
+    `~$` prefix when any summed record was estimated; explicit ', N unpriced'
+    when any record had no priced model — a total must never silently omit
+    calls. Keep in sync with the copy in make_style_sheet.py.
+    """
+    prefix = "~" if estimated else ""
+    parts = [f"{calls} call{'s' if calls != 1 else ''}"]
+    if unpriced:
+        parts.append(f"{unpriced} unpriced")
+    return f"{label}: {prefix}${total_usd:.2f}  ({', '.join(parts)}){suffix}"
 
 
 async def run_nano_banana(
@@ -1349,6 +1567,23 @@ async def run_nano_banana(
             # response as a transient, retryable condition rather than crashing
             # on None parts (PER-64).
             image_data = _extract_image_bytes(response)
+            # PER-35: record cost for every response received this attempt, not
+            # just the final successful one — an empty/blocked response still
+            # spent tokens (Gemini processed the prompt + refs either way).
+            usd, tokens, estimated = gemini_call_cost(
+                getattr(response, "usage_metadata", None), model
+            )
+            append_cost_record(
+                raw_path.parent.parent / "costs.jsonl",
+                script="render_book.py",
+                vendor="gemini",
+                model=model,
+                target=raw_path,
+                ok=image_data is not None,
+                usd=usd,
+                estimated=estimated,
+                tokens=tokens,
+            )
             if image_data is not None:
                 break
             reason = _empty_response_reason(response)
@@ -1847,6 +2082,23 @@ def main() -> None:
     errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent, fallback_vendor=fallback_vendor)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
+
+    # PER-35: print a cost summary whenever this run actually spent anything —
+    # printed regardless of `errors` since a partial failure still spent money.
+    run_total, run_calls, run_unpriced, run_estimated = summarize_cost_records(_RUN_COST_RECORDS)
+    if run_calls:
+        ledger_path = out_dir / "costs.jsonl"
+        print(format_cost_line("Cost this run", run_total, run_calls, run_unpriced, run_estimated))
+        book_total, book_calls, book_unpriced, book_estimated = summarize_cost_records(
+            read_cost_ledger(ledger_path)
+        )
+        print(
+            format_cost_line(
+                "Book total", book_total, book_calls, book_unpriced, book_estimated,
+                suffix=f"      [{ledger_path}]",
+            )
+        )
+
     if errors:
         sys.exit(1)
 

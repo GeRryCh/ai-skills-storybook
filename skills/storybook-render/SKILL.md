@@ -178,7 +178,11 @@ Per-page `story.json` fields: `text_placement` (top/bottom/floating, default flo
 
 ## Handoff
 
-After a full render, show all `MEDIA:` page images to the user. **Stop for review.** This is the point of the Stage 3/4 split — the user reviews the rendered pages before committing to assembly. Fix any pages with `--only N` and re-render as needed.
+After a full render, show all `MEDIA:` page images to the user, plus the cost summary
+(PER-35) the script prints when it made at least one paid call: `Cost this run: $X.XX
+(N calls)` and `Book total: $Y.YY (M calls) [out_dir/costs.jsonl]`. **Stop for review.** This
+is the point of the Stage 3/4 split — the user reviews the rendered pages before committing
+to assembly. Fix any pages with `--only N` and re-render as needed.
 
 Once the user approves:
 

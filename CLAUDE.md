@@ -79,6 +79,24 @@ this log (the `--composite-only` guard returns before the hook). Editor regenera
 `render_book.py` as a subprocess, so they are automatically covered. `log.txt` is
 gitignored (including inside `tests/fixtures/`).
 
+Both paid scripts also write an append-only **`out_dir/costs.jsonl`** cost ledger (PER-35) —
+one JSON record per API response actually received (not per page/sheet; an empty/blocked
+Gemini retry still spent tokens and gets its own record). Both vendors return exact token
+usage on the image response (OpenAI's `response.usage`, Gemini's `response.usage_metadata`),
+so cost is computed from real usage, not estimated from a per-image flat rate. `usd` is
+`null` when the billed model has no entry in the `PRICING` table (never guessed) and
+`estimated: true` marks a record whose Gemini `candidates_tokens_details` modality
+breakdown was absent (only the aggregate `candidates_token_count` was available, folded into
+the image-output bucket). Both scripts print a `Cost this run:` / `Book total:` summary at
+the end of any run that made at least one paid call. The helpers (`PRICING`,
+`PRICING_AS_OF`, `gemini_call_cost()` — `render_book.py` only, `openai_call_cost()`,
+`append_cost_record()`, `read_cost_ledger()`, `summarize_cost_records()`,
+`format_cost_line()`) are on the same duplicated-and-kept-in-sync list as `append_api_log()`
+— see `.claude/rules/script-authoring.md`. The visual editor (`edit_story.py`) reads the
+same file (read-only — it never writes cost records) to fold a `costs` summary block into
+`GET /api/status`, which the top-bar readout displays next to Save as the book-lifetime
+total. `costs.jsonl` follows the exact same gitignore treatment as `log.txt`.
+
 A top-level `style_guide` object is **required** in `story.json`: both paid scripts
 assemble it into one byte-identical style block (`build_style_block()`, duplicated in
 both scripts — keep the copies in sync) injected verbatim into every image call (both vendors). This is

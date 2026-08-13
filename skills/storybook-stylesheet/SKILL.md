@@ -92,11 +92,13 @@ re-run a full (no `--only`) invocation.
 ## Approval gate
 
 After generation, the script prints `MEDIA:` lines for every sheet **and for the style
-frame**. Show **all** of them to the user and ask them to confirm every character looks
-right **before** rendering pages. Each character sheet anchors that character on every page
-it appears — a wrong sheet poisons those pages. The style frame is sent on *every* page, so
-a bad frame is strictly worse: it poisons the whole book, not just the pages one character
-appears on.
+frame**, followed by a cost summary (PER-35) when it made at least one paid call:
+`Cost this run: $X.XX (N calls)` and `Book total: $Y.YY (M calls) [out_dir/costs.jsonl]`.
+Show **all** the `MEDIA:` images to the user and ask them to confirm every character looks
+right **before** rendering pages, and report the cost summary alongside them. Each character
+sheet anchors that character on every page it appears — a wrong sheet poisons those pages.
+The style frame is sent on *every* page, so a bad frame is strictly worse: it poisons the
+whole book, not just the pages one character appears on.
 
 If a sheet is wrong:
 1. Fix that character's entry in the `cast` array in `story.json` (sharpen

@@ -108,3 +108,17 @@ Run `merge_pdf.py` / `merge_epub.py` before `package_book.py` so the book files 
 ## Idempotency / cost
 
 Everything in this stage is free Pillow/stdlib work — no Gemini calls. Outputs (PDF, EPUB, zip) are always rebuilt and overwritten on each run. Nothing ever re-renders pages. Re-run any time, including after re-rendering pages with storybook-render.
+
+## Report the book-lifetime cost (PER-35)
+
+A full pipeline run *ends* here — Stage 2/3's own gates only ever report a running total up
+to that point, so this is the one place a **final** figure can be given. Before the
+completion message, read `{out_dir}/costs.jsonl` directly (one JSON object per line; a
+missing file means the book was never rendered — report $0.00). Sum each record's `usd`
+field, prefix `~` if any record has `"estimated": true`, and note `N unpriced` if any
+record's `usd` is `null` — never silently drop a call from the total. State this total in
+the completion message, e.g.:
+
+```
+Book files assembled. Total spent on this book: $4.17 (41 calls).
+```

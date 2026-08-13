@@ -8,10 +8,12 @@ __pycache__
 *.epub
 *.zip
 log.txt
+costs.jsonl
 
 # test fixtures — track committed sample artifacts inside tests/
 !/tests/
 !/tests/**
-# re-ignore log.txt inside test fixture dirs (paid regen.sh runs produce these)
+# re-ignore log.txt / costs.jsonl inside test fixture dirs (paid regen.sh runs produce these)
 /tests/**/log.txt
+/tests/**/costs.jsonl
 __pycache__/

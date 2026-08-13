@@ -204,6 +204,7 @@ dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
   <h1 id="header-title">story.json editor</h1>
   <span class="dirty-dot" id="dirty-dot" title="Unsaved changes">●</span>
   <span id="autosave-hint" style="font-size:11px;color:#fb923c;opacity:0.9;display:none"></span>
+  <span id="cost-readout" title="" style="font-size:12px;color:#94a3b8"></span>
   <button class="btn-primary" id="btn-save" onclick="triggerSave()">Save</button>
 </header>
 
@@ -287,6 +288,31 @@ const editedPages = new Set(); // edited since last render — amber badge (not 
 let renderStatus = {};
 let charStatusData = {};
 let styleFrameExists = false; // PER-82: book-wide style frame — read-only preview flag
+
+// PER-35: apply a /api/status response — the three assignments below were
+// previously repeated at every call site; centralized here so the cost
+// readout updates everywhere status does, with no site left stale.
+function applyStatus(sd) {
+  renderStatus     = sd.pages || {};
+  charStatusData   = sd.cast  || {};
+  styleFrameExists = !!sd.style_frame_exists;
+  renderCostReadout(sd.costs);
+}
+
+function renderCostReadout(c) {
+  const el = document.getElementById('cost-readout');
+  if (!el) return;
+  if (!c || !c.calls) { el.textContent = ''; el.title = ''; return; }
+  const prefix = c.estimated ? '~' : '';
+  const unpriced = c.unpriced ? ` · ${c.unpriced} unpriced` : '';
+  el.textContent = `${prefix}$${c.total_usd.toFixed(2)}${unpriced}`;
+  const byScript = Object.entries(c.by_script || {})
+    .map(([s, v]) => `${s}  $${v.toFixed(2)}`).join('\n');
+  el.title = [
+    byScript,
+    `${c.calls} call${c.calls === 1 ? '' : 's'} total` + (c.as_of ? ` · prices as of ${c.as_of}` : ''),
+  ].filter(Boolean).join('\n');
+}
 // ── Auto-save state ────────────────────────────────────────────────────────
 let autoSaveTimer  = null;  // debounce handle
 let saveInFlight   = false; // one PUT at a time
@@ -464,9 +490,7 @@ async function init() {
     window._schema = schema;
     storyMtime = storyResp.headers.get('X-Story-Mtime');
     const status = await statusResp.json();
-    renderStatus     = status.pages || {};
-    charStatusData   = status.cast || {};
-    styleFrameExists = !!status.style_frame_exists;
+    applyStatus(status);
   } catch (e) {
     document.getElementById('main').innerHTML =
       `<p style="color:red">Failed to load: ${e.message}</p>`;
@@ -1095,13 +1119,11 @@ async function fetchSheetVersions(cid) {
         } catch (e) {
           console.warn('fetchSheetVersions: story resync failed', e);
         }
-        // Refresh charStatusData (keyed by id)
+        // Refresh charStatusData (keyed by id) + cost readout — a sheet regen is paid.
         try {
           const sr = await fetch('/api/status');
           const sd = await sr.json();
-          renderStatus     = sd.pages  || {};
-          charStatusData   = sd.cast   || {};
-          styleFrameExists = !!sd.style_frame_exists;
+          applyStatus(sd);
         } catch (_) {}
         // Re-render the sheet preview for this cast entry only.
         const i3 = _sheetIdx(cid);
@@ -1861,6 +1883,16 @@ async function fetchVersions(num) {
     const status = data.regen && data.regen.status;
     if (_regenPolls.has(num) && (status === 'done' || status === 'error')) {
       stopRegenPoll(num);
+      // PER-35: a per-page regenerate is a paid call regardless of outcome (a
+      // failed attempt can still have spent tokens before erroring) — refresh
+      // the cost readout so it doesn't sit stale until the next save. A free
+      // recomposite also passes through here; the extra /api/status fetch is
+      // a harmless no-op cost-wise.
+      try {
+        const sr = await fetch('/api/status');
+        const sd = await sr.json();
+        if (sd.ok) applyStatus(sd);
+      } catch (_) { /* non-fatal */ }
       if (status === 'done') {
         renderStatus[String(num)] = {rendered: true};
         const cardIdx = (story.pages || []).findIndex(p => p.page_num === num);
@@ -2212,12 +2244,12 @@ async function _refreshRegenAllStatus() {
         errEl.innerHTML = `⚠ Re-generation failed:<pre>${esc(data.error.slice(-600))}</pre>`;
       }
 
-      // Refresh global render status and all page badges.
+      // Refresh global render status, cost readout, and all page badges.
       try {
         const srResp = await fetch('/api/status');
         const srData = await srResp.json();
         if (srData.ok) {
-          renderStatus = srData.pages || {};
+          applyStatus(srData);
           document.querySelectorAll('[data-page-badge]').forEach(el => {
             const idx = parseInt(el.dataset.pageBadge, 10);
             const page = story.pages && story.pages[idx];
@@ -2345,9 +2377,7 @@ async function triggerSave(auto = false) {
     // Refetch status after save (style_sheet / style_frame may now exist)
     const sr = await fetch('/api/status');
     const sd = await sr.json();
-    renderStatus     = sd.pages || {};
-    charStatusData   = sd.cast || {};
-    styleFrameExists = !!sd.style_frame_exists;
+    applyStatus(sd);
     renderPages();
   } catch (e) {
     if (!auto) showStatus('error', ['Network error: ' + e.message]);

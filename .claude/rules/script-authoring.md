@@ -21,6 +21,17 @@ Both paid scripts skip work whose output already exists. `make_style_sheet.py` s
 intentionally duplicated in both `render_book.py` and `make_style_sheet.py`. Any change to
 any of these must be applied to both copies.
 
+**PER-35 cost-accounting helpers** join this list: `PRICING`, `PRICING_AS_OF`,
+`openai_call_cost()`, `append_cost_record()`, `read_cost_ledger()`,
+`summarize_cost_records()`, and `format_cost_line()` are duplicated identically in both
+files (`tests/unit/test_costs.py`'s `TestPricingTablesInSync` guards the `PRICING` copies
+against drift). `gemini_call_cost()` lives only in `render_book.py` — `make_style_sheet.py`
+never calls Gemini — but its `PRICING` copy still carries the Gemini model entries so the
+table itself stays identical either way. `edit_story.py` carries a **read-only** third copy
+of `read_cost_ledger()` (renamed `summarize_costs_for_status()` for the summarizer, since its
+output shape is the `/api/status` JSON block, not a stdout line) — it never writes records,
+so `append_cost_record()`/`PRICING` have no reason to exist there.
+
 ## No migration shim for legacy keys
 
 Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`, `locations`, `pages[].characters`, `pages[].location`) with `exit 2` and a migration message. No shim — clean break.
