@@ -112,6 +112,19 @@ class TestGeminiCallCost(unittest.TestCase):
         self.assertEqual(tokens["output_text"], 0)
         self.assertAlmostEqual(usd, 0.0672, places=6)
 
+    def test_blocked_response_with_no_candidates_is_not_estimated(self):
+        """A PROHIBITED_CONTENT/SAFETY/RECITATION block has candidates_token_count=0
+        and no details -> nothing was inferred (there was no output to split), so
+        estimated must stay False. Regression guard: this used to be hardcoded True,
+        which would permanently hedge a book's whole cost total behind one blocked
+        page even though every other call had an exact modality split."""
+        um = _fake_usage_metadata(prompt=500, candidates=0, details=None)
+        usd, tokens, estimated = render_book.gemini_call_cost(um, "gemini-3.1-flash-image")
+        self.assertFalse(estimated)
+        self.assertEqual(tokens["output_image"], 0)
+        expected = round(500 * 0.50 / 1_000_000, 6)
+        self.assertEqual(usd, expected)
+
     def test_unknown_model_returns_none_usd_but_keeps_tokens(self):
         um = _fake_usage_metadata(prompt=0, candidates=1120, details=[("IMAGE", 1120)])
         usd, tokens, estimated = render_book.gemini_call_cost(um, "some-future-model")

@@ -80,6 +80,7 @@ module covering what you changed:
 | editor.html `@`-picker / `_showMentionPop` | `uv run tests/run_e2e.py tests/e2e/test_mention_picker.py` |
 | `_castIdsFromPrompt` / `_syncPageCast` / cast-on-page view | `uv run tests/run_e2e.py tests/e2e/test_cast_derivation.py` |
 | `PUT /api/story` save / story.json round-trip | `uv run tests/run_e2e.py tests/e2e/test_save_roundtrip.py` |
+| `#cost-readout` / `applyStatus()` / `/api/status`'s `costs` block | `uv run tests/run_e2e.py tests/e2e/test_cost_readout.py` |
 | Pure Python function change only | No e2e needed |
 
 First-time browser setup (once per machine):

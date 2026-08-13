@@ -32,6 +32,7 @@ On every task completion:
    - editor.html `@`-picker change → `uv run tests/run_e2e.py tests/e2e/test_mention_picker.py`
    - cast-derivation JS change → `uv run tests/run_e2e.py tests/e2e/test_cast_derivation.py`
    - save/API change → `uv run tests/run_e2e.py tests/e2e/test_save_roundtrip.py`
+   - cost readout / `applyStatus()` / `/api/status`'s `costs` block → `uv run tests/run_e2e.py tests/e2e/test_cost_readout.py`
    - pure Python function change → no e2e needed
 
    Do **not** run the full e2e suite on every task — it is browser-heavy.
@@ -58,11 +59,13 @@ tests/
     test_collect_input_images.py
     test_validate_story.py
     test_cli_exit_codes.py
+    test_costs.py        # PER-35: pricing math + ledger round-trip (both scripts)
   e2e/
     _support.py         # EditorServer (start/stop server + temp fixture copy)
     test_mention_picker.py
     test_cast_derivation.py
     test_save_roundtrip.py
+    test_cost_readout.py # PER-35: top-bar cost readout renders from /api/status
   fixtures/             # committed sample books (read-only for tests)
   gen_ref.py            # paid artifact-regeneration script (not a test)
   regen.sh              # paid regen script (not a test)

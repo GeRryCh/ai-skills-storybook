@@ -873,7 +873,10 @@ def generate_image(
                 pass
 
     # PER-35: record cost as soon as a response is in hand — the call is billed
-    # whether or not the b64 extraction below succeeds.
+    # whether or not the b64 extraction below succeeds. Unlike Gemini (which can
+    # return 200 with no image on a safety block), a 200 from images.edit/
+    # images.generate always carries image data — `ok` isn't derived from the
+    # response here, it's just always True for a successfully bound response.
     usd, tokens, estimated = openai_call_cost(getattr(response, "usage", None), IMAGE_MODEL)
     append_cost_record(
         out_path.parent / "costs.jsonl",

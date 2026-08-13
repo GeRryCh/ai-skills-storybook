@@ -1154,7 +1154,10 @@ def _openai_fallback_image(
                 pass
 
     # PER-35: record cost as soon as a response is in hand — the call is billed
-    # whether or not the b64 extraction below succeeds.
+    # whether or not the b64 extraction below succeeds. Unlike Gemini (which can
+    # return 200 with no image on a safety block), a 200 from images.edit/
+    # images.generate always carries image data — `ok` isn't derived from the
+    # response here, it's just always True for a successfully bound response.
     usd, tokens, estimated = openai_call_cost(getattr(response, "usage", None), OPENAI_IMAGE_MODEL)
     append_cost_record(
         raw_path.parent.parent / "costs.jsonl",
@@ -1251,10 +1254,14 @@ def gemini_call_cost(usage_metadata, model: str) -> tuple[float | None, dict, bo
     entry — never guess a price for an unrecognised model.
 
     Gemini's `candidates_tokens_details` (a per-modality breakdown) is Optional;
-    when present it gives an exact image/text output split. When absent, the
-    whole `candidates_token_count` is treated as image output (the dominant
-    cost driver for an image-generation call) and `estimated=True` is set so
-    callers can flag the figure rather than silently presenting it as exact.
+    when present it gives an exact image/text output split. When absent AND
+    there was actually output to split (`candidates_token_count > 0`), the
+    whole count is treated as image output (the dominant cost driver for an
+    image-generation call) and `estimated=True` is set so callers can flag the
+    figure rather than silently presenting it as exact. A response with no
+    candidates at all (empty/blocked — SAFETY, RECITATION, PROHIBITED_CONTENT)
+    has zero output tokens either way, so nothing was inferred there: its cost
+    is exactly `input_tokens * input_rate`, and `estimated` stays False.
     `thoughts_token_count` (pro model's thinking step) is billed at the text/
     thinking output rate, matching Google's published pricing table. Not
     duplicated elsewhere — make_style_sheet.py never calls Gemini.
@@ -1276,7 +1283,7 @@ def gemini_call_cost(usage_metadata, model: str) -> tuple[float | None, dict, bo
     else:
         image_tokens = candidates_total
         text_tokens = 0
-        estimated = True
+        estimated = candidates_total > 0
     tokens = {
         "input": input_tokens,
         "output_image": image_tokens,
