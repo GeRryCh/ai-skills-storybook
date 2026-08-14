@@ -711,6 +711,27 @@ def _page_preview_candidates(num: int) -> list[str]:
     ]
 
 
+def _text_page_rel(directory: Path, story_dir: Path, num: int) -> str | None:
+    """Path to the long-mode text page sitting beside an art preview, if present.
+
+    A long-mode body page renders as two files — full-bleed art plus a separate
+    text page — but only the art is a preview candidate, so without this the
+    text page never reaches the UI. Returns None whenever there is no second
+    page to show: overlay/native pages, the long-mode cover (combined), and any
+    page whose art rendered but whose text page did not.
+
+    `directory` is the folder holding the art preview: pages/ for the canonical
+    slot, or a history stamp dir for an archived version.
+    """
+    path = directory / f"page-{num:02d}-long-text.png"
+    if not path.is_file():
+        return None
+    try:
+        return str(path.relative_to(story_dir))
+    except ValueError:
+        return str(path)
+
+
 def _canonical_artifact_names(num: int) -> list[str]:
     """All canonical artifact filenames archived and deleted on regenerate.
 
@@ -960,6 +981,9 @@ def _build_versions_payload(
             {
                 "id": entry["id"],
                 "path": str(rel),
+                "text_path": _text_page_rel(
+                    entry["preview_path"].parent, story_dir, num
+                ),
                 "mtime": entry["mtime"],
                 "in_use": in_use,
             }
@@ -976,6 +1000,7 @@ def _build_versions_payload(
             {
                 "id": "current",
                 "path": str(Path("pages") / canonical_preview_name),
+                "text_path": _text_page_rel(pages_dir, story_dir, num),
                 "mtime": mtime,
                 "in_use": True,
             },

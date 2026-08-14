@@ -130,7 +130,10 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 /* ── page image preview + generation history ──────────────────────────── */
 .pg-preview-wrap{margin-bottom:14px}
 .preview-img-area{margin-bottom:4px}
+.preview-pair{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
 .preview-img-wrap{position:relative;display:inline-block;max-width:100%}
+.textpage-badge{background:#1e293b;color:#e2e8f0;font-size:11px;padding:2px 8px;
+  border-radius:10px;font-weight:600;pointer-events:none;white-space:nowrap}
 .preview-img{max-width:100%;max-height:300px;border-radius:6px;
   border:1px solid #e2e8f0;display:block;background:#f8fafc}
 .preview-overlay{position:absolute;top:6px;right:6px}
@@ -1833,8 +1836,14 @@ function _renderVersionUI(num, apiData) {
   const n    = versions.length;
   const buster = encodeURIComponent(v.mtime || '');
   const imgSrc = `/img?path=${encodeURIComponent(v.path)}&t=${buster}`;
+  // Long-mode body pages are two physical pages: art + a separate text page.
+  // text_path is null for overlay/native pages and for the long-mode cover.
+  const textSrc = v.text_path
+    ? `/img?path=${encodeURIComponent(v.text_path)}&t=${buster}`
+    : null;
 
   area.innerHTML =
+    `<div class="preview-pair">` +
     `<div class="preview-img-wrap">` +
     `<img class="preview-img" src="${esc(imgSrc)}" alt="Page ${num} v${viewIdx+1}"` +
     ` onerror="this.alt='image not found on disk'">` +
@@ -1843,6 +1852,14 @@ function _renderVersionUI(num, apiData) {
       ? `<span class="inuse-badge">✓ Used in book</span>`
       : `<button class="btn-use-version" onclick="_clickSelectVersion(${num}, '${esc(v.id)}')">Use in book</button>`) +
     `</div></div>` +
+    (textSrc
+      ? `<div class="preview-img-wrap">` +
+        `<img class="preview-img" src="${esc(textSrc)}" alt="Page ${num} text page"` +
+        ` onerror="this.alt='text page not found on disk'">` +
+        `<div class="preview-overlay"><span class="textpage-badge">text page</span></div>` +
+        `</div>`
+      : '') +
+    `</div>` +
     (n > 1
       ? `<div class="preview-nav">` +
         `<button class="btn-sm" ${viewIdx <= 0 ? 'disabled' : ''} onclick="_prevVersion(${num})">‹</button>` +
