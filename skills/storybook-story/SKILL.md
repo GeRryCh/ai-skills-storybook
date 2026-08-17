@@ -285,14 +285,21 @@ see **image_prompt rules** below).
 
 #### Cap note
 
-The location reference (its Stage-2 sheet, or the first photo as fallback) is the
-**lowest-priority** reference image within Stage 3's per-model cap (4 flash default / 5 pro):
+References ride two independent lanes (PER-83), not one flat cap, and both lane caps are
+per-model (PER-96): a character lane (4 flash / 5 pro) and an object lane, shared by
+locations + objects, that's **10 on flash but only 6 on pro**. Within the object lane,
+locations rank above objects — a wrong-style background poisons the whole frame, a
+slightly-off prop does not:
 
-> hero sheet → remaining character sheets → object refs → location sheet
+> character lane: hero sheet → remaining character sheets
+> object lane: location refs → object refs → book-wide style frame (lowest priority)
 
-On pages with 3 or more cast members, the location reference may be dropped from the cap
-(it will be logged — never silently dropped). On pages whose `cast` lists only the place
-(no characters or objects), the location sheet is the sole reference image.
+The location reference (its Stage-2 sheet, or the first photo as fallback) only competes
+against the object lane's cap — it is never dropped for having "too many characters" on the
+page. It can still be dropped if the object lane itself is over its cap (logged — never
+silently dropped), which on a pro page needs fewer object/location refs to trigger than on
+flash. On pages whose `cast` lists only the place (no characters or objects), the location
+sheet is the sole reference image.
 
 ---
 
@@ -323,7 +330,7 @@ Every page MUST have a `cast` array listing the **ids** of all cast members that
 on that page. ids must match `cast[].id` exactly. Use `[]` for wordless or
 character-free pages (title cards, scenery-only spreads).
 
-**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero and leads the reference-ordering into the character lane — its style sheet is positioned first so it is never dropped. List the protagonist (e.g. the child the book is about) first on every page they appear. Characters contribute only their style sheet (no extra photo). References ride two independent lanes (PER-83): a character lane (4-ref flash cap, 5 with pro) and a separate object lane for objects + locations (up to 10, same on both models). A four-character flash page carries all four sheets exactly within the character-lane cap; a fifth character triggers auto-upgrade to pro before any sheet is dropped. Object/location refs on the same page don't count against the character lane at all — they only compete against the 10-slot object lane.
+**Order matters: put the page hero first.** The first character-kind entry (kind=`"character"` or absent) is treated as the hero and leads the reference-ordering into the character lane — its style sheet is positioned first so it is never dropped. List the protagonist (e.g. the child the book is about) first on every page they appear. Characters contribute only their style sheet (no extra photo). References ride two independent lanes (PER-83): a character lane (4-ref flash cap, 5 with pro) and a separate object lane for objects + locations. Both lane caps are per-model (PER-96): the object lane is 10 on flash but only 6 on pro — Pro's documented budget spends more of its 14 slots on the character lane and a style-reference lane we don't use yet. A four-character flash page carries all four sheets exactly within the character-lane cap; a fifth character triggers auto-upgrade to pro before any sheet is dropped — but that same upgrade also shrinks the page's object lane from 10 to 6, so a page with a 5th character and several props can lose props it would have kept on flash. Object/location refs on the same page don't count against the character lane at all — they only compete against the object lane's cap for whichever model ends up being used.
 
 Example:
 ```json

@@ -1305,10 +1305,10 @@ function updatePageBadge(badgeEl, page) {
 
 // Intent-based reference-image lane counts for a page (PER-83): references ride
 // two independent lanes — a character lane (character-kind cast entries; sheet-only,
-// no hero photo) and an object lane (object + location entries share one lane,
-// same cap on both models). Matches the render-time split in collect_input_images /
-// select_refs (render_book.py). No disk checks — this is a warning about full-render
-// intent, computed client-side.
+// no hero photo) and an object lane (object + location entries share one lane).
+// Both lane caps are per-model (PER-96) — see OBJECT_LANE_CAP below. Matches the
+// render-time split in collect_input_images / select_refs (render_book.py). No
+// disk checks — this is a warning about full-render intent, computed client-side.
 function pageRefLaneCounts(page) {
   const cast = page.cast || [];
   const castById = {};
@@ -1328,22 +1328,37 @@ function pageRefLaneCounts(page) {
   return { characters, objectLane };
 }
 const FLASH_IMAGE_MODEL = 'gemini-3.1-flash-image';
-const OBJECT_LANE_CAP = 10;
+const PRO_IMAGE_MODEL = 'gemini-3-pro-image';
+const CHARACTER_LANE_CAP = { [FLASH_IMAGE_MODEL]: 4, [PRO_IMAGE_MODEL]: 5 };
+const MAX_CHARACTER_LANE = 4;
+// PER-96: the object-lane cap is per-model, not one flat 10 — Pro's documented
+// envelope spends more of its 14 slots on the character lane and a 3-slot
+// style-reference lane we don't use yet, leaving it a smaller object lane.
+const OBJECT_LANE_CAP = { [FLASH_IMAGE_MODEL]: 10, [PRO_IMAGE_MODEL]: 6 };
+const MAX_OBJECT_LANE = 6;
 const TOTAL_REF_CAP = 14;
 function updateRefBadge(badgeEl, page) {
   const { characters, objectLane } = pageRefLaneCounts(page);
   const total = characters + objectLane;
-  const effModel = (page.model) || story.model || defaultFor('model');
-  if (characters > 5 || objectLane > OBJECT_LANE_CAP || total > TOTAL_REF_CAP) {
+  let effModel = (page.model) || story.model || defaultFor('model');
+  // Mirror select_refs (render_book.py): the flash→pro auto-upgrade is decided
+  // BEFORE the object cap is resolved, since the upgrade changes which cap
+  // applies — a page can gain a character and lose object-lane refs at once.
+  const upgraded = effModel === FLASH_IMAGE_MODEL
+    && characters > (CHARACTER_LANE_CAP[FLASH_IMAGE_MODEL] ?? MAX_CHARACTER_LANE);
+  if (upgraded) effModel = PRO_IMAGE_MODEL;
+  const charCap = CHARACTER_LANE_CAP[PRO_IMAGE_MODEL] ?? MAX_CHARACTER_LANE; // 5 — the hard ceiling
+  const objCap = OBJECT_LANE_CAP[effModel] ?? MAX_OBJECT_LANE;
+  if (characters > charCap || objectLane > objCap || total > TOTAL_REF_CAP) {
     badgeEl.className = 'badge-refs over';
-    badgeEl.textContent = characters > 5
-      ? `${characters} characters > pro character-lane cap 5 — refs will drop`
-      : `${objectLane} objects/locations > object-lane cap ${OBJECT_LANE_CAP} — refs will drop`;
-    badgeEl.title = 'References ride two lanes: a character lane (4 flash / 5 pro) and an object lane (objects + locations, cap 10, both models). The lowest-priority refs in the overflowing lane are dropped at render and logged.';
-  } else if (characters === 5 && effModel === FLASH_IMAGE_MODEL) {
+    badgeEl.textContent = characters > charCap
+      ? `${characters} characters > pro character-lane cap ${charCap} — refs will drop`
+      : `${objectLane} objects/locations > object-lane cap ${objCap} — refs will drop`;
+    badgeEl.title = `References ride two lanes: a character lane (4 flash / 5 pro) and an object lane (objects + locations, cap 10 flash / 6 pro — PER-96). The lowest-priority refs in the overflowing lane are dropped at render and logged. Upgrading a page to pro to keep a 5th character also shrinks its object lane from 10 to 6.`;
+  } else if (upgraded) {
     badgeEl.className = 'badge-refs warn';
     badgeEl.textContent = '5 characters → pro required';
-    badgeEl.title = 'Flash character-lane cap is 4. Render auto-upgrades this page to gemini-3-pro-image at runtime (story.json unchanged). No manual action needed. Object/location refs ride a separate lane and never force this upgrade.';
+    badgeEl.title = 'Flash character-lane cap is 4. Render auto-upgrades this page to gemini-3-pro-image at runtime (story.json unchanged). No manual action needed. Note: pro\'s object-lane cap is smaller (6, not 10) — this upgrade can also drop object/location refs that would have fit on flash.';
   } else {
     badgeEl.className = 'badge-refs';
     badgeEl.textContent = '';

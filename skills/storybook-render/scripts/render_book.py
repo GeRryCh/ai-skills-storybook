@@ -41,14 +41,20 @@ Model selection (precedence: CLI --model > page 'model' > story 'model' > defaul
 
   Reference images ride two independent lanes (PER-83), not one flat cap:
   a character lane (4 flash / 5 pro, high-resemblance) and an object lane
-  (up to 10, shared by object + location refs, both models), 14 total.
-  Auto-upgrade: when a page's CHARACTER lane has ≥5 entries and the effective
-  model is flash (including an explicit CLI or per-page flash override), that
-  page is silently upgraded to gemini-3-pro-image for that call only. Logged as:
+  (shared by object + location refs), 14 total. The object lane's cap is
+  per-model too (PER-96): 10 flash / 6 pro — Pro's documented budget spends
+  more of its 14 slots on the character lane and a style-reference lane we
+  don't use yet. Auto-upgrade: when a page's CHARACTER lane has ≥5 entries
+  and the effective model is flash (including an explicit CLI or per-page
+  flash override), that page is silently upgraded to gemini-3-pro-image for
+  that call only. Logged as:
     "auto-upgraded page N to gemini-3-pro-image (5 characters > flash character-lane cap 4)"
   story.json is never modified. Manually pinning a page's model to pro solely to
-  avoid the character-lane cap is therefore unnecessary. Object/location refs never
-  trigger an upgrade — their lane cap (10) is the same on both models.
+  avoid the character-lane cap is therefore unnecessary. Object/location refs
+  never trigger an upgrade — even though the upgrade this deliberately never
+  triggers on their behalf then shrinks their own lane from 10 to 6, since a
+  slightly-off prop does not poison a frame the way a wrong-style background or
+  dropped character does.
 
 Text modes:
   overlay — safe-zone art + Pillow text overlay → pages/page-NN.png
@@ -101,14 +107,23 @@ IMAGE_MODEL = FLASH_IMAGE_MODEL  # default; overridable per page/book/CLI
 IMAGE_MODELS = [FLASH_IMAGE_MODEL, PRO_IMAGE_MODEL]  # keep in sync with story_schema.json
 # Ref-image envelope is lane-based (PER-83), not one flat cap: a character lane
 # (high-resemblance) and an object lane (shared by object + location refs), up to
-# 14 total per call. Character lane cap varies by model; object lane cap does not.
+# 14 total per call. Both lane caps vary by model (PER-96) — Pro's documented
+# envelope spends more of its 14 slots on the character lane (and a 3-slot
+# style-reference lane we don't use yet), leaving it a smaller object lane.
 CHARACTER_LANE_CAP = {
     FLASH_IMAGE_MODEL: 4,  # Gemini 3.1 Flash Image: up to 4 character refs per call
     PRO_IMAGE_MODEL: 5,    # Gemini 3 Pro Image: up to 5 character refs per call
 }
 MAX_CHARACTER_LANE = 4  # safe fallback character-lane cap for unrecognised models
-OBJECT_LANE_CAP = 10    # object + location refs share this lane; same for both models
-TOTAL_REF_CAP = 14      # character lane + object lane combined, both models
+OBJECT_LANE_CAP = {
+    FLASH_IMAGE_MODEL: 10,  # Gemini 3.1 Flash Image: up to 10 object/location refs per call
+    PRO_IMAGE_MODEL: 6,     # Gemini 3 Pro Image: 6 — Pro spends budget on a 5th character
+                            # slot and a 3-slot style lane we don't use yet (PER-96)
+}
+MAX_OBJECT_LANE = 6    # safe fallback object-lane cap for unrecognised models
+TOTAL_REF_CAP = 14     # character lane + object lane combined, both models — a
+                       # defensive backstop only; no current model combination
+                       # reaches it (flash 4+10=14, pro 5+6=11)
 
 # OpenAI gpt-image-2 fallback config (PER-67).
 # Used only when Gemini returns finish_reason=PROHIBITED_CONTENT and fallback_vendor=="openai".
@@ -630,8 +645,9 @@ def collect_input_images(
     frame (PER-82, "Lever B" — see below). Location outranks object (PER-83):
     a wrong-style background poisons the whole frame; a slightly-off prop does
     not. Within the object lane (locations + objects + the style frame, up to
-    OBJECT_LANE_CAP), locations are first to survive, then objects, and the
-    style frame is first to drop when the caller applies the cap.
+    OBJECT_LANE_CAP[model] — per-model, PER-96), locations are first to
+    survive, then objects, and the style frame is first to drop when the
+    caller applies the cap.
 
     Returns (label, path, lane) triples; lane is "character" or "object"
     (location refs and the style frame share the object lane per Gemini's
@@ -812,15 +828,23 @@ def select_refs(
 ) -> tuple[str, list[tuple[str, str]], list[str]]:
     """Apply the per-lane ref caps (PER-83), auto-upgrading flash → pro when the
     CHARACTER lane exceeds the flash cap (runtime-only; story.json is never
-    modified). Object-lane overflow (location + object refs) never triggers an
-    upgrade — its cap (OBJECT_LANE_CAP) is the same on both models.
+    modified). Object-lane overflow (location + object refs) never triggers
+    an upgrade — even though the object cap is itself per-model (PER-96: 10
+    flash / 6 pro), so an upgrade triggered to save a character can shrink
+    the object lane. That trade-off is accepted deliberately: character
+    consistency is the hero mechanism, and the object lane's tail is the
+    cheap end (a slightly-off prop does not poison a frame the way a
+    dropped character or wrong-style background does).
 
     Lanes are independent: character lane candidates compete only against the
     character cap; object lane candidates (locations + objects, in that
-    priority order — see collect_input_images) compete only against
-    OBJECT_LANE_CAP. A TOTAL_REF_CAP backstop trims the object lane's tail
-    further in the rare case both lanes are simultaneously maxed (5 pro-cap
-    characters + 10 object-lane refs = 15 > 14).
+    priority order — see collect_input_images) compete only against the
+    object cap. The object cap is resolved from the EFFECTIVE model — i.e.
+    after any flash→pro upgrade above — since the upgrade changes which cap
+    applies. A TOTAL_REF_CAP backstop further trims the object lane's tail in
+    case both lanes are ever simultaneously maxed; with the current per-model
+    caps no combination reaches it (flash 4+10=14, pro 5+6=11), so it is a
+    defensive guard against future cap edits rather than a live path today.
 
     The caller is responsible for logging the upgrade and any drops.
 
@@ -834,9 +858,10 @@ def select_refs(
     if model == FLASH_IMAGE_MODEL and len(character) > CHARACTER_LANE_CAP[FLASH_IMAGE_MODEL]:
         model = PRO_IMAGE_MODEL
     char_cap = CHARACTER_LANE_CAP.get(model, MAX_CHARACTER_LANE)
+    obj_cap = OBJECT_LANE_CAP.get(model, MAX_OBJECT_LANE)  # resolved after the upgrade
 
     selected_chars, dropped_chars = character[:char_cap], character[char_cap:]
-    selected_objs, dropped_objs = object_lane[:OBJECT_LANE_CAP], object_lane[OBJECT_LANE_CAP:]
+    selected_objs, dropped_objs = object_lane[:obj_cap], object_lane[obj_cap:]
 
     # Combined-envelope backstop: only bites when both lanes are maxed at once.
     overflow = (len(selected_chars) + len(selected_objs)) - TOTAL_REF_CAP
@@ -1510,7 +1535,7 @@ async def run_nano_banana(
         log.append(
             f"  Note: character-lane cap "
             f"({CHARACTER_LANE_CAP.get(model, MAX_CHARACTER_LANE)}) / object-lane cap "
-            f"({OBJECT_LANE_CAP}) reached; dropped: {', '.join(short_dropped)}"
+            f"({OBJECT_LANE_CAP.get(model, MAX_OBJECT_LANE)}) reached; dropped: {', '.join(short_dropped)}"
         )
     for label, img_path in ref_pairs:
         p = Path(img_path)

@@ -76,9 +76,10 @@ PER-82 implementation corrects:
   (unaffected) → location refs → object refs → **style frame last**, within the object
   lane, not interleaved into the character lane.
 - **Cap model:** step 3's "4-slot cap" is the old flat cap. PER-83 replaced it with two
-  independent lanes (character 4 flash/5 pro, object+location 10, total 14). The style
-  frame rides the **object lane**, tagged lowest priority — it never competes with or
-  upgrades the character lane.
+  independent lanes (character 4 flash/5 pro, object+location — PER-96: 10 flash/6 pro,
+  not 10 on both — total 14 flash/11 pro). The style frame rides the **object lane**,
+  tagged lowest priority — it never competes with or upgrades the character lane, but on
+  pro it now drops noticeably more often (a smaller lane fills up sooner).
 - **`--only` interaction (not in the sketch at all):** the shipped frame-generation step
   is skipped when `make_style_sheet.py` is invoked with `--only ID`. `--only`'s contract
   is exactly one top-level diff (that entry's `style_sheet`) — the visual editor's

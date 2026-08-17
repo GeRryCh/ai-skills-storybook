@@ -35,8 +35,8 @@ an explicitly user-named path is used verbatim):
 3. **storybook-render** (paid, 1 image call per page) — generates each page illustration
    using only the style sheets for the cast entries listed in that page's `cast` field
    (per-page selection, two ref lanes — character lane 4 flash / 5 pro, object lane
-   (objects + locations + the book-wide style frame, lowest priority) up to 10, 14 total —
-   PER-83, PER-82; auto-upgrades flash→pro when the
+   (objects + locations + the book-wide style frame, lowest priority) up to 10 flash / 6
+   pro, 14 total — PER-83, PER-82, PER-96; auto-upgrades flash→pro when the
    character lane exceeds 4 — PER-58; overridable per page or book via the `model`
    field or `--model` CLI flag), then overlays text. When `story.json`'s top-level
    `style_frame` is set (Stage 2 output — PER-82, "Lever B"), it's sent as the
@@ -131,8 +131,8 @@ not one model end-to-end. Both declare their SDK as a PEP-723 inline dependency.
   with `api_key` from the environment; configurable model — default `gemini-3.1-flash-image`
   (character-lane cap 4) or `gemini-3-pro-image` (character-lane cap 5), set per-page,
   book-wide, or via `--model` CLI flag (auto-upgrade flash→pro when the character lane
-  exceeds 4; the object lane — objects + locations, cap 10 on both models — never
-  triggers an upgrade — PER-83). Sends the prompt plus reference images as
+  exceeds 4; the object lane — objects + locations, cap 10 flash / 6 pro (PER-96) — never
+  triggers an upgrade itself — PER-83). Sends the prompt plus reference images as
   `types.Part.from_bytes`, extracts the returned image from `part.inline_data.data`. Requires
   `GEMINI_API_KEY`. **OpenAI fallback (PER-67):** when Gemini returns
   `finish_reason=PROHIBITED_CONTENT` (a deterministic content-policy block, not a transient
@@ -259,18 +259,23 @@ for cast entries not on the page. The **hero** is the first cast entry of `kind:
 
 **Two ref lanes, not one flat cap (PER-83).** The real Gemini reference-image envelope is
 lane-based: a **character lane** (4 flash / 5 pro, high-resemblance) and an **object lane**
-(objects + locations, cap 10 on both models), 14 total. Priority within each lane:
-character lane = hero sheet → remaining character sheets (page order); object lane =
-**location refs first** (page order), then object refs (page order) — location outranks
-object because a wrong-style background poisons the whole frame while a slightly-off prop
-does not (flip of the pre-PER-83 object-before-location order). Anything past its lane's
-cap is logged, never silently dropped. **Auto-upgrade (PER-58, narrowed by PER-83):**
-`select_refs()` in `render_book.py` runs before either cap is applied — if the effective
-model is flash and the **character lane** has >4 entries, the page is silently upgraded to
-`gemini-3-pro-image` for that call only (logged, story.json untouched). Object-lane overflow
-never triggers an upgrade — its cap (10) is the same on both models. The lane/cap/drop logic
-is in `select_refs`; `collect_input_images` returns the full uncapped candidate list tagged
-with `(label, path, lane)`.
+(objects + locations). Both lane caps are per-model (PER-96) — Google's documented envelope
+sums to 14 for either model but splits it differently: the object lane is **cap 10 flash /
+6 pro** (Pro spends more of its 14 slots on the character lane and a 3-slot style-reference
+lane we don't use yet). Priority within each lane: character lane = hero sheet → remaining
+character sheets (page order); object lane = **location refs first** (page order), then
+object refs (page order) — location outranks object because a wrong-style background
+poisons the whole frame while a slightly-off prop does not (flip of the pre-PER-83
+object-before-location order). Anything past its lane's cap is logged, never silently
+dropped. **Auto-upgrade (PER-58, narrowed by PER-83):** `select_refs()` in `render_book.py`
+runs the upgrade check before either cap is applied — if the effective model is flash and
+the **character lane** has >4 entries, the page is silently upgraded to `gemini-3-pro-image`
+for that call only (logged, story.json untouched); the object cap is then resolved from the
+now-effective model. Object-lane overflow never triggers an upgrade on its own — but because
+the object cap is itself per-model, a character-triggered upgrade can shrink the object lane
+from 10 to 6 as a side effect (accepted trade-off: character consistency outranks a prop).
+The lane/cap/drop logic is in `select_refs`; `collect_input_images` returns the full uncapped
+candidate list tagged with `(label, path, lane)`.
 
 **Outfit lock (single canonical outfit per character).** For kind=character entries, `appearance` must
 name exactly one outfit; the style-sheet prompt takes clothing from there, never from
@@ -334,20 +339,26 @@ slightly-off prop does not poison a frame the way a wrong-style background does)
 **Ref priority and lanes (`render_book.py`, PER-83):**
 
 > **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets (page order)
-> **object lane** (cap 10, both models): location refs (sheet only, hard-required — PER-84 — page order) → object refs (sheet, or photo fallback — page order) → **book-wide style frame** (PER-82, lowest priority, first to drop)
+> **object lane** (cap 10 flash / 6 pro — PER-96): location refs (sheet only, hard-required — PER-84 — page order) → object refs (sheet, or photo fallback — page order) → **book-wide style frame** (PER-82, lowest priority, first to drop)
 
 `collect_input_images()` builds the full prioritized candidate list (no cap), tagged
 `(label, path, lane)`. `select_refs(candidates, model)` then: auto-upgrades flash → pro when
-the **character lane** has `> 4` entries, applies each lane's cap independently, and returns
-`(effective_model, selected, dropped)`. A `TOTAL_REF_CAP` of 14 backstops the rare case both
-lanes are simultaneously maxed (5 pro-cap characters + 10 object-lane refs = 15), trimming the
-object lane's tail. Drops are logged, never silent. Flash pages with a 5th character are
-upgraded to pro before any character is dropped; only past the pro character-lane cap (5) are
-characters dropped. Object-lane overflow (>10 objects+locations+style frame) never triggers an
-upgrade — its cap is the same on both models. On scenery-only pages (`cast: []` or only
-non-character entries) with a location set, the location style sheet is the sole
-per-page-cast reference image (PER-84 — no photo fallback for locations); the book-wide style
-frame, if set, is still attached on top of it (it's sourced from `story`, not `page.cast`).
+the **character lane** has `> 4` entries, resolves each lane's cap from the now-effective
+model and applies it independently, and returns `(effective_model, selected, dropped)`. A
+`TOTAL_REF_CAP` of 14 is a defensive backstop for the case both lanes are simultaneously
+maxed; with the current per-model caps no combination actually reaches it (flash 4+10=14,
+pro 5+6=11), so it never fires today. Drops are logged, never silent. Flash pages with a 5th
+character are upgraded to pro before any character is dropped; only past the pro
+character-lane cap (5) are characters dropped. Object-lane overflow never triggers an
+upgrade on its own — but because the object cap is itself per-model (10 flash / 6 pro), a
+character-triggered upgrade can shrink the object lane as a side effect: a page with 5
+characters and 8 props upgrades to pro to keep all 5 characters, and loses 2 props it would
+have kept on flash. This trade-off is accepted deliberately (character consistency is the
+hero mechanism; the object lane's tail is the cheap end to drop). On scenery-only pages
+(`cast: []` or only non-character entries) with a location set, the location style sheet is
+the sole per-page-cast reference image (PER-84 — no photo fallback for locations); the
+book-wide style frame, if set, is still attached on top of it (it's sourced from `story`,
+not `page.cast`).
 
 **Book-wide style frame (PER-82, "Lever B").** `story.json`'s top-level `style_frame`
 (written by `make_style_sheet.py`, Stage 2 — one abstract style board per book: palette
@@ -357,7 +368,10 @@ read directly from `story`, not `page['cast']`, so `collect_input_images()` atta
 (`run_nano_banana(..., story, {"cast": []}, ...)`), since a style board is an apt reference
 for a style-matched background too. Soft, unlike PER-84's hard-required location sheet: an
 absent or missing-on-disk frame just warns and is skipped — it never fails a render. It
-never contributes to the flash→pro auto-upgrade (only the character lane does).
+never contributes to the flash→pro auto-upgrade (only the character lane does). It sits at
+the bottom of the object lane, so it's the first thing dropped when that lane is over cap —
+and since the object cap is per-model (PER-96: 10 flash / 6 pro), it now drops materially
+more often on pro, whenever a page carries ≥6 real object/location refs.
 
 **Labeled-interleaved contents (`run_nano_banana`):** each reference image is preceded by a short text part: `"Next image: {label}."` The `IMAGE_SYSTEM_PROMPT` defines the behaviour rule for each of 6 label kinds (locations have no photo-fallback label render-side — PER-84; Stage 2 still labels input photos when *building* the sheet). Keep label wording in sync with the system prompt's "kind" vocabulary:
 
@@ -414,11 +428,13 @@ collects valid `<id>` tokens in first-appearance order, `_syncPageCast()` reconc
 add/remove/reorder UI), render-status badges, **per-page image preview, generation
 history browser, a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
 and hit Regenerate to retry that page on the stronger model without touching the rest), **a
-per-page ref-count warning badge** (PER-58, made lane-aware in PER-83: amber "5 refs → pro
-required" when the intent-based **character** count is 5 and the effective model is flash —
-render auto-upgrades at runtime; red "N refs > pro cap 5 — refs will drop" when character
-count exceeds 5, or the object-lane (objects + locations) count exceeds 10, regardless of
-model), and
+per-page ref-count warning badge** (PER-58, made lane-aware in PER-83, made both lane caps
+per-model in PER-96: amber "5 characters → pro required" when the intent-based **character**
+count is 5 and the effective model is flash — render auto-upgrades at runtime; red
+"N characters > pro character-lane cap 5 — refs will drop" when character count exceeds 5,
+or "N objects/locations > object-lane cap 10|6 — refs will drop" when the object-lane
+(objects + locations) count exceeds its cap for the **effective** model — 10 on flash, 6 on
+pro, resolved after the same auto-upgrade check the badge mirrors from `select_refs`), and
 **a per-page text mode picker** (unset = same as book; override lets individual pages render in a
 different mode than the book default). Fields that have no effect given the current effective text mode
 are greyed-out (user may still pre-set them); the `floating` placement option is hard-hidden
