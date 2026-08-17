@@ -4,43 +4,122 @@
 <meta charset="utf-8"/>
 <title>Storybook Editor</title>
 <style>
+/* ── design tokens (Stitch project "Storybook editor", assets/3832573499565723133) ── */
+:root{
+  --bg:#fcf8ff; --surface:#ffffff; --surface-sunken:#f0ecf9; --surface-hover:#eae6f4;
+  --border:#c7c4d8; --border-soft:#e4e1ee;
+  --text:#1b1b24; --text-muted:#464555; --text-faint:#86839a;
+  --accent:#4f46e5; --accent-strong:#3525cd; --accent-contrast:#ffffff;
+  --accent-soft:#e2dfff; --accent-soft-text:#3525cd; --accent-ring:rgba(79,70,229,.35);
+  --danger-bg:#fee2e2; --danger-text:#991b1b; --danger-border:#fca5a5;
+  --warn-bg:#fef3c7; --warn-text:#92400e; --warn-border:#fde68a;
+  --success-bg:#dcfce7; --success-text:#166534; --success-border:#86efac;
+  --info-bg:#ede9fe; --info-text:#5b21b6;
+  --neutral-bg:#f1f5f9; --neutral-text:#64748b;
+  --radius-sm:6px; --radius-md:10px; --radius-lg:14px;
+  --shadow-card:0 1px 2px rgba(20,16,40,.05),0 1px 1px rgba(20,16,40,.03);
+  --shadow-pop:0 10px 30px rgba(20,16,40,.16);
+  --font-headline:'Space Grotesk','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --sidebar-w:236px; --topbar-h:54px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#16141f; --surface:#201d2b; --surface-sunken:#1a1824; --surface-hover:#2b2838;
+  --border:#3a3650; --border-soft:#2a2738;
+  --text:#ece9f5; --text-muted:#b6b2c9; --text-faint:#85809c;
+  --accent:#7c74f5; --accent-strong:#a39dff; --accent-contrast:#14112a;
+  --accent-soft:#2c2760; --accent-soft-text:#c3c0ff; --accent-ring:rgba(124,116,245,.4);
+  --danger-bg:#4c1414; --danger-text:#fecaca; --danger-border:#7a2222;
+  --warn-bg:#452b06; --warn-text:#fde68a; --warn-border:#6b4a10;
+  --success-bg:#0f3d24; --success-text:#bbf7d0; --success-border:#1c6a41;
+  --info-bg:#2e1a63; --info-text:#ddd6fe;
+  --neutral-bg:#2b2838; --neutral-text:#b6b2c9;
+  --shadow-card:0 1px 2px rgba(0,0,0,.35),0 1px 1px rgba(0,0,0,.2);
+  --shadow-pop:0 10px 30px rgba(0,0,0,.55);
+}}
+
 /* ── reset + base ─────────────────────────────────────────────────────── */
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;font-size:14px;background:#f5f5f5;color:#222}
-a{color:#2563eb}
+html,body{height:100%}
+body{font-family:var(--font-body);font-size:14px;background:var(--bg);color:var(--text);
+  display:flex;flex-direction:column;overflow:hidden}
+a{color:var(--accent)}
+small{color:var(--text-faint);font-size:12px}
+.hint,.muted{color:var(--text-faint)}
+.loading-hint{color:var(--text-faint);padding:20px}
+.load-error{color:var(--danger-text);padding:20px}
 
-/* ── layout ───────────────────────────────────────────────────────────── */
-header{position:sticky;top:0;z-index:100;background:#1e293b;color:#f1f5f9;
-  padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-header h1{font-size:15px;font-weight:600;flex:1;min-width:120px;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-header .dirty-dot{color:#fb923c;font-size:18px;display:none}
+/* ── app shell: top bar + sidebar + scrolling pane ───────────────────────── */
+header{flex:0 0 auto;position:sticky;top:0;z-index:100;height:var(--topbar-h);
+  background:var(--surface);color:var(--text);border-bottom:1px solid var(--border-soft);
+  padding:0 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+header h1{font-family:var(--font-headline);font-size:15px;font-weight:600;flex:1;
+  min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+header .dirty-dot{color:#fb923c;font-size:16px;display:none;line-height:1}
 header .dirty-dot.visible{display:inline}
+.autosave-hint{font-size:11px;color:#fb923c;opacity:.9}
+.cost-readout{font-size:12px;color:var(--text-faint);font-variant-numeric:tabular-nums}
 
-.status-panel{padding:8px 16px;font-size:13px;display:none}
-.status-panel.error{background:#fee2e2;color:#991b1b;display:block}
-.status-panel.warn{background:#fef3c7;color:#92400e;display:block}
+.status-panel{flex:0 0 auto;padding:8px 20px;font-size:13px;display:none}
+.status-panel.error{background:var(--danger-bg);color:var(--danger-text);display:block}
+.status-panel.warn{background:var(--warn-bg);color:var(--warn-text);display:block}
 .status-panel ul{padding-left:18px}
 
-main{max-width:900px;margin:24px auto;padding:0 16px 80px}
-section{background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:24px}
-section>h2{font-size:14px;font-weight:600;padding:12px 16px;border-bottom:1px solid #e2e8f0;
-  background:#f8fafc;border-radius:8px 8px 0 0;cursor:pointer;user-select:none;
-  display:flex;align-items:center;gap:8px}
-section>h2 .toggle{margin-left:auto;color:#64748b;font-size:12px}
-.section-body{padding:16px}
+#main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:var(--sidebar-w) 1fr;overflow:hidden}
+.sidebar{overflow-y:auto;background:var(--surface-sunken);border-right:1px solid var(--border-soft);
+  display:flex;flex-direction:column;justify-content:space-between;padding:16px 12px}
+.side-nav{display:flex;flex-direction:column;gap:2px}
+.side-link{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:var(--radius-sm);
+  font-size:13px;font-weight:500;color:var(--text-muted);text-decoration:none;cursor:pointer;
+  user-select:none}
+.side-link:hover{background:var(--surface-hover);color:var(--text)}
+.side-link.active{background:var(--accent-soft);color:var(--accent-soft-text)}
+.side-count{color:var(--text-faint);font-weight:400}
+.side-pages-label{margin-top:10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--text-faint);font-weight:600;cursor:default}
+.side-pages-label:hover{background:none;color:var(--text-faint)}
+.side-pages-list{display:flex;flex-direction:column;gap:1px;margin-bottom:8px;max-height:40vh;overflow-y:auto}
+.side-page-row{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 20px;border-radius:var(--radius-sm);
+  font-size:12.5px;color:var(--text-muted);text-decoration:none;cursor:pointer}
+.side-page-row:hover{background:var(--surface-hover);color:var(--text)}
+.side-dot{width:7px;height:7px;border-radius:50%;background:var(--border);flex-shrink:0}
+.side-dot.rendered{background:var(--success-text)}
+.side-footer{display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--border-soft)}
+.btn-block{width:100%;text-align:center}
+.regen-all-status-wrap{font-size:11px;color:var(--text-faint);text-align:center}
+
+.pane{overflow-y:auto;padding:24px 28px 96px}
+.panel{background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius-lg);
+  margin-bottom:20px;box-shadow:var(--shadow-card);max-width:900px}
+.panel-head{font-size:14px;font-weight:600;padding:13px 18px;border-bottom:1px solid var(--border-soft);
+  cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px}
+.panel-icon{font-size:14px}
+.panel-hint{font-weight:400;color:var(--text-faint);font-size:12px}
+.panel-head .toggle{margin-left:auto;color:var(--text-faint);font-size:12px}
+.section-body{padding:18px}
 .section-body.collapsed{display:none}
+
+@media (max-width:860px){
+  #main{grid-template-columns:1fr;overflow-y:auto}
+  .sidebar{flex-direction:row;flex-wrap:wrap;overflow-x:auto;overflow-y:visible;
+    border-right:none;border-bottom:1px solid var(--border-soft);position:sticky;top:0;z-index:50}
+  .side-nav{flex-direction:row;flex-wrap:wrap}
+  .side-pages-list{max-height:none}
+  .side-footer{flex-direction:row}
+  .pane{overflow-y:visible}
+}
 
 /* ── form elements ────────────────────────────────────────────────────── */
 .field{margin-bottom:14px}
-.field label{display:block;font-size:12px;font-weight:500;color:#475569;margin-bottom:4px}
-.field input[type=text],.field select,.field textarea{width:100%;border:1px solid #cbd5e1;
-  border-radius:5px;padding:6px 8px;font-size:13px;font-family:inherit;
-  background:#fff;transition:border .15s}
+.field.field-narrow{max-width:260px}
+.field label{display:block;font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:4px}
+.field input[type=text],.field select,.field textarea{width:100%;border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:7px 9px;font-size:13px;font-family:inherit;
+  background:var(--surface);color:var(--text);transition:border-color .15s}
 .field input[type=text]:focus,.field select:focus,.field textarea:focus{
-  outline:none;border-color:#6366f1}
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
 .field textarea{resize:vertical;min-height:60px}
-.field select.unset{color:#94a3b8}
+.field select.unset{color:var(--text-faint)}
 /* ── Conditional field relevance (PER-48) ─────────────────────────────── */
 .field.dep-hidden{display:none}
 .field .row{display:flex;gap:8px;align-items:flex-start}
@@ -49,81 +128,92 @@ section>h2 .toggle{margin-left:auto;color:#64748b;font-size:12px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
 
+.fieldset-box{border:1px solid var(--border-soft);border-radius:var(--radius-md);padding:14px;margin-bottom:14px}
+.fieldset-legend{font-size:12px;font-weight:600;color:var(--text-muted);padding:0 6px}
+
 /* ── buttons ──────────────────────────────────────────────────────────── */
-button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:13px;
-  font-family:inherit;font-weight:500;transition:background .15s}
-.btn-primary{background:#4f46e5;color:#fff}
-.btn-primary:hover{background:#4338ca}
-.btn-primary:disabled{background:#94a3b8;cursor:not-allowed}
-.btn-sm{background:#f1f5f9;color:#334155;padding:3px 8px;font-size:12px}
-.btn-sm:hover{background:#e2e8f0}
-.btn-danger{background:#fee2e2;color:#991b1b}
-.btn-danger:hover{background:#fecaca}
-.btn-add{background:#f0fdf4;color:#166534;border:1px dashed #86efac}
-.btn-add:hover{background:#dcfce7}
+button{cursor:pointer;border:none;border-radius:var(--radius-sm);padding:7px 14px;font-size:13px;
+  font-family:inherit;font-weight:500;transition:background .15s,box-shadow .15s}
+.btn-primary{background:var(--accent);color:var(--accent-contrast)}
+.btn-primary:hover{background:var(--accent-strong)}
+.btn-primary:disabled{background:var(--neutral-bg);color:var(--text-faint);cursor:not-allowed}
+.btn-sm{background:var(--neutral-bg);color:var(--text-muted);padding:3px 9px;font-size:12px}
+.btn-sm:hover{background:var(--surface-hover)}
+.btn-danger{background:var(--danger-bg);color:var(--danger-text)}
+.btn-danger:hover{background:var(--danger-border)}
+.btn-add{background:var(--success-bg);color:var(--success-text);border:1px dashed var(--success-border)}
+.btn-add:hover{filter:brightness(.96)}
 
 /* ── palette ──────────────────────────────────────────────────────────── */
 .palette-row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
 .palette-row input{flex:1}
-.swatch{width:22px;height:22px;border-radius:4px;border:1px solid #cbd5e1;
-  flex-shrink:0;background:#e2e8f0}
+.swatch{width:22px;height:22px;border-radius:var(--radius-sm);border:1px solid var(--border);
+  flex-shrink:0;background:var(--surface-hover)}
 
 /* ── character + page cards ───────────────────────────────────────────── */
-.card{border:1px solid #e2e8f0;border-radius:6px;margin-bottom:12px;overflow:hidden}
-.card-header{background:#f8fafc;padding:8px 12px;display:flex;align-items:center;gap:8px;
-  font-size:13px;font-weight:600;cursor:pointer}
+.card{border:1px solid var(--border-soft);border-radius:var(--radius-lg);margin-bottom:14px;
+  overflow:hidden;background:var(--surface);box-shadow:var(--shadow-card)}
+.card-header{padding:10px 14px;display:flex;align-items:center;gap:8px;
+  font-size:13px;font-weight:600;cursor:pointer;border-bottom:1px solid transparent}
+.card-header:hover{background:var(--surface-hover)}
 .card-header .badge-dirty{color:#f97316;font-size:11px;display:none}
 .card-header .badge-dirty.visible{display:inline}
-.card-header .badge-render{font-size:11px;padding:1px 6px;border-radius:10px;font-weight:500}
-.badge-render.rendered{background:#d1fae5;color:#065f46}
-.badge-render.edited{background:#fef3c7;color:#92400e}
-.badge-render.none{background:#f1f5f9;color:#64748b}
-.badge-refs{font-size:11px;padding:1px 6px;border-radius:10px;font-weight:500;display:none}
-.badge-refs.warn{background:#fef3c7;color:#92400e;display:inline}
-.badge-refs.over{background:#fee2e2;color:#991b1b;display:inline}
+.card-header .badge-render{font-size:11px;padding:1px 7px;border-radius:10px;font-weight:500}
+.badge-render.rendered{background:var(--success-bg);color:var(--success-text)}
+.badge-render.edited{background:var(--warn-bg);color:var(--warn-text)}
+.badge-render.none{background:var(--neutral-bg);color:var(--neutral-text)}
+.badge-refs{font-size:11px;padding:1px 7px;border-radius:10px;font-weight:500;display:none}
+.badge-refs.warn{background:var(--warn-bg);color:var(--warn-text);display:inline}
+.badge-refs.over{background:var(--danger-bg);color:var(--danger-text);display:inline}
 .card-header .spacer{flex:1}
-.card-header button{font-size:11px;padding:2px 6px}
-.card-body{padding:12px;display:none}
+.card-header button{font-size:11px;padding:2px 7px}
+.card-body{padding:14px;display:none;border-top:1px solid var(--border-soft)}
 .card-body.open{display:block}
 
-.hero-badge{background:#818cf8;color:#fff;font-size:10px;padding:0 5px;border-radius:8px;
+.hero-badge{background:var(--accent);color:#fff;font-size:10px;padding:0 5px;border-radius:8px;
   font-weight:700;margin-left:4px}
-.kind-badge { display:inline-block; font-size:9px; font-weight:700; padding:1px 5px; border-radius:9px; margin-left:4px; background:#94a3b8; color:#fff; vertical-align:middle; letter-spacing:.5px; }
+.kind-badge{display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:9px;
+  margin-left:4px;background:var(--neutral-text);color:#fff;vertical-align:middle;letter-spacing:.5px}
 
 /* ── page cast ordered list ───────────────────────────────────────────── */
 .cast-list{margin-bottom:6px}
 .cast-entry{display:flex;align-items:center;gap:6px;margin-bottom:4px;
-  background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:4px 6px}
+  background:var(--surface-sunken);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:5px 8px}
 .cast-entry span{flex:1;font-size:13px}
 .uncast-btns{display:flex;flex-wrap:wrap;gap:4px}
-.btn-cast-add{background:#ede9fe;color:#5b21b6;font-size:12px;padding:2px 8px;
+.btn-cast-add{background:var(--info-bg);color:var(--info-text);font-size:12px;padding:2px 8px;
   border-radius:10px;border:none;cursor:pointer}
-.btn-cast-add:hover{background:#ddd6fe}
-.cast-entry.readonly{background:#f8fafc}
-.cast-empty{font-size:12px;color:#94a3b8;font-style:italic;padding:2px 0}
+.btn-cast-add:hover{filter:brightness(.96)}
+.cast-entry.readonly{background:var(--surface-sunken)}
+.cast-empty{font-size:12px;color:var(--text-faint);font-style:italic;padding:2px 0}
 
 /* ── ref-image rows ───────────────────────────────────────────────────── */
 .ref-row{display:flex;gap:6px;align-items:flex-start;margin-bottom:6px}
 .ref-row input{flex:1}
-.ref-thumb{width:44px;height:44px;object-fit:cover;border-radius:4px;
-  border:1px solid #e2e8f0;flex-shrink:0}
-.ref-miss{width:44px;height:44px;border-radius:4px;background:#fee2e2;
-  border:1px solid #fca5a5;display:none;font-size:9px;color:#991b1b;
+.ref-thumb{width:44px;height:44px;object-fit:cover;border-radius:var(--radius-sm);
+  border:1px solid var(--border-soft);flex-shrink:0}
+.ref-miss{width:44px;height:44px;border-radius:var(--radius-sm);background:var(--danger-bg);
+  border:1px solid var(--danger-border);display:none;font-size:9px;color:var(--danger-text);
   text-align:center;line-height:44px;flex-shrink:0}
 
 /* ── style sheet preview ──────────────────────────────────────────────── */
 .sheet-preview{display:flex;gap:8px;align-items:flex-start;margin-top:4px}
-.sheet-preview img{width:60px;height:60px;object-fit:cover;border-radius:4px;
-  border:1px solid #e2e8f0}
-.sheet-preview .sheet-path{font-size:12px;color:#64748b;word-break:break-all}
-.sheet-preview .sheet-missing{color:#ef4444;font-size:12px}
+.sheet-preview img{width:60px;height:60px;object-fit:cover;border-radius:var(--radius-sm);
+  border:1px solid var(--border-soft)}
+.sheet-preview .sheet-path{font-size:12px;color:var(--text-faint);word-break:break-all}
+.sheet-preview .sheet-missing{color:var(--danger-text);font-size:12px}
 /* ── sheet version history ────────────────────────────────────────────── */
 .sheet-ver-wrap{margin-top:6px}
-.sheet-ver-img{max-width:150px;max-height:150px;object-fit:cover;border-radius:4px;
-  border:1px solid #e2e8f0;display:block;background:#f8fafc}
+.sheet-ver-img{max-width:150px;max-height:150px;object-fit:cover;border-radius:var(--radius-sm);
+  border:1px solid var(--border-soft);display:block;background:var(--surface-sunken)}
+.style-frame-img{max-height:120px;display:block}
+.warn-inline{color:var(--warn-text);font-size:12px;margin-top:4px}
+.hint-block{color:var(--text-faint);font-size:13px}
 
 /* ── saved-formats toggle ─────────────────────────────────────────────── */
-.sf-toggle-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.sf-toggle-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+.sf-toggle-row label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.sf-hint{font-size:12px;color:var(--text-faint)}
 .sf-checks{display:flex;gap:12px;align-items:center}
 .sf-checks label{display:flex;gap:4px;align-items:center;font-size:13px;cursor:pointer}
 
@@ -132,79 +222,85 @@ button{cursor:pointer;border:none;border-radius:5px;padding:6px 12px;font-size:1
 .preview-img-area{margin-bottom:4px}
 .preview-pair{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
 .preview-img-wrap{position:relative;display:inline-block;max-width:100%}
-.textpage-badge{background:#1e293b;color:#e2e8f0;font-size:11px;padding:2px 8px;
+.textpage-badge{background:var(--text);color:var(--bg);font-size:11px;padding:2px 8px;
   border-radius:10px;font-weight:600;pointer-events:none;white-space:nowrap}
-.preview-img{max-width:100%;max-height:300px;border-radius:6px;
-  border:1px solid #e2e8f0;display:block;background:#f8fafc}
+.preview-img{max-width:100%;max-height:300px;border-radius:var(--radius-md);
+  border:1px solid var(--border-soft);display:block;background:var(--surface-sunken)}
 .preview-overlay{position:absolute;top:6px;right:6px}
-.inuse-badge{background:#065f46;color:#d1fae5;font-size:11px;padding:2px 8px;
+.inuse-badge{background:var(--success-text);color:var(--success-bg);font-size:11px;padding:2px 8px;
   border-radius:10px;font-weight:600;pointer-events:none;white-space:nowrap}
-.btn-use-version{background:#f0fdf4;color:#166534;border:1px solid #86efac;
+.btn-use-version{background:var(--success-bg);color:var(--success-text);border:1px solid var(--success-border);
   font-size:11px;padding:2px 8px;border-radius:10px;cursor:pointer;font-weight:600;
   white-space:nowrap}
-.btn-use-version:hover{background:#dcfce7}
+.btn-use-version:hover{filter:brightness(.96)}
 .preview-nav{display:flex;align-items:center;gap:6px;margin-top:4px}
-.ver-counter{font-size:12px;color:#64748b;min-width:38px;text-align:center}
-.regen-error{color:#991b1b;font-size:12px;margin-top:4px;background:#fee2e2;
-  border-radius:4px;padding:4px 8px}
+.ver-counter{font-size:12px;color:var(--text-faint);min-width:38px;text-align:center}
+.regen-error{color:var(--danger-text);font-size:12px;margin-top:4px;background:var(--danger-bg);
+  border-radius:var(--radius-sm);padding:4px 8px}
 .regen-error pre{white-space:pre-wrap;word-break:break-all;font-size:11px;
   margin-top:2px;max-height:100px;overflow:auto}
 .preview-actions{display:flex;align-items:center;gap:8px;margin-top:6px}
-.btn-regen{background:#ede9fe;color:#5b21b6;font-size:12px;padding:4px 10px;
-  border-radius:6px;border:none;font-family:inherit;font-weight:500}
-.btn-regen:hover:not(:disabled){background:#ddd6fe;cursor:pointer}
-.btn-regen:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
-.btn-regen-secondary{background:#f8fafc;color:#64748b;border:1px solid #e2e8f0;font-size:11px;font-weight:400}
-.btn-regen-secondary:hover:not(:disabled){background:#f1f5f9;cursor:pointer}
-.btn-recomp{background:#dcfce7;color:#166534;font-size:12px;padding:4px 10px;
-  border-radius:6px;border:none;font-family:inherit;font-weight:600}
-.btn-recomp:hover:not(:disabled){background:#bbf7d0;cursor:pointer}
-.btn-recomp:disabled{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
-.regen-status-inline{font-size:11px;color:#64748b}
+.btn-regen{background:var(--info-bg);color:var(--info-text);font-size:12px;padding:5px 11px;
+  border-radius:var(--radius-sm);border:none;font-family:inherit;font-weight:500}
+.btn-regen:hover:not(:disabled){filter:brightness(.96);cursor:pointer}
+.btn-regen:disabled{background:var(--neutral-bg);color:var(--text-faint);cursor:not-allowed}
+.btn-regen-secondary{background:var(--surface-sunken);color:var(--text-muted);border:1px solid var(--border-soft);font-size:11px;font-weight:400}
+.btn-regen-secondary:hover:not(:disabled){background:var(--surface-hover);cursor:pointer}
+.btn-recomp{background:var(--success-bg);color:var(--success-text);font-size:12px;padding:5px 11px;
+  border-radius:var(--radius-sm);border:none;font-family:inherit;font-weight:600}
+.btn-recomp:hover:not(:disabled){filter:brightness(.96);cursor:pointer}
+.btn-recomp:disabled{background:var(--neutral-bg);color:var(--text-faint);cursor:not-allowed}
+.regen-status-inline{font-size:11px;color:var(--text-faint)}
 /* Shared modal chrome (confirm + consolidate) */
-dialog.app-modal{margin:auto;border:1px solid #e2e8f0;border-radius:10px;
-  padding:24px;max-width:480px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+dialog.app-modal{margin:auto;border:1px solid var(--border-soft);border-radius:var(--radius-lg);
+  padding:24px;max-width:480px;width:90%;box-shadow:var(--shadow-pop);
+  background:var(--surface);color:var(--text)}
 dialog.app-modal::backdrop{background:rgba(15,23,42,.45)}
+.modal-msg{white-space:pre-wrap;font-size:14px;color:var(--text);margin:0 0 16px;line-height:1.5}
+.modal-suppress-row{margin-bottom:14px}
+.modal-suppress-row label{font-size:12px;color:var(--text-faint);display:flex;gap:6px;align-items:center;cursor:pointer}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px}
 /* Consolidate modal */
-dialog#consolidate-modal{margin:auto;border:1px solid #e2e8f0;border-radius:10px;
-  padding:24px;max-width:480px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+dialog#consolidate-modal{margin:auto;border:1px solid var(--border-soft);border-radius:var(--radius-lg);
+  padding:24px;max-width:480px;width:90%;box-shadow:var(--shadow-pop);
+  background:var(--surface);color:var(--text)}
 dialog#consolidate-modal::backdrop{background:rgba(15,23,42,.45)}
-dialog#consolidate-modal h3{margin:0 0 16px;font-size:16px;color:#1e293b}
-dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
+dialog#consolidate-modal h3{margin:0 0 16px;font-size:16px;color:var(--text);font-family:var(--font-headline)}
+dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:var(--text-faint)}
 .cm-section{margin-bottom:16px}
-.cm-section label{font-size:13px;font-weight:500;color:#374151;display:flex;
+.cm-section label{font-size:13px;font-weight:500;color:var(--text);display:flex;
   gap:6px;align-items:center;cursor:pointer}
-.cm-section .cm-legend{font-size:12px;font-weight:600;color:#475569;
+.cm-section .cm-legend{font-size:12px;font-weight:600;color:var(--text-muted);
   margin-bottom:6px;display:block}
-.cm-zip-row{margin-top:10px;padding-top:10px;border-top:1px solid #f1f5f9}
-.cm-zip-row small{font-size:11px;color:#94a3b8}
+.cm-zip-row{margin-top:10px;padding-top:10px;border-top:1px solid var(--border-soft)}
+.cm-zip-row small{font-size:11px;color:var(--text-faint)}
 .cm-results{margin:12px 0;min-height:0}
 .cm-result-item{font-size:13px;padding:3px 0}
-.cm-result-ok{color:#166534}
-.cm-result-err{color:#991b1b}
+.cm-result-ok{color:var(--success-text)}
+.cm-result-err{color:var(--danger-text)}
 .cm-result-err pre{white-space:pre-wrap;word-break:break-all;font-size:11px;
-  margin-top:2px;background:#fee2e2;border-radius:4px;padding:4px 8px;
+  margin-top:2px;background:var(--danger-bg);border-radius:var(--radius-sm);padding:4px 8px;
   max-height:80px;overflow:auto}
 .cm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;
-  padding-top:12px;border-top:1px solid #f1f5f9}
+  padding-top:12px;border-top:1px solid var(--border-soft)}
 
 /* ── @-mention picker (image_prompt cast picker) ────────────────────────── */
-#mention-pop{position:fixed;z-index:900;background:#fff;border:1px solid #c4b5fd;
-  border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);
+#mention-pop{position:fixed;z-index:900;background:var(--surface);border:1px solid var(--accent-soft);
+  border-radius:var(--radius-md);box-shadow:var(--shadow-pop);
   min-width:200px;max-width:340px;padding:4px 0;display:none;overflow:hidden}
 .mention-row{display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;
   font-size:13px;white-space:nowrap}
-.mention-row:hover,.mention-row.hl{background:#ede9fe}
-.mention-row .m-name{flex:1;color:#1e293b;font-weight:500}
+.mention-row:hover,.mention-row.hl{background:var(--info-bg)}
+.mention-row .m-name{flex:1;color:var(--text);font-weight:500}
 .mention-row .m-kind{font-size:10px;padding:1px 6px;border-radius:8px;
-  background:#f1f5f9;color:#64748b;font-weight:500;text-transform:uppercase;letter-spacing:.03em}
-.mention-row .m-id{font-size:11px;color:#94a3b8;font-family:monospace}
+  background:var(--neutral-bg);color:var(--neutral-text);font-weight:500;text-transform:uppercase;letter-spacing:.03em}
+.mention-row .m-id{font-size:11px;color:var(--text-faint);font-family:monospace}
 /* PER-97: character-lane-full rows stay visible but inert, with a reason line
    appended below the list — a silently shorter list is worse than a greyed one. */
 .mention-row.blocked{cursor:not-allowed;opacity:.45}
 .mention-row.blocked:hover{background:none}
-.mention-note{padding:6px 10px;font-size:11px;color:#92400e;background:#fef3c7;
-  border-top:1px solid #fde68a;white-space:normal;max-width:320px;line-height:1.4}
+.mention-note{padding:6px 10px;font-size:11px;color:var(--warn-text);background:var(--warn-bg);
+  border-top:1px solid var(--warn-border);white-space:normal;max-width:320px;line-height:1.4}
 </style>
 </head>
 <body>
@@ -212,26 +308,26 @@ dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
 <header>
   <h1 id="header-title">story.json editor</h1>
   <span class="dirty-dot" id="dirty-dot" title="Unsaved changes">●</span>
-  <span id="autosave-hint" style="font-size:11px;color:#fb923c;opacity:0.9;display:none"></span>
-  <span id="cost-readout" title="" style="font-size:12px;color:#94a3b8"></span>
+  <span id="autosave-hint" class="autosave-hint" style="display:none"></span>
+  <span id="cost-readout" class="cost-readout" title=""></span>
   <button class="btn-primary" id="btn-save" onclick="triggerSave()">Save</button>
 </header>
 
 <div class="status-panel" id="status-panel"></div>
 
 <main id="main">
-  <p style="color:#64748b">Loading…</p>
+  <p class="loading-hint">Loading…</p>
 </main>
 
 <!-- Generic confirm modal — avoids browser "suppress dialogs" killing confirm() -->
 <dialog class="app-modal" id="confirm-modal">
-  <p id="confirm-msg" style="white-space:pre-wrap;font-size:14px;color:#1e293b;margin:0 0 16px;line-height:1.5"></p>
-  <div id="confirm-suppress-row" style="display:none;margin-bottom:14px">
-    <label style="font-size:12px;color:#64748b;display:flex;gap:6px;align-items:center;cursor:pointer">
+  <p id="confirm-msg" class="modal-msg"></p>
+  <div id="confirm-suppress-row" class="modal-suppress-row" style="display:none">
+    <label>
       <input type="checkbox" id="confirm-suppress-cb"> Don't ask me again this session
     </label>
   </div>
-  <div style="display:flex;justify-content:flex-end;gap:8px">
+  <div class="modal-actions">
     <button class="btn-sm" id="confirm-cancel">Cancel</button>
     <button class="btn-primary" id="confirm-ok">OK</button>
   </div>
@@ -538,7 +634,7 @@ async function init() {
     applyStatus(status);
   } catch (e) {
     document.getElementById('main').innerHTML =
-      `<p style="color:red">Failed to load: ${e.message}</p>`;
+      `<p class="load-error">Failed to load: ${e.message}</p>`;
     return;
   }
   document.title = (story.title || 'Untitled') + ' — Storybook Editor';
@@ -807,11 +903,11 @@ function renderSavedFormats(container) {
   const isExplicit = sf !== undefined;
   container.innerHTML = `
     <div class="sf-toggle-row">
-      <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+      <label>
         <input type="checkbox" id="sf-explicit" ${isExplicit ? 'checked' : ''}>
         Set saved_formats explicitly
       </label>
-      <span style="font-size:12px;color:#64748b">
+      <span class="sf-hint">
         (unset = all formats; empty = no book files)
       </span>
     </div>
@@ -864,7 +960,7 @@ function renderRefRows(container, char) {
       `<input type="text" value="${esc(path)}" placeholder="absolute or relative path to image">` +
       `<img class="ref-thumb" src="${esc(imgSrc)}" title="${esc(path)}">` +
       `<div class="ref-miss" title="File not found on disk">✗</div>` +
-      `<button class="btn-sm btn-danger" onclick="removeRef(this)">✕</button>`;
+      `<button class="btn-sm btn-danger">✕</button>`;
     const inp  = row.querySelector('input');
     const img  = row.querySelector('img');
     const miss = row.querySelector('.ref-miss');
@@ -917,6 +1013,8 @@ function renderCast() {
     markDirty(null);
   });
   sec.appendChild(addBtn);
+  const cc = document.getElementById('side-cast-count');
+  if (cc) cc.textContent = `(${(story.cast || []).length})`;
 }
 
 function buildCharCard(char, i) {
@@ -931,7 +1029,7 @@ function buildCharCard(char, i) {
     </div>
     <div class="card-body open" id="char-body-${i}">
       <div class="field">
-        <label>ID <small style="color:#94a3b8">(lowercase slug, stable key — set once; rename display name freely below)</small></label>
+        <label>ID <small>(lowercase slug, stable key — set once; rename display name freely below)</small></label>
         <input type="text" id="char-id-${i}" value="${esc(char.id||'')}" placeholder="e.g. pip, major-oak" pattern="^[a-z][a-z0-9-]*$" style="font-family:monospace">
       </div>
       <div class="field">
@@ -943,7 +1041,7 @@ function buildCharCard(char, i) {
         <textarea rows="3" id="char-appearance-${i}">${esc(char.appearance||'')}</textarea>
       </div>
       <div class="field">
-        <label>Persistent details <small style="color:#94a3b8">(optional — PER-87: a small accessory/prop the style sheet alone doesn't reliably hold, e.g. "dark baseball cap with sunglasses resting on the brim"; auto-appended on every page this entry is on, without touching image_prompt)</small></label>
+        <label>Persistent details <small>(optional — PER-87: a small accessory/prop the style sheet alone doesn't reliably hold, e.g. "dark baseball cap with sunglasses resting on the brim"; auto-appended on every page this entry is on, without touching image_prompt)</small></label>
         <input type="text" id="char-persistent-${i}" value="${esc(char.persistent_details||'')}">
       </div>
       <div class="field">
@@ -1098,7 +1196,7 @@ function _renderSheetVersionUI(cid, apiData) {
   const cidJ   = JSON.stringify(cid);
 
   area.innerHTML =
-    `<div class="preview-img-wrap" style="display:inline-block">` +
+    `<div class="preview-img-wrap">` +
     `<img class="sheet-ver-img" src="${esc(imgSrc)}" alt="${esc(name)} sheet v${viewIdx+1}"` +
     ` onerror="this.alt='image not found'">` +
     `<div class="preview-overlay">` +
@@ -1339,6 +1437,7 @@ function renderPages() {
     markDirty(null);
   });
   sec.appendChild(addBtn);
+  renderSidebarPages();
 }
 
 function updatePageBadge(badgeEl, page) {
@@ -1483,26 +1582,26 @@ function buildPageCard(page, i) {
           <select id="pg-font-${i}"></select>
         </div>
       </div>
-      <div class="field" style="max-width:260px">
+      <div class="field field-narrow">
         <label>Text colour</label>
         <select id="pg-colorhint-${i}"></select>
       </div>
       <div class="field" data-dep="page-text-bg">
-        <label>Text page background prompt <small style="color:#94a3b8">(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
+        <label>Text page background prompt <small>(long mode only; blank = use the book's shared text-page background; set to generate a dedicated background for this page via an extra paid call)</small></label>
         <input type="text" id="pg-textbgprompt-${i}" placeholder="e.g. a misty forest path at dawn, soft light filtering through leaves">
       </div>
       <div class="grid2">
         <div class="field">
-          <label>Text mode <small style="color:#94a3b8">(unset = same as book)</small></label>
+          <label>Text mode <small>(unset = same as book)</small></label>
           <select id="pg-textmode-${i}"></select>
         </div>
         <div class="field">
-          <label>Image model <small style="color:#94a3b8">(unset = same as book)</small></label>
+          <label>Image model <small>(unset = same as book)</small></label>
           <select id="pg-model-${i}"></select>
         </div>
       </div>
-      <div class="field" style="max-width:260px">
-        <label>Scene text <small style="color:#94a3b8">(unset = same as book)</small></label>
+      <div class="field field-narrow">
+        <label>Scene text <small>(unset = same as book)</small></label>
         <select id="pg-scenetext-${i}"></select>
       </div>
     </div>`;
@@ -1714,14 +1813,14 @@ function renderBook() {
       <div class="field"><label>Age band</label><select id="book-age-band"></select></div>
     </div>
     <div class="field">
-      <label>Premise <small style="color:#94a3b8">(optional — book-wide narrative tone injected into every page render; abstract atmosphere only: genre, audience age, mood, season; NO plot, places, or per-page objects)</small></label>
+      <label>Premise <small>(optional — book-wide narrative tone injected into every page render; abstract atmosphere only: genre, audience age, mood, season; NO plot, places, or per-page objects)</small></label>
       <textarea id="book-premise" rows="2" placeholder="e.g. A gentle bedtime picture book for ages 3-5; warm, calm, reassuring tone; soft late-evening light throughout"></textarea>
     </div>
     <div class="field"><label>Style (short human label for prose — style_guide is what the renderer anchors on)</label>
       <input type="text" id="book-style"></div>
 
-    <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
-      <legend style="font-size:12px;font-weight:600;color:#475569;padding:0 6px">style_guide (required — both paid scripts refuse to run without it)</legend>
+    <fieldset class="fieldset-box">
+      <legend class="fieldset-legend">style_guide (required — both paid scripts refuse to run without it)</legend>
       <div class="field"><label>Medium</label><input type="text" id="sg-medium"></div>
       <div class="field">
         <label>Palette (include #hex codes for cross-page consistency, e.g. "warm cream #F5E9D4")</label>
@@ -1736,7 +1835,7 @@ function renderBook() {
     </fieldset>
 
     <div class="field">
-      <label>Book style frame <small style="color:#94a3b8">(read-only — PER-82: an abstract style board sent as the lowest-priority reference on every page render; generated once by make_style_sheet.py, Stage 2. To regenerate: delete the file and re-run Stage 2)</small></label>
+      <label>Book style frame <small>(read-only — PER-82: an abstract style board sent as the lowest-priority reference on every page render; generated once by make_style_sheet.py, Stage 2. To regenerate: delete the file and re-run Stage 2)</small></label>
       <div id="style-frame-preview"></div>
     </div>
 
@@ -1747,18 +1846,18 @@ function renderBook() {
     </div>
     <div class="grid2">
       <div class="field"><label>Language (BCP-47, e.g. en, de, en-GB)</label><input type="text" id="book-language"></div>
-      <div class="field"><label>Image model <small style="color:#94a3b8">(page renders only; style sheets always use pro)</small></label><select id="book-model"></select></div>
+      <div class="field"><label>Image model <small>(page renders only; style sheets always use pro)</small></label><select id="book-model"></select></div>
     </div>
     <div class="field" data-dep="book-text-bg">
-      <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
+      <label>Text page background prompt <small>(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
       <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
     </div>
     <div class="field">
-      <label>Scene text <small style="color:#94a3b8">(PER-87 — suppress bans invented signs/lettering/logos on every page render; image models reliably garble invented text. Allow disables that guard, e.g. for a book that wants a legible shop sign)</small></label>
+      <label>Scene text <small>(PER-87 — suppress bans invented signs/lettering/logos on every page render; image models reliably garble invented text. Allow disables that guard, e.g. for a book that wants a legible shop sign)</small></label>
       <select id="book-scene-text"></select>
     </div>
-    <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
-      <legend style="font-size:12px;font-weight:600;color:#475569;padding:0 6px">fonts (optional — leave blank to use bundled Andika / Patrick Hand)</legend>
+    <fieldset class="fieldset-box">
+      <legend class="fieldset-legend">fonts (optional — leave blank to use bundled Andika / Patrick Hand)</legend>
       <div class="grid2">
         <div class="field"><label>Reader font (body text)</label><input type="text" id="book-font-reader" placeholder="Andika"></div>
         <div class="field"><label>Display font (titles)</label><input type="text" id="book-font-display" placeholder="Patrick Hand"></div>
@@ -1836,13 +1935,13 @@ function renderStyleFramePreview() {
   if (story.style_frame) {
     const imgSrc = `/img?path=${encodeURIComponent(story.style_frame)}`;
     el.innerHTML =
-      `<img class="ref-thumb" src="${esc(imgSrc)}" title="${esc(story.style_frame)}" style="max-height:120px;display:block">` +
+      `<img class="ref-thumb style-frame-img" src="${esc(imgSrc)}" title="${esc(story.style_frame)}">` +
       (styleFrameExists
         ? ''
-        : `<div style="color:#b45309;font-size:12px;margin-top:4px">⚠ File not found on disk (${esc(story.style_frame)}) — re-run make_style_sheet.py</div>`);
+        : `<div class="warn-inline">⚠ File not found on disk (${esc(story.style_frame)}) — re-run make_style_sheet.py</div>`);
   } else {
     el.innerHTML =
-      `<div style="color:#94a3b8;font-size:13px">Not yet generated — run make_style_sheet.py (Stage 2) to create it.</div>`;
+      `<div class="hint-block">Not yet generated — run make_style_sheet.py (Stage 2) to create it.</div>`;
   }
 }
 
@@ -2385,40 +2484,110 @@ async function _refreshRegenAllStatus() {
 }
 
 // ── Full render ────────────────────────────────────────────────────────────
+// App shell: a persistent left sidebar (Book / Cast / Pages nav + Consolidate /
+// Re-generate All) beside a scrolling pane holding the three collapsible
+// sections. All page cards stay mounted (card-body starts "open") — the
+// sidebar's page rows scroll-to-anchor rather than swap the pane's contents.
 function renderAll() {
   const main = document.getElementById('main');
   main.innerHTML = `
-    <section>
-      <h2 onclick="toggleSection('book-body', this.querySelector('.toggle'))">
-        📖 Book settings <span class="toggle">▼</span>
-      </h2>
-      <div class="section-body" id="book-body"></div>
-    </section>
-    <section>
-      <h2 onclick="toggleSection('cast-body', this.querySelector('.toggle'))">
-        🎭 Cast <small style="font-weight:400;color:#64748b">(order determines hero on pages)</small>
-        <span class="toggle">▼</span>
-      </h2>
-      <div class="section-body" id="cast-body"></div>
-    </section>
-    <section>
-      <h2 onclick="toggleSection('pages-body', this.querySelector('.toggle'))">
-        📄 Pages <span class="toggle">▼</span>
-      </h2>
-      <div class="section-body" id="pages-body"></div>
-    </section>
-    <div style="text-align:center;margin:4px 0 24px;display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap">
-      <button class="btn-regen" id="btn-regen-all" onclick="doRegenerateAll()">↻ Re-generate All Pages</button>
-      <button class="btn-primary" onclick="openConsolidateModal()">📦 Consolidate Story</button>
-    </div>
-    <div id="regen-all-status-wrap" style="text-align:center;margin:-8px 0 16px;font-size:0.85em;color:#64748b">
-      <span id="regen-all-status"></span>
-      <div id="regen-all-error" class="regen-error" style="display:none"></div>
+    <aside class="sidebar" id="sidebar">
+      <nav class="side-nav">
+        <a href="#sec-book" class="side-link" data-target="sec-book">📖 Book</a>
+        <a href="#sec-cast" class="side-link" data-target="sec-cast">🎭 Cast <span class="side-count" id="side-cast-count"></span></a>
+        <div class="side-link side-pages-label" data-target="sec-pages">📄 Pages</div>
+        <div class="side-pages-list" id="side-pages-list"></div>
+      </nav>
+      <div class="side-footer">
+        <button class="btn-regen btn-block" id="btn-regen-all" onclick="doRegenerateAll()">↻ Re-generate All Pages</button>
+        <button class="btn-primary btn-block" onclick="openConsolidateModal()">📦 Consolidate Story</button>
+        <div id="regen-all-status-wrap" class="regen-all-status-wrap">
+          <span id="regen-all-status"></span>
+          <div id="regen-all-error" class="regen-error" style="display:none"></div>
+        </div>
+      </div>
+    </aside>
+    <div class="pane" id="pane">
+      <section class="panel" id="sec-book">
+        <h2 class="panel-head" onclick="toggleSection('book-body', this.querySelector('.toggle'))">
+          <span class="panel-icon">📖</span> Book settings <span class="toggle">▼</span>
+        </h2>
+        <div class="section-body" id="book-body"></div>
+      </section>
+      <section class="panel" id="sec-cast">
+        <h2 class="panel-head" onclick="toggleSection('cast-body', this.querySelector('.toggle'))">
+          <span class="panel-icon">🎭</span> Cast <span class="panel-hint">(order determines hero on pages)</span>
+          <span class="toggle">▼</span>
+        </h2>
+        <div class="section-body" id="cast-body"></div>
+      </section>
+      <section class="panel" id="sec-pages">
+        <h2 class="panel-head" onclick="toggleSection('pages-body', this.querySelector('.toggle'))">
+          <span class="panel-icon">📄</span> Pages <span class="toggle">▼</span>
+        </h2>
+        <div class="section-body" id="pages-body"></div>
+      </section>
     </div>`;
   renderBook();
   renderCast();
-  renderPages();
+  renderPages(); // also populates the sidebar page list — see renderPages()
+  _initScrollSpy();
 }
+
+// Sidebar "Pages" list — one row per page, scroll-anchored to that page's
+// card body (id="page-body-${i}", already emitted by buildPageCard). Kept in
+// sync from renderPages() so add/delete/reorder never leaves it stale.
+function renderSidebarPages() {
+  const list = document.getElementById('side-pages-list');
+  const cc = document.getElementById('side-cast-count');
+  if (cc) cc.textContent = `(${(story.cast || []).length})`;
+  if (!list) return;
+  list.innerHTML = '';
+  (story.pages || []).forEach((page, i) => {
+    const rs = renderStatus[String(page.page_num)];
+    const row = document.createElement('a');
+    row.href = `#page-body-${i}`;
+    row.className = 'side-page-row';
+    row.dataset.target = `page-body-${i}`;
+    row.innerHTML =
+      `<span class="side-dot${rs && rs.rendered ? ' rendered' : ''}"></span>` +
+      `<span>Page ${page.page_num}</span>`;
+    list.appendChild(row);
+  });
+}
+
+// Scroll-spy: highlights the sidebar nav item for whichever top-level section
+// is currently in view within the scrolling pane. Cosmetic only — no test
+// depends on `.active`.
+let _spyObserver = null;
+function _initScrollSpy() {
+  if (_spyObserver) _spyObserver.disconnect();
+  const pane = document.getElementById('pane');
+  if (!pane || typeof IntersectionObserver === 'undefined') return;
+  const links = document.querySelectorAll('.side-link[data-target]');
+  _spyObserver = new IntersectionObserver(entries => {
+    entries.forEach(en => {
+      if (en.isIntersecting) {
+        links.forEach(l => l.classList.toggle('active', l.dataset.target === en.target.id));
+      }
+    });
+  }, { root: pane, threshold: 0.3 });
+  ['sec-book', 'sec-cast', 'sec-pages'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) _spyObserver.observe(el);
+  });
+}
+
+// Sidebar links/rows scroll their target into view within the pane instead of
+// following the default document-level hash jump (the pane, not the document,
+// is the scrolling region in the app shell).
+document.addEventListener('click', e => {
+  const link = e.target.closest('.side-link[data-target], .side-page-row[data-target]');
+  if (!link) return;
+  e.preventDefault();
+  const target = document.getElementById(link.dataset.target);
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 
 // ── Save ───────────────────────────────────────────────────────────────────
 // auto=true: quiet failures (no error panel spam); auto=false: loud (manual Save / Ctrl-S).
