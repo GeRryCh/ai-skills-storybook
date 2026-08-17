@@ -198,7 +198,7 @@ uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 ```
 
 `render_book.py` flags: `--from N` (resume), `--only N`, `--resolution 1K|2K|4K`,
-`--aspect-ratio RATIO` (override from story.json; unset → model chooses),
+`--aspect-ratio RATIO` (override from story.json; unset → built-in default `3:2`; pass/set `auto` to opt out and let the model choose framing per call),
 `--text-mode overlay|native|long` (override for entire run; precedence: CLI > per-page `text_mode` field > book `text_mode` field > native default; per-page `text_mode` lets individual pages differ from the book default without this flag),
 `--model gemini-3.1-flash-image|gemini-3-pro-image`
 (override per-page/book model for one run; precedence: CLI > page field > story field > flash default),

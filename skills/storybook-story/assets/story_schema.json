@@ -94,9 +94,10 @@
     },
     "aspect_ratio": {
       "type": "string",
-      "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
-      "description": "Optional book-wide aspect ratio applied to both style sheets and page renders. When omitted, the model picks framing on each call (non-deterministic). Set this to lock consistent framing across all sheets and pages (e.g. '4:3' for landscape, '3:4' for portrait, '1:1' for square). The stylesheet/render CLI --aspect-ratio flag overrides this value when passed explicitly.",
-      "x-interview": { "priority": "advanced", "ask": "Lock one page framing for the whole book, or leave unset to let the model choose per page." }
+      "enum": ["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+      "default": "3:2",
+      "description": "Book-wide aspect ratio applied to both style sheets and page renders. When omitted, both paid scripts fall back to the built-in default '3:2' (landscape) — every page renders at the same framing, which every downstream artifact (bound PDF, fixed-layout EPUB3) requires for a consistent page shape. Set 'auto' to explicitly opt back into per-call model-chosen framing (non-deterministic — pages may come back mixed sizes; not recommended for a bound book). Set any other value to lock a specific framing (e.g. '4:3' for landscape, '3:4' for portrait, '1:1' for square). The stylesheet/render CLI --aspect-ratio flag overrides this value when passed explicitly.",
+      "x-interview": { "priority": "core", "ask": "Lock one page framing for the whole book (default: 3:2 landscape), or 'auto' to let the model choose per page (mixed page sizes, not recommended for PDF/EPUB)." }
     },
     "model": {
       "type": "string",

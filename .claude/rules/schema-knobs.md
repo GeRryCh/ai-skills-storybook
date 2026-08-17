@@ -30,7 +30,7 @@ Required fields authored by prose logic (`title`, `style_guide`, `cast`, `pages`
 
 ## Omission rule
 
-Accepting a default at Gate 1 means the optional key is **omitted** from `story.json` (preserves the editor's round-trip contract where "optional fields never get materialised when absent"). `saved_formats: []` (records "no book files" preference — hint for Stage 4) is NOT the same as omitted (hint = all formats). No script reads `saved_formats`; storybook-consolidate uses it as the default answer when asking which formats to export, and the interactive choice there always wins. `aspect_ratio` omitted = model picks framing per page call.
+Accepting a default at Gate 1 means the optional key is **omitted** from `story.json` (preserves the editor's round-trip contract where "optional fields never get materialised when absent"). `saved_formats: []` (records "no book files" preference — hint for Stage 4) is NOT the same as omitted (hint = all formats). No script reads `saved_formats`; storybook-consolidate uses it as the default answer when asking which formats to export, and the interactive choice there always wins. `aspect_ratio` omitted = built-in default `3:2` used by both paid scripts (PER-88; a schema `"default"` alone does nothing — `render_book.py`/`make_style_sheet.py` resolve it via `args.aspect_ratio or story.get("aspect_ratio") or DEFAULT_ASPECT_RATIO`, so the fallback lives in script code, not just the schema). Write the literal value `"auto"` to opt back into the old per-call model-chosen framing.
 
 ## `ask` field guidance
 

@@ -422,8 +422,8 @@ Present the full resolved configuration for confirmation **before writing anythi
 | age_band | {chosen or "general (omitted — all-ages default)"} | answered / default (general) |
 | style | {chosen} | answered / default |
 | text_mode | {chosen} | answered / default |
+| aspect_ratio | {chosen or "unset — 3:2 used at render time"} | answered / default (3:2) |
 | resolution | {value or "unset — 2K used at render time"} | default |
-| aspect_ratio | {value or "unset — model picks per page"} | default |
 | saved_formats | {value or "pdf + epub (all)"} | default |
 | language | {value} | default |
 | fonts | {value or "bundled Andika / Patrick Hand"} | default |
@@ -445,7 +445,7 @@ Required fields (`title`, `style`, `style_guide`, `cast`, `pages`) are always wr
 
 Important edge cases:
 - `saved_formats: []` records a "no book files" preference consumed by Stage 4 (storybook-consolidate) as a hint — this is NOT the same as omitting the field (omitted means "all formats" as default hint). No script reads this field; the consolidate skill uses it as the default answer when asking which formats to export, and the interactive choice there always wins. Only write `[]` when the user explicitly requests no book files.
-- `aspect_ratio` omitted = model picks framing per page call (non-deterministic). Only write it when the user wants locked framing.
+- `aspect_ratio` omitted = built-in default `3:2` used at render time (deterministic — every page renders at the same framing). Only write `"auto"` when the user explicitly wants the model to pick framing per page call (non-deterministic, produces mixed page sizes — discourage this for any book ending in a bound PDF/EPUB). Write any other enum value when the user wants a different locked framing.
 - `resolution` omitted = 2K at render time. Only write it when the user specifies a quality.
 
 ---

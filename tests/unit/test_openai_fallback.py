@@ -18,6 +18,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import _support  # noqa: F401 — populates sys.path with script dirs
 
+import make_style_sheet
 import render_book
 
 
@@ -139,6 +140,40 @@ class TestAspectToSize(unittest.TestCase):
 
     def test_whitespace_stripped(self):
         self.assertEqual(render_book.aspect_to_size("  1:1  "), "1024x1024")
+
+    def test_auto_returns_auto(self):
+        """'auto' (PER-88's explicit opt-out) isn't a recognised ratio string —
+        it's resolved to None before aspect_to_size ever sees it (main()'s
+        `if aspect_ratio == "auto": aspect_ratio = None`) — but the raw string
+        should still fall through to "auto" here rather than erroring, as a
+        defensive guarantee for any other caller."""
+        self.assertEqual(render_book.aspect_to_size("auto"), "auto")
+
+
+# ---------------------------------------------------------------------------
+# Tests: DEFAULT_ASPECT_RATIO (PER-88) — kept in sync across both paid scripts
+# ---------------------------------------------------------------------------
+
+class TestDefaultAspectRatioInSync(unittest.TestCase):
+    """render_book.py and make_style_sheet.py duplicate DEFAULT_ASPECT_RATIO
+    (see .claude/rules/script-authoring.md's duplicated-and-kept-in-sync list).
+    Guard against drift the same way TestPricingTablesInSync / test_lane_caps_in_sync.py do."""
+
+    def test_default_is_3_2(self):
+        self.assertEqual(render_book.DEFAULT_ASPECT_RATIO, "3:2")
+
+    def test_copies_match(self):
+        self.assertEqual(
+            render_book.DEFAULT_ASPECT_RATIO,
+            make_style_sheet.DEFAULT_ASPECT_RATIO,
+        )
+
+    def test_default_is_a_valid_landscape_ratio(self):
+        """DEFAULT_ASPECT_RATIO must resolve to a real gpt-image-2 size, not 'auto'."""
+        self.assertEqual(
+            render_book.aspect_to_size(render_book.DEFAULT_ASPECT_RATIO),
+            "1536x1024",
+        )
 
 
 # ---------------------------------------------------------------------------

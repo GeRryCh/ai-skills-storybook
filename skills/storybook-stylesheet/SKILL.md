@@ -107,6 +107,12 @@ sheet anchors that character on every page it appears — a wrong sheet poisons 
 The style frame is sent on *every* page, so a bad frame is strictly worse: it poisons the
 whole book, not just the pages one character appears on.
 
+**Check age and body proportions specifically** for every character sheet — compare
+against the age stated (or implied) in that cast entry's `appearance`, not just whether
+the face looks right. Reference photos spanning a range of ages and the soft-illustration
+idiom both bias young by default (PER-88); a too-young sheet is the failure hardest to
+un-see after 8 pages render and the cheapest to catch right here.
+
 If a sheet is wrong:
 1. Fix that character's entry in the `cast` array in `story.json` (sharpen
    `appearance`, set/update `ref_image`).

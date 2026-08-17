@@ -96,6 +96,31 @@ def _esc(s: str) -> str:
     return escape(s, {'"': "&quot;"})
 
 
+def _warn_mixed_page_sizes(phys_pages: list[tuple]) -> None:
+    """Warn (never fail) when physical pages don't share one pixel size (PER-88).
+
+    A fixed-layout EPUB3 sets the viewport per page from image dimensions, so a
+    mixed-size book visibly re-fits between pages — the unset-aspect_ratio default
+    used to let the model pick framing per call, which produced exactly this.
+    Compares raw (width, height), not reduced aspect ratio, so it also catches
+    same-ratio-different-resolution mixes. Keep in sync with merge_pdf.py.
+    """
+    by_size: dict[tuple[int, int], list[str]] = {}
+    for slug, _pb, w, h, _alt, _label in phys_pages:
+        by_size.setdefault((w, h), []).append(slug)
+    if len(by_size) <= 1:
+        return
+    lines = [
+        f"  {w}x{h}: page(s) {', '.join(slugs)}"
+        for (w, h), slugs in by_size.items()
+    ]
+    print(
+        "Warning: rendered pages have mixed image dimensions — the fixed-layout "
+        "EPUB viewport will not have a consistent page shape:\n" + "\n".join(lines),
+        file=sys.stderr,
+    )
+
+
 # ---------------------------------------------------------------------------
 # EPUB XML / XHTML template builders
 # ---------------------------------------------------------------------------
@@ -366,6 +391,8 @@ def merge_epub(
             file=sys.stderr,
         )
         sys.exit(1)
+
+    _warn_mixed_page_sizes(phys_pages)
 
     # Determine output EPUB path.
     if out is not None:

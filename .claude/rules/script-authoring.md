@@ -18,9 +18,12 @@ Both paid scripts skip work whose output already exists. `make_style_sheet.py` s
 ## Keep duplicated helpers in sync
 
 `build_style_block()`, `append_api_log()`, `require_cast_ids()`, `CAST_ID_MIGRATION_MESSAGE`,
-`aspect_to_size()` (+ `_PORTRAIT_RATIOS` / `_LANDSCAPE_RATIOS`), and `get_api_key()` are
-intentionally duplicated in both `render_book.py` and `make_style_sheet.py`. Any change to
-any of these must be applied to both copies.
+`aspect_to_size()` (+ `_PORTRAIT_RATIOS` / `_LANDSCAPE_RATIOS`), `DEFAULT_ASPECT_RATIO`
+(PER-88 — the built-in fallback, `"3:2"`, used at each script's `aspect_ratio` resolution
+point when both the CLI flag and story.json's field are unset; `"auto"` is the literal
+opt-out value that resolves to `None`), and `get_api_key()` are intentionally duplicated
+in both `render_book.py` and `make_style_sheet.py`. Any change to any of these must be
+applied to both copies.
 
 **PER-35 cost-accounting helpers** join this list: `PRICING`, `PRICING_AS_OF`,
 `openai_call_cost()`, `append_cost_record()`, `read_cost_ledger()`,

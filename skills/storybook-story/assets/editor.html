@@ -1766,7 +1766,7 @@ function renderBook() {
   bindEnum(b.querySelector('#book-text-mode'), story, 'text_mode', enumFor('text_mode'), {optional:true,
     onchange: () => { applyDeps(b, null); renderPages(); }});
   bindEnum(b.querySelector('#book-resolution'), story, 'resolution', enumFor('resolution'), {optional:true});
-  bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true, defaultVal:'model chooses'});
+  bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true});
   bindEnum(b.querySelector('#book-model'), story, 'model', enumFor('model'), {optional:true});
 
   // Fonts — lazy-create/delete

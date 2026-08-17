@@ -979,11 +979,17 @@ def _ensure_png(data: bytes) -> bytes:
 
 # ---------------------------------------------------------------------------
 # OpenAI gpt-image-2 fallback helpers (PER-67)
-# Keep aspect_to_size / get_api_key in sync with make_style_sheet.py.
+# Keep aspect_to_size / DEFAULT_ASPECT_RATIO / get_api_key in sync with make_style_sheet.py.
 # ---------------------------------------------------------------------------
 
 _PORTRAIT_RATIOS = {"2:3", "3:4", "4:5", "9:16"}
 _LANDSCAPE_RATIOS = {"3:2", "4:3", "5:4", "16:9", "21:9"}
+
+# Built-in default when both the CLI flag and story.json's aspect_ratio are unset
+# (PER-88). Every page must render at the same framing for a bound PDF / fixed-layout
+# EPUB3 to look right -- unset used to mean "model picks per call", which produced
+# mixed page sizes. "auto" is the explicit opt-out back to that old per-call behavior.
+DEFAULT_ASPECT_RATIO = "3:2"
 
 
 def aspect_to_size(aspect: str | None) -> str:
@@ -1979,12 +1985,13 @@ def main() -> None:
                         help="Override the resolution from story.json (default: story.json 'resolution' field, or 2K if not set)")
     parser.add_argument(
         "--aspect-ratio",
-        choices=["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+        choices=["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
         default=None,
         dest="aspect_ratio",
         help=(
             "Override the aspect ratio from story.json "
-            "(default: story.json 'aspect_ratio' field, or unset — model chooses)."
+            "(default: story.json 'aspect_ratio' field, or built-in 3:2 if not set; "
+            "pass 'auto' to opt out and let the model choose framing per call)."
         ),
     )
     parser.add_argument(
@@ -2061,8 +2068,11 @@ def main() -> None:
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
-    # CLI flag > story.json field > unset (model chooses framing).
-    aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or None
+    # CLI flag > story.json field > built-in default (DEFAULT_ASPECT_RATIO).
+    # 'auto' (explicit opt-out) resolves to None -- model chooses framing per call.
+    aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or DEFAULT_ASPECT_RATIO
+    if aspect_ratio == "auto":
+        aspect_ratio = None
     # CLI flag > story.json field > built-in default (openai).
     fallback_vendor = args.fallback_vendor or story.get("fallback_vendor") or "openai"
     # text_mode: resolved per page via resolve_text_mode(story, page, args.text_mode).

@@ -84,6 +84,13 @@ _RUN_COST_RECORDS: list[dict] = []
 _PORTRAIT_RATIOS = {"2:3", "3:4", "4:5", "9:16"}
 _LANDSCAPE_RATIOS = {"3:2", "4:3", "5:4", "16:9", "21:9"}
 
+# Built-in default when both the CLI flag and story.json's aspect_ratio are unset
+# (PER-88). Keep in sync with the copy in render_book.py. Every page must render at the
+# same framing for a bound PDF / fixed-layout EPUB3 to look right -- unset used to mean
+# "model picks per call", which produced mixed page sizes. "auto" is the explicit
+# opt-out back to that old per-call behavior.
+DEFAULT_ASPECT_RATIO = "3:2"
+
 
 def aspect_to_size(aspect: str | None) -> str:
     if not aspect:
@@ -426,6 +433,12 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
             f"(3) full-body right profile view, "
             f"(4) a close-up of the face. "
             f"Same character at the same scale and with identical design in every view. "
+            f"Age and body proportions: if the character description above states or "
+            f"implies an age, render the character at exactly that age — never younger, "
+            f"and never more toddler-like, babyish, or rounder-faced than described. Match "
+            f"head-to-body proportions, limb length, and facial maturity to the stated age, "
+            f"not just facial features — the soft illustration style tends to skew younger "
+            f"by default, so age must be deliberately matched, not left to style bias. "
             + (
                 f"The attached reference photographs all show the same real person: "
                 f"{name or 'the main character'}. Draw exactly this person — match the face "
@@ -433,7 +446,9 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
                 f"photographs as closely as the art style allows. The sheet must be an "
                 f"unmistakable portrait of {name or 'this person'}, instantly recognisable "
                 f"to people who know them — never a generic character merely inspired by "
-                f"the photographs. "
+                f"the photographs. If the reference photographs show this person at "
+                f"different ages, the age stated in the character description above wins — "
+                f"never render younger than the description states, even if a photo does. "
                 if has_refs
                 else ""
             )
@@ -915,12 +930,13 @@ def main() -> None:
                         help="Override the resolution from story.json (default: story.json 'resolution' field, or 2K if not set)")
     parser.add_argument(
         "--aspect-ratio",
-        choices=["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+        choices=["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
         default=None,
         dest="aspect_ratio",
         help=(
             "Override the aspect ratio from story.json "
-            "(default: story.json 'aspect_ratio' field, or unset — model chooses)."
+            "(default: story.json 'aspect_ratio' field, or built-in 3:2 if not set; "
+            "pass 'auto' to opt out and let the model choose framing per call)."
         ),
     )
     parser.add_argument(
@@ -945,8 +961,11 @@ def main() -> None:
 
     # CLI flag > story.json field > built-in default (2K).
     resolution = args.resolution or story.get("resolution") or "2K"
-    # CLI flag > story.json field > unset (model chooses framing).
-    aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or None
+    # CLI flag > story.json field > built-in default (DEFAULT_ASPECT_RATIO).
+    # 'auto' (explicit opt-out) resolves to None -- model chooses framing per call.
+    aspect_ratio = args.aspect_ratio or story.get("aspect_ratio") or DEFAULT_ASPECT_RATIO
+    if aspect_ratio == "auto":
+        aspect_ratio = None
 
     out_dir = Path(args.out_dir).resolve() if args.out_dir else story_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
