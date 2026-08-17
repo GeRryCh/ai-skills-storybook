@@ -142,6 +142,9 @@ Each entry carries an optional `"kind"` field: `"character"` (default when absen
   into the style sheet at Stage 2 and the character wears it unchanged on every page.
   If the user did not specify clothing, invent one simple distinctive outfit and name
   it. Photos anchor face and hair likeness only — Stage 2 ignores clothing in photos.
+- Optional `persistent_details` (PER-87): a small accessory/prop that the style sheet
+  alone doesn't reliably hold onto (e.g. a cap, glasses) — Stage 3 auto-appends it as a
+  continuity clause on every page this entry is on. See the name-only rule note below.
 - If the user supplied character photos, map each to its character's `ref_image`
   following the Source-photo analysis step above. Use a single path for one photo,
   or an array of paths for several images of the same person (multiple angles).
@@ -399,6 +402,15 @@ appearance (what the cast entry looks like) is dropped.
 
 **Non-cast background figures** (unnamed visitors, a park keeper, a passing dog) are
 described in prose as usual — they have no style sheet to anchor on.
+
+**The name-only rule narrows for small accessories (PER-87).** The style sheet is the
+stronger signal for face, build, and main garment — but empirically not always for a
+small accessory (e.g. a cap, glasses) on flash, which can drop it even with the sheet
+attached. Do not fight this by writing a shortened accessory cue into `image_prompt` to
+dodge the PER-42 appearance-echo warning — that games the check instead of satisfying it.
+Set `cast[].persistent_details` on the entry instead (e.g. `"dark baseball cap with
+sunglasses resting on the brim"`); Stage 3 appends it automatically on every page that
+entry is on, and it never touches `image_prompt`, so the echo warning can't fire on it.
 
 ---
 

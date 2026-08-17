@@ -943,6 +943,10 @@ function buildCharCard(char, i) {
         <textarea rows="3" id="char-appearance-${i}">${esc(char.appearance||'')}</textarea>
       </div>
       <div class="field">
+        <label>Persistent details <small style="color:#94a3b8">(optional — PER-87: a small accessory/prop the style sheet alone doesn't reliably hold, e.g. "dark baseball cap with sunglasses resting on the brim"; auto-appended on every page this entry is on, without touching image_prompt)</small></label>
+        <input type="text" id="char-persistent-${i}" value="${esc(char.persistent_details||'')}">
+      </div>
+      <div class="field">
         <label>Kind</label>
         <select id="char-kind-${i}"></select>
       </div>
@@ -989,6 +993,13 @@ function buildCharCard(char, i) {
 
   const appTa = card.querySelector(`#char-appearance-${i}`);
   appTa.addEventListener('change', () => { char.appearance = appTa.value; markDirty(null); });
+
+  const persistentInp = card.querySelector(`#char-persistent-${i}`);
+  persistentInp.addEventListener('change', () => {
+    if (persistentInp.value === '') delete char.persistent_details;
+    else char.persistent_details = persistentInp.value;
+    markDirty(null);
+  });
 
   const kindSel = card.querySelector(`#char-kind-${i}`);
   const kindEnum = kindOf => {
@@ -1490,6 +1501,10 @@ function buildPageCard(page, i) {
           <select id="pg-model-${i}"></select>
         </div>
       </div>
+      <div class="field" style="max-width:260px">
+        <label>Scene text <small style="color:#94a3b8">(unset = same as book)</small></label>
+        <select id="pg-scenetext-${i}"></select>
+      </div>
     </div>`;
 
   // Badges
@@ -1570,6 +1585,10 @@ function buildPageCard(page, i) {
   // Model override — sentinel shows the inherited default (page → book → schema default).
   bindEnum(card.querySelector(`#pg-model-${i}`), page, 'model',
     enumFor('model'), { optional: true, page, defaultVal: story.model || defaultFor('model') });
+
+  // Scene text override (PER-87) — sentinel shows the inherited default (page → book → schema default).
+  bindEnum(card.querySelector(`#pg-scenetext-${i}`), page, 'scene_text',
+    enumFor('scene_text'), { optional: true, page, defaultVal: story.scene_text || defaultFor('scene_text') });
 
   // Color hint — enum dropdown matching established sentinel-inherit pattern (PER-52)
   bindEnum(card.querySelector(`#pg-colorhint-${i}`), page, 'text_color_hint',
@@ -1734,6 +1753,10 @@ function renderBook() {
       <label>Text page background prompt <small style="color:#94a3b8">(long mode only; custom scene for the shared text-page background reused on every text page; blank = generic style-matched background)</small></label>
       <input type="text" id="book-textbgprompt" placeholder="e.g. soft parchment with faint watercolor meadow wash">
     </div>
+    <div class="field">
+      <label>Scene text <small style="color:#94a3b8">(PER-87 — suppress bans invented signs/lettering/logos on every page render; image models reliably garble invented text. Allow disables that guard, e.g. for a book that wants a legible shop sign)</small></label>
+      <select id="book-scene-text"></select>
+    </div>
     <fieldset style="border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:14px">
       <legend style="font-size:12px;font-weight:600;color:#475569;padding:0 6px">fonts (optional — leave blank to use bundled Andika / Patrick Hand)</legend>
       <div class="grid2">
@@ -1768,6 +1791,7 @@ function renderBook() {
   bindEnum(b.querySelector('#book-resolution'), story, 'resolution', enumFor('resolution'), {optional:true});
   bindEnum(b.querySelector('#book-aspect-ratio'), story, 'aspect_ratio', enumFor('aspect_ratio'), {optional:true});
   bindEnum(b.querySelector('#book-model'), story, 'model', enumFor('model'), {optional:true});
+  bindEnum(b.querySelector('#book-scene-text'), story, 'scene_text', enumFor('scene_text'), {optional:true});
 
   // Fonts — lazy-create/delete
   const fonts = story.fonts || {};
@@ -2475,7 +2499,7 @@ function clientValidate() {
   const errors = [];
   const required = (schema.required || []);
   required.forEach(k => { if (story[k] === undefined) errors.push(`Missing required field: ${k}`); });
-  for (const key of ['age_band','text_mode','resolution','aspect_ratio','model']) {
+  for (const key of ['age_band','text_mode','resolution','aspect_ratio','model','scene_text']) {
     const e = enumFor(key);
     if (story[key] !== undefined && !e.includes(story[key]))
       errors.push(`'${key}' must be one of [${e.join(', ')}] (got: ${story[key]})`);
@@ -2486,7 +2510,7 @@ function clientValidate() {
       if (!castIds.includes(cid))
         errors.push(`Page ${page.page_num}: cast id "${cid}" is not in the cast`);
     });
-    for (const key of ['text_placement','text_align','font','model','text_mode']) {
+    for (const key of ['text_placement','text_align','font','model','text_mode','scene_text']) {
       const e = enumFor(key);
       if (page[key] !== undefined && e.length && !e.includes(page[key]))
         errors.push(`Page ${page.page_num}: '${key}' invalid value "${page[key]}"`);

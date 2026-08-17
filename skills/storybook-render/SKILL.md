@@ -56,6 +56,8 @@ uv run {skillDir}/scripts/render_book.py \
 - `--out-dir DIR` — output directory for `pages/`, `log.txt`, `costs.jsonl` (default: same directory as `--story`).
 - `--composite-only` — abort instead of making any paid Gemini call; only rebuild free Pillow composites (overlay text panels, long-mode text pages, long cover) from existing raw/art/bg files. Needs no `GEMINI_API_KEY`. Pages that would require a new image fail with a message naming the missing prerequisite file (exit 1). Use this to prove a text/layout change costs nothing before committing to a real render.
 - `--fallback-vendor openai|none` — vendor to retry on when Gemini returns `finish_reason=PROHIBITED_CONTENT` (a deterministic content-policy block, not a transient error). `openai` (default): auto-retry that page on OpenAI `gpt-image-2` using the same resolved prompt and style-sheet references, when `STORYBOOK_SKILL_OPENAI_API_KEY` or `OPENAI_API_KEY` is set. `none`: disable the fallback — the page fails as today. Precedence: `--fallback-vendor` flag > `story.json`'s `fallback_vendor` field > `openai` default. Transient `5xx`/`429` errors are unaffected — they keep the Gemini retry path.
+- `--saved-formats pdf epub|none` — override `story.json`'s `saved_formats` for this run: which book file(s) to assemble after a full render. `epub` is a fixed-layout EPUB3 (pre-paginated, full-bleed pages). `none` skips assembly entirely (useful for partial `--from` runs where more pages are coming). `saved_formats` is normally configured in `story.json` (default: all formats when omitted).
+- `--scene-text suppress|allow` — override the diegetic-lettering guard (PER-87) for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--scene-text` flag > `pages[].scene_text` > top-level `scene_text` > `suppress` default). See "Auto-injected prompt guards" below.
 
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
@@ -124,6 +126,33 @@ model's world-knowledge default. It's an abstract style board (palette/texture/l
 samples), never a scene — a missing or absent frame is just today's behavior (soft, not a
 hard requirement like a location's sheet).
 
+## Auto-injected prompt guards (PER-87)
+
+`render_book.py` transparently appends defensive language to every page prompt, the same
+way `text_placement` safe-zone language already is — authors never write this boilerplate
+by hand:
+
+1. **No-duplicate-characters guard.** Derived from the page's `kind: "character"` cast
+   entries, resolved to display names: *"Exactly 3 named characters in this scene, and no
+   duplicates: one Eva, one Grandpa Vagif, one German. Unnamed background figures such as
+   crowds or passers-by are allowed and are not counted."* Objects/locations are never
+   counted; scenery-only pages (`cast: []`) get no guard. Fixes a recurring defect where
+   the same character rendered twice in one frame despite a correct style sheet.
+2. **Persistent-details continuity.** An optional `cast[].persistent_details` string (e.g.
+   `"dark baseball cap with sunglasses resting on the brim"`) is appended on every page
+   that cast entry appears on: *"Continuity details that must stay visible: German — dark
+   baseball cap with sunglasses resting on the brim."* Use this — not `image_prompt`
+   prose — for a small accessory the style sheet alone doesn't reliably hold onto; writing
+   it into `image_prompt` instead trips the PER-42 appearance-echo warning, which now
+   points back here.
+3. **Scene-text suppression** (top-level/per-page `scene_text`, default `"suppress"`).
+   Bans invented diegetic lettering — signs, shopfronts, logos — since image models
+   reliably garble invented text (misspellings, duplicated signs), which reads especially
+   badly next to native mode's correctly-lettered story text. Set `scene_text: "allow"`
+   (book-wide or per-page) for a book that wants legible diegetic text (a shop sign, an
+   in-scene book title); get the wording right in that page's `image_prompt`. `--scene-text`
+   overrides both for a single run.
+
 ## `<id>` placeholder substitution (PER-56)
 
 `pages[].cast` holds cast **ids** (e.g. `["pip", "major-oak"]`). `image_prompt` uses `<id>` placeholders. Before every Gemini call, `render_book.py`'s `resolve_cast_placeholders()` substitutes each `<id>` with the cast entry's display `name` — the model always sees real names, never id tokens. Unknown or malformed `<id>` tokens (e.g. `<Pip>` with wrong case) are stripped of angle brackets and logged; the validator (`validate_story.py`) is the hard gate that prevents them.
@@ -133,7 +162,13 @@ hard requirement like a location's sheet).
 ## Cost & failure notes
 
 - Each page = one Gemini image call. 8 pages = 8 calls. Long mode adds 1 call for the shared text-page background (8 pages = 9 calls), plus 1 per page that sets `text_background_prompt`. The book-wide style frame (PER-82) is generated once in **Stage 2**, not here — it costs no extra Stage 3 calls, only 1 extra ref slot/page (free under the object-lane cap — 10 flash / 6 pro (PER-96) — unless that lane is already maxed; on pro it's the first to drop).
-- **Strongly suggest** a 2-page proof run first: `--only 2` then `--only 3`.
+- **Default flow: proof-render before the full run (PER-87 item 4).** A single proof call can surface every defect class the auto-injected guards target (duplicates, dropped accessories, garbled signage) for the cost of one image, instead of paying for 8 defective pages and redoing them:
+  1. Pick the page with the largest `pages[].cast` (most characters ⇒ most defect surface — usually the page most worth proofing).
+  2. `render_book.py --story story.json --only N` — one paid call.
+  3. Show it to the user, **hold for review**.
+  4. Apply fixes: `image_prompt` wording, `cast[].persistent_details`, `scene_text`.
+  5. **`rm pages/page-NN*.png`** before the full run. This step is easy to forget and silently wrong to skip: the idempotency skip-if-exists behavior means an unremoved proof page survives the full run unchanged, so any fixes applied in step 4 never reach it — the "fixed" book still ships the defective proof page.
+  6. Full render.
 - On any error, re-run with `--from N` — already-rendered pages are skipped.
 - API errors: check `GEMINI_API_KEY` is set, `uv` installed, and Gemini account has credits.
 - Resolution defaults to 2K (from `story.json`'s `resolution` field, or the 2K built-in fallback). Override ad-hoc with `--resolution 1K|2K|4K`.

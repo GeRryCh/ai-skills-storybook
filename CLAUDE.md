@@ -400,6 +400,57 @@ more often on pro, whenever a page carries ≥6 real object/location refs.
 
 `STYLE_ANCHOR` contains `"of a character"` in the photo-matching sentence to prevent the anchor from instructing the model to extract a face from a landmark photo on scenery-only pages.
 
+## Auto-injected prompt guards (PER-87)
+
+`render_book.py`'s `build_page_guards()` appends three defensive clauses to every page
+prompt transparently, the same way `text_placement` safe-zone language already is (PER-7
+precedent) — folded into `build_image_prompt`'s `anchor` string right after the optional
+`premise`, before the mode-specific directive, across all four prompt paths (overlay,
+native, long body, and the long-mode cover, which renders via the overlay path). These
+guards synthesize from `story.json` data the renderer already has; authors never hand-write
+this boilerplate, and a proof render (see storybook-render's default flow below) is the
+fast way to confirm they're enough before paying for a full run.
+
+1. **No-duplicate-characters guard** — derived from the page's `kind: "character"` cast
+   entries (via `cast_index()`, resolved to display names, never ids — PER-56): *"Exactly 3
+   named characters in this scene, and no duplicates: one Eva, one Grandpa Vagif, one
+   German. Unnamed background figures such as crowds or passers-by are allowed and are not
+   counted."* Objects/locations are never counted; `cast: []` (scenery-only) pages get no
+   guard. Mirrors the anti-duplication sentence `_build_ref_manifest` already carries on
+   the OpenAI fallback path, now on the primary Gemini path too, where the defect was
+   observed (two Evas in one frame, both matching the style sheet).
+2. **`cast[].persistent_details`** — an optional string for a small accessory/prop the
+   style sheet alone doesn't reliably hold onto (e.g. `"dark baseball cap with sunglasses
+   resting on the brim"` dropped by flash despite being on all four sheet views). Appended
+   as a continuity clause on every page that entry is on. This is the sanctioned channel
+   the PER-42 `_appearance_echo` warning now points to — writing the same cue into
+   `image_prompt` instead trips that warning, so the two must never be cross-checked
+   against each other (that would recreate the exact trap this closes).
+3. **`scene_text: "suppress" | "allow"`** (default `"suppress"`, book-level + per-page
+   override + `--scene-text` CLI, precedence identical to `text_mode`'s: CLI > page field >
+   story field > default) — bans invented diegetic lettering (signs, shopfronts, logos),
+   since image models reliably garble it (a real airport page rendered two mangled,
+   duplicated signs). The native-mode wording carve-outs the model's own story-text
+   lettering (*"Apart from the story text specified below, ..."*) and is injected ahead of
+   `NATIVE_TEXT_DIRECTIVE`, which stays the final token in native mode (same insertion
+   discipline as PER-66's premise fold). `"allow"` emits **no replacement clause** — not
+   even a "spell it correctly" directive, which in native mode would duplicate
+   `NATIVE_TEXT_DIRECTIVE`'s existing exact-reproduction instruction one sentence later.
+   Never reaches `build_text_bg_prompt` (the long-mode text-page background call) — that
+   prompt already hard-bans lettering unconditionally, and must, regardless of the knob.
+
+`FULL_BLEED_ART_DIRECTIVE` (long-mode art pages) is narrowed to ban only story text/
+narrative typography, not all lettering — the blanket ban moved to the scene-text guard
+above so `scene_text: "allow"` has something to opt out of. Net effect on the default path
+is unchanged (suppress restores the total ban); this does change prompt bytes for every
+long-mode page of every existing book, even ones setting none of the three new fields.
+
+The default `storybook-render` flow (item 4) is a single-page proof render before any full
+run: pick the page with the largest `cast`, `--only N`, review, apply fixes (including the
+three fields above), **`rm pages/page-NN*.png`** (skip this and idempotency silently keeps
+the pre-fix proof page in the full run), then render everything. See storybook-render's
+SKILL.md for the full sequence.
+
 ## Text overlay (`overlay_text.py`)
 
 Pillow composites text on a feathered, semi-transparent panel that blends into the art (no hard

@@ -265,5 +265,65 @@ class TestAppearanceEcho(unittest.TestCase):
         self.assertEqual(echo_warnings, [], "Location kind must not trigger appearance echo")
 
 
+class TestSceneTextAndPersistentDetails(unittest.TestCase):
+    """PER-87 schema additions: scene_text (top-level + per-page enum) and
+    cast[].persistent_details (string). Bad enum/type -> error; valid -> clean."""
+
+    def test_valid_top_level_scene_text_no_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["scene_text"] = "allow"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertEqual(errors, [])
+
+    def test_bad_top_level_scene_text_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["scene_text"] = "sometimes"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(
+            any("scene_text" in e for e in errors), f"Expected scene_text error, got: {errors}"
+        )
+
+    def test_valid_page_scene_text_no_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["scene_text"] = "suppress"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertEqual(errors, [])
+
+    def test_bad_page_scene_text_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["scene_text"] = "maybe"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(
+            any("scene_text" in e for e in errors), f"Expected scene_text error, got: {errors}"
+        )
+
+    def test_valid_persistent_details_no_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["cast"][0]["persistent_details"] = "a small red satchel"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertEqual(errors, [])
+
+    def test_non_string_persistent_details_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["cast"][0]["persistent_details"] = 123
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(
+            any("persistent_details" in e for e in errors),
+            f"Expected persistent_details type error, got: {errors}",
+        )
+
+    def test_appearance_echo_warning_points_at_persistent_details(self):
+        """PER-87: the PER-42 echo warning now names persistent_details as the
+        sanctioned channel, so the warning and the fix stop pointing opposite ways."""
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["image_prompt"] = "A small brave hedgehog stands in the rain."
+        story["pages"][0]["cast"] = ["pip"]
+        _, warnings = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(
+            any("persistent_details" in w for w in warnings),
+            f"Expected warning to mention persistent_details, got: {warnings}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

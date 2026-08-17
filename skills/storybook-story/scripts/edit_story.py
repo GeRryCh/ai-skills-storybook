@@ -212,6 +212,7 @@ def _schema_enums(schema: dict) -> dict[str, list]:
         "aspect_ratio": top["aspect_ratio"]["enum"],
         "model": top["model"]["enum"],
         "saved_formats": top["saved_formats"]["items"]["enum"],
+        "scene_text": top["scene_text"]["enum"],
         "text_placement": page["text_placement"]["enum"],
         "text_align": page["text_align"]["enum"],
         "font": page["font"]["enum"],
@@ -429,7 +430,7 @@ def validate_story(
                 errors.append("'style_guide.palette' must be an array of strings")
 
     # --- optional top-level enums/types -------------------------------------
-    for key in ("text_mode", "resolution", "aspect_ratio", "model"):
+    for key in ("text_mode", "resolution", "aspect_ratio", "model", "scene_text"):
         if key in story and story[key] not in enums[key]:
             errors.append(
                 f"'{key}' must be one of {enums[key]} (got {story[key]!r})"
@@ -513,6 +514,9 @@ def validate_story(
                     errors.append(
                         f"{where}.kind must be one of {enums['kind']} (got {kind!r})"
                     )
+                pd = entry.get("persistent_details")
+                if pd is not None and not isinstance(pd, str):
+                    errors.append(f"{where}.persistent_details must be a string")
                 refs = entry.get("ref_image")
                 if refs is not None and not (
                     isinstance(refs, str)
@@ -580,7 +584,7 @@ def validate_story(
                 for key in ("text", "image_prompt", "text_background_prompt"):
                     if key in page and not isinstance(page[key], str):
                         errors.append(f"{where}.{key} must be a string")
-                for key in ("text_placement", "text_align", "font", "text_color_hint", "model", "text_mode"):
+                for key in ("text_placement", "text_align", "font", "text_color_hint", "model", "text_mode", "scene_text"):
                     if key in page and page[key] not in enums[key]:
                         errors.append(
                             f"{where}.{key} must be one of {enums[key]} "
@@ -654,7 +658,12 @@ def validate_story(
                                         f"{where}.image_prompt repeats appearance of "
                                         f"'{ce_name}' (\"{frag}\") — use <{cid}> "
                                         "placeholder; the style sheet defines "
-                                        "appearance (PER-42)"
+                                        "appearance (PER-42). If the style sheet "
+                                        "alone doesn't hold a small accessory/prop "
+                                        f"consistently, set cast[].persistent_details "
+                                        "on that entry instead — it's appended "
+                                        "automatically and never trips this check "
+                                        "(PER-87)"
                                     )
                             # Placeholder check: every <token> in image_prompt must
                             # be a known cast id. Broad regex catches malformed tokens

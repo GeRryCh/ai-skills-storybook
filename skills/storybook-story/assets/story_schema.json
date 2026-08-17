@@ -43,6 +43,7 @@
             "description": "What this entry is. 'character' (default): person or creature — gets a style sheet; the outfit lock applies; eligible to be a page hero (first character-kind entry in pages[].cast — leads reference ordering into the cap). 'object': recurring prop, vehicle, or item — gets a reference sheet with multi-angle/detail-close-up prompt. 'location': a named place — gets a location reference sheet generated in Stage 2 from its real-place photo(s) in ref_image (downloaded in Stage 1) plus 'appearance'; without ref_image the sheet comes from 'appearance' alone (fictional recurring place). At render time the sheet is the reference (lowest cap priority); the raw photo is the fallback when no sheet exists."
           },
           "appearance": { "type": "string", "description": "Concrete visual description. character: species, age, hair, ONE specific outfit/clothing, colours, distinguishing features — the outfit named here becomes the character's canonical outfit locked into the style sheet and worn unchanged on every page (name exactly one outfit; more specific = more consistent). object: shape, size, colours, materials, distinguishing details. location: terrain/architecture, vegetation, landmarks, atmosphere — feeds the sheet prompt (alongside any ref_image photos)." },
+          "persistent_details": { "type": "string", "description": "Optional small accessory/prop detail that must stay visible on every page this entry appears on (PER-87 item 2), e.g. 'dark baseball cap with sunglasses resting on the brim'. The style sheet is the stronger consistency signal for face, build, and main garment, but empirically not for small accessories on flash — render_book.py appends this verbatim as a continuity clause on every page listing this cast id, so the author never has to echo it into image_prompt (which would trip the PER-42 appearance-echo warning). Omit when the style sheet alone holds the detail reliably." },
           "ref_image": {
             "type": ["string", "array"],
             "items": { "type": "string" },
@@ -121,6 +122,13 @@
       "description": "Optional fallback vendor for page rendering (Stage 3). When Gemini returns finish_reason=PROHIBITED_CONTENT (a deterministic content-policy block, not a transient error), render_book.py automatically retries the page on this vendor. 'openai' (default): retry on OpenAI gpt-image-2 with moderation='low', using the exact same resolved prompt and selected style sheets — only fires when STORYBOOK_SKILL_OPENAI_API_KEY or OPENAI_API_KEY is set in the environment; if no key is present the page fails as normal. 'none': disable the fallback entirely. Transient 5xx/429 Gemini errors are not affected by this setting. Precedence: render CLI --fallback-vendor flag > this field > 'openai'.",
       "x-interview": { "priority": "advanced", "ask": "Fallback vendor when Gemini blocks a page — 'openai' (auto-retry on gpt-image-2 when key present) or 'none' (disable)." }
     },
+    "scene_text": {
+      "type": "string",
+      "enum": ["suppress", "allow"],
+      "default": "suppress",
+      "description": "Optional book-wide policy (PER-87 item 3) for invented diegetic lettering — signs, shopfronts, logos, any readable words that aren't the story text. 'suppress' (default): render_book.py auto-appends a guard banning invented scene lettering on every page render call; image models reliably garble invented text (misspellings, duplicated signs), which reads especially badly in native mode where the model is already correctly lettering the real story text nearby. 'allow': disable the guard for books that want legible diegetic text (a shop sign, an in-scene book title) — no replacement clause is added; get the wording right in that page's image_prompt instead. A page-level 'scene_text' overrides this for that specific page; the render CLI --scene-text flag overrides both for an entire run.",
+      "x-interview": { "priority": "advanced", "ask": "Allow invented signs/lettering to appear in scenes, or suppress them by default (recommended — image models tend to garble invented text)?" }
+    },
     "pages": {
       "type": "array",
       "minItems": 1,
@@ -176,6 +184,11 @@
             "type": "string",
             "enum": ["overlay", "native", "long"],
             "description": "Optional per-page text mode override. Unset = inherit the book-level 'text_mode' field (or 'native' default). Lets individual pages differ from the book's default mode — e.g. a single long-mode page in an otherwise native book, or an overlay cover in a long-mode book. render_book.py's --text-mode flag overrides both the book-level and page-level fields for an entire run."
+          },
+          "scene_text": {
+            "type": "string",
+            "enum": ["suppress", "allow"],
+            "description": "Optional per-page override of the book-level 'scene_text' policy (PER-87 item 3, unset = inherit the book-level field, or 'suppress' default). Set to 'allow' on a single page that wants legible diegetic text (e.g. a shopfront sign) in an otherwise-suppressed book, or 'suppress' on one page of an 'allow' book. render_book.py's --scene-text flag overrides both the book-level and page-level fields for an entire run."
           },
           "text_background_prompt": {
             "type": "string",

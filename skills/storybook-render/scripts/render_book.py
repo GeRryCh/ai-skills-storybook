@@ -190,10 +190,14 @@ TEXT_SAFE_ZONE_DIRECTIVE = (
 )
 
 # Long mode: the model fills the full canvas — no text, no safe zone reserved.
+# Narrowed to story text only (PER-87 item 3): the general "no lettering anywhere" ban
+# now comes from SCENE_TEXT_SUPPRESS_DIRECTIVE below (default-on), which scene_text:
+# "allow" can opt out of per page/book. This directive alone must never re-introduce a
+# blanket ban, or "allow" would have nothing to opt out of.
 FULL_BLEED_ART_DIRECTIVE = (
     "Use the full canvas for the illustration — rich, full-bleed artwork from edge to edge "
-    "with no reserved text area. Do not render any words, letters, captions, or typography "
-    "anywhere in the image."
+    "with no reserved text area. Do not render the story text, captions, or any narrative "
+    "typography anywhere in the image."
 )
 # Long mode: one shared text-page background per book, generated once in render_all
 # before pages fire (pages only consume it — generating inside render_page would race).
@@ -262,6 +266,112 @@ def _overlay_placement(placement: str) -> str:
     return "bottom" if placement == "floating" else placement
 
 
+# PER-87 item 1: auto-appended no-duplicate-characters guard, derived from the page's
+# character-kind cast entries. Named characters only — objects/locations are never
+# counted, and unnamed background figures (crowds, passers-by) are explicitly exempted
+# so a scene can still have a crowd. "characters" not "people": cast members are
+# frequently non-human (Pip the hedgehog), so the wording stays species-neutral.
+DUPLICATE_GUARD_SINGLE = (
+    "Exactly one named character in this scene, appearing exactly once: {names}. "
+    "Unnamed background figures such as crowds or passers-by are allowed and are not counted."
+)
+DUPLICATE_GUARD_MULTI = (
+    "Exactly {n} named characters in this scene, and no duplicates: {names}. "
+    "Unnamed background figures such as crowds or passers-by are allowed and are not counted."
+)
+
+# PER-87 item 3: default-on suppression of invented diegetic lettering (signs, logos,
+# shopfronts) — image models reliably garble invented text, and in native mode that
+# reads as a typo next to the model's own correctly-lettered story text. "below" in the
+# native variant refers forward to NATIVE_TEXT_DIRECTIVE, which this guard is always
+# injected ahead of (build_image_prompt keeps that directive the final token).
+# scene_text: "allow" opts out with NO replacement clause — see build_page_guards.
+SCENE_TEXT_SUPPRESS_DIRECTIVE = (
+    "No written signs, no lettering, no logos, and no readable words anywhere in the scene."
+)
+SCENE_TEXT_SUPPRESS_DIRECTIVE_NATIVE = (
+    "Apart from the story text specified below, no written signs, no lettering, no logos, "
+    "and no readable words anywhere in the scene."
+)
+
+# PER-87 item 2: sanctioned channel for small persistent details (accessories, props)
+# that the style sheet alone doesn't reliably hold onto — the renderer appends this
+# from cast[].persistent_details, so the author never has to echo appearance prose into
+# image_prompt (which would trip the PER-42 echo warning). See build_page_guards.
+PERSISTENT_DETAILS_DIRECTIVE = "Continuity details that must stay visible: {clauses}."
+
+
+def _duplicate_guard(page: dict, story: dict) -> str:
+    """Build the PER-87 item 1 no-duplicate-characters guard for one page.
+
+    Returns "" for scenery-only pages (no character-kind cast entries) or when a
+    page's cast is empty — nothing to guard. Names are display names (never ids —
+    ids must not reach the image model, PER-56), in page-cast order, one per
+    character-kind entry (unknown ids are skipped; already warned elsewhere).
+    """
+    c_index = cast_index(story)
+    names: list[str] = []
+    for cid in page.get("cast", []):
+        entry = c_index.get(cid)
+        if entry is None:
+            continue
+        kind = (entry.get("kind") or "character").strip() or "character"
+        if kind == "character":
+            names.append(entry.get("name") or cid)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return DUPLICATE_GUARD_SINGLE.format(names=names[0])
+    return DUPLICATE_GUARD_MULTI.format(n=len(names), names=", ".join(f"one {n}" for n in names))
+
+
+def _persistent_details_guard(page: dict, story: dict) -> str:
+    """Build the PER-87 item 2 continuity-details guard for one page.
+
+    Covers every on-page cast entry (any kind) with a non-empty
+    'persistent_details' field, in page-cast order. Returns "" when none set it.
+    """
+    c_index = cast_index(story)
+    clauses: list[str] = []
+    for cid in page.get("cast", []):
+        entry = c_index.get(cid)
+        if entry is None:
+            continue
+        detail = (entry.get("persistent_details") or "").strip()
+        if detail:
+            name = entry.get("name") or cid
+            clauses.append(f"{name} — {detail}")
+    if not clauses:
+        return ""
+    return PERSISTENT_DETAILS_DIRECTIVE.format(clauses="; ".join(clauses))
+
+
+def _scene_text_guard(scene_text: str, text_mode: str) -> str:
+    """Build the PER-87 item 3 scene-text guard. 'allow' emits nothing — no
+    replacement clause (see SCENE_TEXT_SUPPRESS_DIRECTIVE_NATIVE docstring for why).
+    """
+    if scene_text != "suppress":
+        return ""
+    if text_mode == "native":
+        return SCENE_TEXT_SUPPRESS_DIRECTIVE_NATIVE
+    return SCENE_TEXT_SUPPRESS_DIRECTIVE
+
+
+def build_page_guards(page: dict, story: dict, text_mode: str, scene_text: str) -> str:
+    """Assemble all PER-87 auto-injected guards for one page/mode into one clause
+    string (each guard already ends with its own '.'; joined with a single space),
+    or "" if none apply. Injected into build_image_prompt immediately after the
+    (already premise-bearing) anchor, ahead of the mode-specific directive — same
+    insertion discipline as PER-66's premise fold.
+    """
+    parts = [
+        _duplicate_guard(page, story),
+        _persistent_details_guard(page, story),
+        _scene_text_guard(scene_text, text_mode),
+    ]
+    return " ".join(p for p in parts if p)
+
+
 def load_story(path: Path) -> dict:
     with open(path) as f:
         return json.load(f)
@@ -297,6 +407,38 @@ def resolve_text_mode(
     """
     page_mode = page.get("text_mode") if page else None
     return cli_mode or page_mode or story.get("text_mode") or "native"
+
+
+def resolve_scene_text(
+    story: dict,
+    page: dict | None = None,
+    cli: str | None = None,
+) -> str:
+    """Resolve the effective scene-text policy for one page (PER-87 item 3).
+
+    Precedence: CLI --scene-text > page 'scene_text' field > story top-level
+    'scene_text' > "suppress" (the default — no invented signage/lettering).
+    "allow" disables the suppress guard with no replacement clause (see
+    build_page_guards). Mirrors resolve_text_mode's shape exactly; a plain
+    or-chain is safe because both enum values are truthy strings.
+    """
+    page_val = page.get("scene_text") if page else None
+    return cli or page_val or story.get("scene_text") or "suppress"
+
+
+def cast_index(story: dict) -> dict[str, dict]:
+    """id -> cast entry lookup, built once per call site.
+
+    Consolidates three previously-inlined copies of this same dict
+    comprehension (resolve_cast_placeholders built its own id->name variant;
+    collect_input_images and missing_required_sheets each built id->entry
+    independently). Entries without a valid string id are skipped — the same
+    filter every prior copy used.
+    """
+    return {
+        c.get("id", ""): c for c in story.get("cast", [])
+        if isinstance(c, dict) and c.get("id")
+    }
 
 
 # Keep in sync with the copy in make_style_sheet.py
@@ -483,7 +625,9 @@ def book_premise(story: dict) -> str:
     return (story.get("premise") or "").strip()
 
 
-def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> str:
+def build_image_prompt(
+    page: dict, story: dict, text_mode: str = "native", scene_text: str = "suppress",
+) -> str:
     placement = page.get("text_placement", "floating")
     style = build_style_block(story)
     anchor = STYLE_ANCHOR.format(style=style)
@@ -494,6 +638,14 @@ def build_image_prompt(page: dict, story: dict, text_mode: str = "native") -> st
     premise = book_premise(story)
     if premise:
         anchor = f"{anchor}. {premise}"
+
+    # PER-87: fold the auto-injected defect guards (no-duplicate-characters,
+    # persistent details, scene-text suppression) in right after the anchor/premise,
+    # same insertion discipline as PER-66 — every mode below carries {anchor}
+    # unchanged, and native mode still gets NATIVE_TEXT_DIRECTIVE appended last.
+    guards = build_page_guards(page, story, text_mode, scene_text)
+    if guards:
+        anchor = f"{anchor}. {guards}"
 
     # Resolve <id> placeholders → display names. Single chokepoint covering all text modes.
     # The model must never receive raw <id> tokens — especially in native mode where a
@@ -671,10 +823,7 @@ def collect_input_images(
     if base_dir is None:
         base_dir = Path.cwd()
 
-    cast_index: dict[str, dict] = {
-        c.get("id", ""): c for c in story.get("cast", [])
-        if isinstance(c, dict) and c.get("id")
-    }
+    c_index = cast_index(story)
     page_cast: list[str] = page.get("cast", [])
 
     # Partition the page cast by kind, preserving page order within each group.
@@ -683,7 +832,7 @@ def collect_input_images(
     objects: list[tuple[str, dict]] = []
     locations: list[tuple[str, dict]] = []
     for cid in page_cast:
-        entry = cast_index.get(cid)
+        entry = c_index.get(cid)
         if entry is None:
             warn(f"page references unknown cast id {cid!r}; skipping.")
             continue
@@ -802,14 +951,11 @@ def missing_required_sheets(
     """
     if base_dir is None:
         base_dir = Path.cwd()
-    cast_index: dict[str, dict] = {
-        c.get("id", ""): c for c in story.get("cast", [])
-        if isinstance(c, dict) and c.get("id")
-    }
+    c_index = cast_index(story)
     out: list[tuple[str, str, str, str]] = []
     seen: set[str] = set()
     for cid in page.get("cast", []):
-        entry = cast_index.get(cid)
+        entry = c_index.get(cid)
         if entry is None:
             continue  # unknown id is handled (warned) in collect_input_images
         kind = (entry.get("kind") or "character").strip() or "character"
@@ -1774,13 +1920,15 @@ async def run_text_page(
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, base_dir: Path | None = None) -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, base_dir: Path | None = None, cli_scene_text: str | None = None) -> bool:
     """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     # Resolve model once: CLI override > page field > story field > default flash.
     model = resolve_model(story, page, cli_model)
     # Resolve text mode once: CLI override > page field > story field > "native".
     text_mode = resolve_text_mode(story, page, cli_text_mode)
+    # Resolve scene-text policy once: CLI override > page field > story field > "suppress".
+    scene_text = resolve_scene_text(story, page, cli_scene_text)
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
 
@@ -1794,7 +1942,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
             if not final_path.exists():
                 raw_path = pages_dir / "raw-page-01-long.png"
                 if not raw_path.exists():
-                    prompt = build_image_prompt(page, story, "overlay")
+                    prompt = build_image_prompt(page, story, "overlay", scene_text)
                     ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
                     if not ok or not raw_path.exists():
                         log.append("  ERROR: image generation failed for cover")
@@ -1819,7 +1967,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         # Body page: art page + optional text page.
         art_path = pages_dir / f"page-{nn}-long.png"
         if not art_path.exists():
-            prompt = build_image_prompt(page, story, "long")
+            prompt = build_image_prompt(page, story, "long", scene_text)
             ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
             if not ok or not art_path.exists():
                 log.append(f"  ERROR: art image generation failed for page {page_num}")
@@ -1881,7 +2029,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     suffix = "-native" if text_mode == "native" else ""
     final_path = pages_dir / f"page-{nn}{suffix}.png"
 
-    prompt = build_image_prompt(page, story, text_mode)
+    prompt = build_image_prompt(page, story, text_mode, scene_text)
 
     if text_mode == "native":
         # In native mode the model bakes text into the illustration — write directly
@@ -1924,7 +2072,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None, fallback_vendor: str = "openai") -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None, fallback_vendor: str = "openai", cli_scene_text: str | None = None) -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
@@ -1972,7 +2120,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     modes = sorted({resolve_text_mode(story, p, cli_text_mode) for p in todo}) if todo else [resolve_text_mode(story, None, cli_text_mode)]
     print(f"\nRendering {len(todo)} page(s) concurrently ({', '.join(modes)} mode(s))...")
     results = await asyncio.gather(
-        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model, base_dir=base_dir) for page in todo)
+        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model, base_dir=base_dir, cli_scene_text=cli_scene_text) for page in todo)
     )
     return sum(1 for ok in results if not ok)
 
@@ -2058,6 +2206,22 @@ def main() -> None:
             "Transient 5xx/429 errors are NOT affected — they keep their Gemini retry path."
         ),
     )
+    parser.add_argument(
+        "--scene-text",
+        dest="scene_text",
+        choices=["suppress", "allow"],
+        default=None,
+        help=(
+            "Override story.json's scene_text policy for this run (PER-87). "
+            "'suppress' (default): auto-append a guard banning invented diegetic "
+            "signage/lettering/logos on every page — image models reliably garble "
+            "invented text. 'allow': disable that guard, no replacement clause. "
+            "If omitted, each page uses its own 'scene_text' field (if set), then "
+            "story.json's top-level 'scene_text', then 'suppress' as the built-in "
+            "default. This flag overrides all page-level and book-level fields for "
+            "the entire run."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -2136,7 +2300,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent, fallback_vendor=fallback_vendor)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent, fallback_vendor=fallback_vendor, cli_scene_text=args.scene_text)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
 
