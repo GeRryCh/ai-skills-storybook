@@ -1272,6 +1272,21 @@ def append_api_log(
         print(f"WARNING: failed to write API log {log_path}: {e}", file=sys.stderr)
 
 
+def _modality_name(entry) -> str:
+    """Uppercase modality name of a ModalityTokenCount entry.
+
+    `modality` is a MediaModality enum that mixes in `str`. Python 3.11 made
+    Enum.__str__ win over the mixin, so `str(member)` yields
+    'MediaModality.IMAGE', not 'IMAGE' — reading it with str() matched nothing
+    and silently zeroed every image-output token, pricing each generated image
+    at $0 while still reporting the figure as exact (PER-98). Read `.value`,
+    which is the wire string on every Python version, and fall back to the raw
+    object so plain-string entries still work.
+    """
+    modality = getattr(entry, "modality", "")
+    return str(getattr(modality, "value", modality)).upper()
+
+
 def gemini_call_cost(usage_metadata, model: str) -> tuple[float | None, dict, bool]:
     """Compute USD cost from a Gemini generate_content response's usage_metadata.
 
@@ -1300,10 +1315,10 @@ def gemini_call_cost(usage_metadata, model: str) -> tuple[float | None, dict, bo
     estimated = False
     if details:
         image_tokens = sum(
-            (d.token_count or 0) for d in details if str(getattr(d, "modality", "")).upper() == "IMAGE"
+            (d.token_count or 0) for d in details if _modality_name(d) == "IMAGE"
         )
         text_tokens = sum(
-            (d.token_count or 0) for d in details if str(getattr(d, "modality", "")).upper() == "TEXT"
+            (d.token_count or 0) for d in details if _modality_name(d) == "TEXT"
         )
     else:
         image_tokens = candidates_total

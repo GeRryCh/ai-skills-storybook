@@ -15,6 +15,7 @@ import sys
 import tempfile
 import types as pytypes
 import unittest
+from enum import Enum
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -32,14 +33,38 @@ COST_MODULES = (render_book, make_style_sheet)
 # Fake response builders
 # ---------------------------------------------------------------------------
 
+class FakeMediaModality(str, Enum):
+    """Stand-in for google.genai.types.MediaModality.
+
+    Must stay a `str`-mixin Enum, exactly like the real class — that mixin is the
+    whole point. Python 3.11 made Enum.__str__ win over it, so `str(member)`
+    returns 'FakeMediaModality.IMAGE', not 'IMAGE'. gemini_call_cost read the
+    modality with str() and therefore matched nothing, zeroing every image-output
+    token in production (PER-98) while these tests passed against bare-string
+    fakes. Fakes must carry the enum, never a plain 'IMAGE' string.
+    """
+
+    IMAGE = "IMAGE"
+    TEXT = "TEXT"
+
+
 def _fake_usage_metadata(prompt=0, candidates=0, thoughts=0, details=None):
     """Build a fake Gemini GenerateContentResponseUsageMetadata.
 
-    `details`, when given, is a list of (modality, token_count) pairs.
+    `details`, when given, is a list of (modality, token_count) pairs. A plain
+    string modality is upgraded to FakeMediaModality so every detail-based test
+    exercises the enum the API actually returns; pass a raw string explicitly
+    (see test_modality_accepts_plain_string) to cover the loose path.
     """
     d = None
     if details is not None:
-        d = [pytypes.SimpleNamespace(modality=m, token_count=t) for m, t in details]
+        d = [
+            pytypes.SimpleNamespace(
+                modality=FakeMediaModality(m) if isinstance(m, str) else m,
+                token_count=t,
+            )
+            for m, t in details
+        ]
     return pytypes.SimpleNamespace(
         prompt_token_count=prompt,
         candidates_token_count=candidates,
@@ -101,6 +126,49 @@ class TestGeminiCallCost(unittest.TestCase):
         expected = (1120 * 60.00 + 80 * 3.00) / 1_000_000
         self.assertAlmostEqual(usd, expected, places=6)
         self.assertFalse(estimated)
+
+    def test_modality_read_by_value_not_str(self):
+        """PER-98 regression. MediaModality is a str-mixin Enum; Python 3.11 made
+        Enum.__str__ win over the mixin, so str(member) is 'X.IMAGE', not 'IMAGE'.
+        Reading it with str() matched nothing, zeroed image_tokens, and priced
+        every generated image at $0 while still reporting estimated=False."""
+        entry = pytypes.SimpleNamespace(
+            modality=FakeMediaModality.IMAGE, token_count=1120
+        )
+        # The behaviour that broke it — kept here so the cause stays legible.
+        self.assertNotEqual(str(FakeMediaModality.IMAGE).upper(), "IMAGE")
+        self.assertEqual(render_book._modality_name(entry), "IMAGE")
+
+    def test_modality_accepts_plain_string(self):
+        """The .value lookup must fall back to the raw object, so a loosely-built
+        response (or an SDK that switches to plain strings) still prices."""
+        entry = pytypes.SimpleNamespace(modality="image", token_count=1120)
+        self.assertEqual(render_book._modality_name(entry), "IMAGE")
+
+    def test_modality_missing_attribute_is_empty(self):
+        self.assertEqual(render_book._modality_name(pytypes.SimpleNamespace()), "")
+
+    def test_real_sdk_modality_enum_is_read_correctly(self):
+        """Guard against the installed google-genai changing the enum's shape.
+        Import only — no client, no network (zero-API rule)."""
+        try:
+            from google.genai.types import MediaModality
+        except ImportError:
+            self.skipTest("google-genai not installed")
+        entry = pytypes.SimpleNamespace(modality=MediaModality.IMAGE, token_count=1680)
+        self.assertEqual(render_book._modality_name(entry), "IMAGE")
+
+    def test_image_output_is_priced_not_zeroed(self):
+        """End-to-end guard on the symptom PER-98 produced: a successful 1K flash
+        render was recorded at input-only cost with estimated=False, so it read as
+        exact and nearly free. 1120 image tokens must cost $0.0672, not ~$0.00075."""
+        um = _fake_usage_metadata(prompt=1501, candidates=1501, details=[("IMAGE", 1120)])
+        usd, tokens, estimated = render_book.gemini_call_cost(um, "gemini-3.1-flash-image")
+        self.assertEqual(tokens["output_image"], 1120)
+        self.assertFalse(estimated)
+        input_only = 1501 * 0.50 / 1_000_000
+        self.assertGreater(usd, input_only * 50)
+        self.assertEqual(usd, round((1501 * 0.50 + 1120 * 60.00) / 1_000_000, 6))
 
     def test_missing_details_falls_back_to_estimated_image_rate(self):
         """No candidates_tokens_details -> whole candidates_token_count treated as
