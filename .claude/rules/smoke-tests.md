@@ -92,3 +92,54 @@ uv run playwright install chromium
 ```
 
 See `tests/README.md` for full documentation.
+
+### Visual check via Playwright MCP — BACKGROUND TASK AGENTS ONLY
+
+**Applies only to background task agents** — the sessions `scripts/new-worktree.sh` launches
+with `--settings scripts/bg-task-guardrails.json`, which is the only place `mcp__playwright__*`
+is pre-authorized. **If you are an interactive session, skip this section** unless the user
+asks for a visual check: your permissions would prompt per call, and a human is already
+looking at the screen. Everything above this heading applies to every session.
+
+The scoped e2e asserts behaviour; it does not tell you whether the thing **looks** right,
+and a background agent has nobody watching. So when a bg task's change alters what the
+editor renders — `assets/editor.html` markup/CSS/JS, or a server field the UI displays
+(`/api/status`, `/api/versions`, `/api/sheet/versions`, `/api/consolidate/status`) — do one
+visual pass with the `playwright` MCP server before committing. This is **in addition to**,
+never a substitute for, the unit + scoped-e2e contract.
+
+Serve a **fixture** book, never the user's own book:
+
+```bash
+# leave this running in the background; --no-browser so no real browser window opens
+uv run skills/storybook-story/scripts/edit_story.py \
+  --story tests/fixtures/pip-storm/story.json --no-browser --port 8766
+```
+
+Then, with the MCP tools: `browser_navigate` to `http://127.0.0.1:8766`,
+`browser_resize` to a realistic desktop viewport, `browser_snapshot` to read the
+accessibility tree, and `browser_take_screenshot` of the control you changed — attach or
+reference that screenshot in the completion report. Close with `browser_close` and stop the
+server; a stray editor holding port 8766 breaks the next run (use another port if 8766 is
+already taken).
+
+Rules for the visual pass:
+
+- **Never click a paid or mutating control**: `↻ Regenerate` / `↻ Render`,
+  `↻ Re-generate All Pages`, style-sheet `Generate`/`Regenerate`, or the Consolidate
+  modal's Run button. Regenerate is one Gemini call per page; sheet regen is an OpenAI
+  call and rewrites `story.json`. Free, safe interactions: navigating, expanding
+  fieldsets, typing in fields, opening the `@`-mention picker, opening the Consolidate
+  modal without running it, `✎ Re-composite (free)`.
+- **Do not save** unless the change is a save-path change. Unlike the e2e suite — which
+  serves a throwaway copy in `tempfile` (`tests/e2e/_support.py`, also `--port 0`, so it
+  never collides or churns) — the command above serves the tracked fixture directly, so a
+  save writes `tests/fixtures/pip-storm/story.json`. If the check needs a save, either
+  `cp -R tests/fixtures/pip-storm /tmp/vis-check` and point `--story` there, or
+  `git restore tests/fixtures` afterwards (same discipline as the EPUB churn note above).
+- **Assert via `browser_snapshot` / `browser_find`, not JavaScript.** `browser_evaluate`
+  and `browser_run_code_unsafe` are on the deny list in `scripts/bg-task-guardrails.json`,
+  so they will simply fail for you.
+- **No dialogs.** A `window.confirm` (the regenerate confirms, the long-mode fresh-bg
+  prompt) blocks every subsequent MCP command. Avoid the controls that raise them.
+- Pure Python change with no rendered-output effect → no visual check needed.

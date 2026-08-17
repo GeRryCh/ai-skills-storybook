@@ -741,6 +741,9 @@ Two layers live in `tests/`. **Zero-API rule: no test may call Gemini or OpenAI.
 - Run **all unit tests** on every task completion — must all pass.
 - Run **scoped e2e** (the module covering the area you changed) — not the full suite.
 - First-time browser setup: `uv run playwright install chromium`
+- Background task agents only (launched by `scripts/new-worktree.sh`) additionally do a
+  Playwright-MCP **visual check** on UI-visible changes — see the gated section in
+  `.claude/rules/smoke-tests.md`. Interactive sessions skip it unless asked.
 
 Unit tests cover `select_refs`, `resolve_cast_placeholders`, `collect_input_images`,
 `validate_story`/`_appearance_echo`, and CLI exit codes for all three committed fixtures.
