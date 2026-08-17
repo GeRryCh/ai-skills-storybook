@@ -6,11 +6,12 @@
 """
 Download and validate a real-place reference photo for story locations.
 
-Stage 1 finds suitable image URLs via the Perplexity MCP (preferred:
-Wikimedia Commons freely-licensed photos), then calls this script once
-per photo to download and verify each one before adding the paths to
-the `ref_image` array of a cast entry with `"kind": "location"` in
-story.json. Target: ~3 distinct angles/views per place (minimum 1).
+Stage 1 finds suitable image URLs via the Wikimedia Commons API directly
+(category listing, then file text search; Perplexity MCP is a fallback),
+then calls this script once per photo to download and verify each one
+before adding the paths to the `ref_image` array of a cast entry with
+`"kind": "location"` in story.json. Target: ~3 distinct angles/views per
+place (minimum 1), preferring daylight, people-free frames.
 
 Usage:
   uv run fetch_location.py \
@@ -21,6 +22,9 @@ Arguments:
   --url URL       Direct image URL (http/https). For Wikimedia Commons, use
                   https://commons.wikimedia.org/wiki/Special:FilePath/<File-title>?width=1600
                   (redirects are followed automatically).
+                  Human-readable, non-ASCII Commons titles (e.g. Cyrillic, Azerbaijani,
+                  CJK) are accepted verbatim — the URL is percent-encoded automatically,
+                  no manual urllib.parse.quote() needed.
                   Do NOT pass a Commons file *page* URL (e.g. /wiki/File:…) — those
                   return HTML, not an image.
   --out PATH      Output path. Must end in .jpg, .jpeg, or .png.
@@ -57,6 +61,7 @@ from __future__ import annotations
 import argparse
 import io
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -75,6 +80,26 @@ USER_AGENT = (
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024  # 64 MB
 
 _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png"}
+
+
+def normalize_url(url: str) -> str:
+    """Percent-encode non-ASCII characters in the URL path and query.
+
+    http.client encodes the request line as ASCII, so a raw non-ASCII URL
+    (common for Commons titles: 'Bakı şəhəri…jpg') raises UnicodeEncodeError
+    before the request is ever sent. Quoting here lets callers pass a
+    human-readable Commons file title verbatim, instead of hand-encoding it
+    with urllib.parse.quote() before calling this script.
+
+    '%' is included in `safe`, so an already-percent-encoded URL passes
+    through unchanged (idempotent — same trade-off requests.utils.requote_uri
+    makes). A literal '%' in a filename is therefore read as pre-encoded;
+    that's vanishingly rare on Commons and worth the idempotency.
+    """
+    parts = urllib.parse.urlsplit(url)
+    path = urllib.parse.quote(parts.path, safe="/:@!$&'()*+,;=~-._%")
+    query = urllib.parse.quote(parts.query, safe="/:@!$&'()*+,;=~-._%?=&")
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 def _fail(msg: str, code: int = 1) -> None:
@@ -110,7 +135,10 @@ def fetch_location(url: str, out_path: str | Path, *, min_edge: int, max_edge: i
         )
 
     # -- Download -------------------------------------------------------------
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    # Percent-encode non-ASCII characters (e.g. a raw Cyrillic/Azerbaijani/CJK
+    # Commons title) so http.client's ASCII request-line encoding doesn't crash.
+    request_url = normalize_url(url)
+    req = urllib.request.Request(request_url, headers={"User-Agent": USER_AGENT})
     try:
         response = urllib.request.urlopen(req, timeout=timeout)
     except HTTPError as exc:
@@ -218,7 +246,12 @@ def main() -> None:
             "See the module docstring for full usage notes."
         ),
     )
-    parser.add_argument("--url", required=True, metavar="URL", help="Direct image URL (http/https).")
+    parser.add_argument(
+        "--url",
+        required=True,
+        metavar="URL",
+        help="Direct image URL (http/https). Non-ASCII Commons titles are accepted verbatim.",
+    )
     parser.add_argument("--out", required=True, metavar="PATH", help="Output path (.jpg, .jpeg, or .png).")
     parser.add_argument(
         "--min-edge",

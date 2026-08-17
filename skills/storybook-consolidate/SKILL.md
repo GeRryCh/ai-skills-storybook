@@ -85,6 +85,8 @@ uv run {skillDir}/scripts/merge_pdf.py --story {out_dir}/story.json --out "Gift 
 
 Re-running with a different `--out` is free — pages are not regenerated.
 
+`--out-dir DIR` (all three scripts: `merge_pdf.py`, `merge_epub.py`, `package_book.py`) points at the directory containing `pages/` when it isn't next to `--story` (default: same directory as `--story`).
+
 ## Package into a zip
 
 To bundle story.json, rendered pages, style sheets, and assembled book files:
@@ -100,7 +102,7 @@ Default zip name: `{slug(title)}-book.zip` next to `story.json`.
 Zip contents:
 - `story.json`
 - `pages/*.png` (final pages — excludes `raw-page-*.png` intermediates and the `pages/history/` generation archive)
-- `style-sheet*.png` (character/object style sheets)
+- `style-sheet*.png` (character/object/location style sheets — `style-frame.png`, the book-wide style frame, is not currently packaged)
 - `*.pdf` and `*.epub` (assembled book files — run the merges above first)
 
 Run `merge_pdf.py` / `merge_epub.py` before `package_book.py` so the book files are included.

@@ -75,6 +75,13 @@ uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 visual editor's "↻ Regenerate sheet" button invokes (it deletes the PNG first, then calls
 `--only ID` via the server).
 
+**Other flags:** `--out-dir DIR` — output directory (default: same dir as `--story`).
+`--aspect-ratio RATIO` — override `story.json`'s `aspect_ratio` field for this run (choices:
+`1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`; default: unset — model
+chooses). `--resolution 1K|2K|4K` is accepted for symmetry with `render_book.py` but is
+Gemini-era and has no effect here — `gpt-image-2`'s call size comes from
+`aspect_to_size(aspect_ratio)` instead (logged only).
+
 **Book-wide style frame (PER-82, "Lever B").** After the cast loop, a **full run** (no
 `--only`) also generates ONE `style-frame.png` per book — an abstract style board (palette
 swatches, a line/texture sample, a lighting study; no characters, no places, no scenery) —

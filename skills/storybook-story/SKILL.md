@@ -14,7 +14,9 @@ description: >
   it, then storybook-stylesheet (Stage 2) and storybook-render (Stage 3) turn it into
   illustrated pages, and storybook-consolidate (Stage 4) assembles the finished book files.
 metadata:
-  requires: {}
+  requires:
+    bins:
+      - curl
 ---
 
 # Storybook — Stage 1: Manuscript
@@ -23,9 +25,9 @@ metadata:
 
 This is the first of four skills. Together they make a fully illustrated book:
 
-1. **storybook-story** (this skill, free) — draft `story.json`: per-page text + image prompts + explicit character cast (global + per-page). User edits and approves the text before any money is spent.
-2. **storybook-stylesheet** (paid) — generate `style-sheet-{name}.png`: one reference image per character, the consistency anchors for every page.
-3. **storybook-render** (paid) — generate each page illustration using only the character sheets for the characters listed on that page, then overlay text. Output is page images only.
+1. **storybook-story** (this skill, free) — draft `story.json`: per-page text + image prompts + explicit cast (characters, objects, and locations — global + per-page). User edits and approves the text before any money is spent.
+2. **storybook-stylesheet** (paid) — generate `style-sheet-{id}.png`: one reference image per cast entry (characters, objects, locations), plus one book-wide `style-frame.png`, the consistency anchors for every page.
+3. **storybook-render** (paid) — generate each page illustration using only the cast entries' style sheets listed in that page's `cast` field, then overlay text. Output is page images only.
 4. **storybook-consolidate** (free) — after the user reviews the rendered pages, choose formats interactively (`saved_formats` is the default answer), merge pages into PDF and/or fixed-layout EPUB3, package everything into a zip. No API calls.
 
 The four skills hand off a single file: `story.json` in the output directory.
@@ -150,13 +152,16 @@ Each entry carries an optional `"kind"` field: `"character"` (default when absen
 
 Never rely on auto-extraction: the cast is never guessed from prose.
 
-### Locations — real-place photo references (optional, Perplexity MCP)
+### Locations — real-place photo references (optional)
 
 When the story mentions a **specific named real place** — a landmark, city, or recognizable
 building (e.g. "the Eiffel Tower", "Sherwood Forest's Major Oak", "the Brandenburg Gate")
 — you can download a few real photos of that place to use as references. Stage 2 turns the
-photos into a `style-sheet-{slug}.png` for the place — the same mechanism as characters and
-objects — and Stage 3 renders pages against that sheet (the raw photos are only a fallback).
+photos into a `style-sheet-{id}.png` for the place — the same mechanism as characters and
+objects — and Stage 3 renders pages against that sheet. Unlike objects, a location has no
+render-time raw-photo fallback (PER-84): the photos exist only to build the Stage-2 sheet: a
+page whose location has no usable `style_sheet` fails at render time rather than falling
+back to a raw photo (a photoreal reference bleeds through and fights the book's art style).
 This makes the rendered setting resemble the actual location while staying in the book's art
 style.
 
@@ -166,18 +171,39 @@ the user along with the other Stage-1 questions.
 
 #### Availability check (skip gracefully — never fail Stage 1)
 
-This step needs the Perplexity MCP tools (`perplexity_search` etc.). If they are not
-available in this session, skip the photo-download step and tell the user once:
+The primary search path (below) only needs `curl`, which is required by this skill. Skip
+the photo-download step and tell the user once only if **neither** path works — `curl`
+unavailable/network-blocked **and** the Perplexity MCP fallback also unavailable:
 
-> "Location photo references skipped — Perplexity MCP not configured; the book renders
-> fine without them: the place still gets a Stage-2 reference sheet generated from its
-> 'appearance' description alone."
+> "Location photo references skipped — no Commons API access and Perplexity MCP not
+> configured; the book renders fine without them: the place still gets a Stage-2
+> reference sheet generated from its 'appearance' description alone."
 
-Never block or fail Stage 1 because of a missing MCP.
+Never block or fail Stage 1 because photo search is unavailable.
 
 #### Searching for photos (per place)
 
-Call `perplexity_search` with a query like `"{place name}" photo site:commons.wikimedia.org`.
+Prefer the **Wikimedia Commons API directly** — it's faster, deterministic, free, and
+returns better candidates than a general web search. Use `curl -s` (not WebFetch — WebFetch
+summarizes the page through a model, which is the wrong tool for parsing API JSON) via Bash.
+Try in order:
+
+1. **Category listing** (best hit quality — prefer this when you know or can guess the
+   place's Commons category name, e.g. `Category:Eiffel Tower`, `Category:Flame Towers`):
+   ```bash
+   curl -s "https://commons.wikimedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=Category:{Category Name}&cmtype=file&cmlimit=25"
+   ```
+   Category listing has been observed to beat text search noticeably — e.g.
+   `Category:Flame Towers` returned usable Baku photos where the equivalent text query
+   returned Calgary Tower, postage stamps, and scanned PDFs.
+2. **File text search** — when you don't know the category name, or to discover it (`srnamespace=14` searches category names instead of files):
+   ```bash
+   curl -s "https://commons.wikimedia.org/w/api.php?action=query&format=json&list=search&srsearch={place name}&srnamespace=6&srlimit=10"
+   ```
+3. **`perplexity_search`** (fallback only — when the Commons API is unreachable, or to help
+   identify the right category name): query like
+   `"{place name}" photo site:commons.wikimedia.org`. **Avoid** `perplexity_ask` for direct
+   image URLs — it has been observed to return hallucinated URLs that 404.
 
 Prefer **freely-licensed** sources (Wikimedia Commons CC0/PD/CC-BY, or Unsplash public
 domain). Find **about 3 distinct Commons photos** of the place — prefer different angles or
@@ -185,9 +211,13 @@ views (a wide establishing shot, a closer view, a distinctive detail close-up). 
 views give Stage 2 a stronger anchor than a single photo. For each candidate note its
 `File:` title (e.g. `File:Tour_Eiffel_Wikimedia_Commons.jpg`).
 
-**Avoid** using `perplexity_ask` to obtain direct image URLs — it has been observed to
-return hallucinated URLs that return 404. If you do use it as a last resort, the download
-script still verifies the URL; a 404 produces a clear exit-1 error so you can try again.
+**Landmark searches skew heavily toward night shots** — skylines and towers are
+disproportionately photographed lit up after dark. A night reference biases the location
+style sheet dark, which then bleeds into every page that uses that sheet. **Prefer daylight,
+people-free frames**; check this before accepting a download, not just at the final review
+below. Expect to reject several candidates on these grounds — searching Baku landmarks,
+4 of the first 6 candidates were night skylines, and 4 were rejected in total before 3
+usable daylight photos were found.
 
 #### Building the direct-download URL
 
@@ -197,15 +227,17 @@ Use the **Special:FilePath** redirect for a deterministic, no-parsing URL:
 https://commons.wikimedia.org/wiki/Special:FilePath/{File-title-without-File:-prefix}?width=1600
 ```
 
-URL-encode spaces as `_` (Commons convention). Example:
+Spaces become `_` (Commons convention) — but this is cosmetic only: `fetch_location.py`
+percent-encodes the URL itself, so a title can be passed human-readable, non-ASCII
+characters included (e.g. Cyrillic, Azerbaijani, CJK place names). Example:
 
 ```
 https://commons.wikimedia.org/wiki/Special:FilePath/Tour_Eiffel_Wikimedia_Commons.jpg?width=1600
 ```
 
 Optionally query the Commons API for the canonical URL and license info:
-```
-https://commons.wikimedia.org/w/api.php?action=query&titles=File:Tour_Eiffel_Wikimedia_Commons.jpg&prop=imageinfo&iiprop=url|extmetadata&format=json
+```bash
+curl -s "https://commons.wikimedia.org/w/api.php?action=query&titles=File:Tour_Eiffel_Wikimedia_Commons.jpg&prop=imageinfo&iiprop=url|extmetadata&format=json"
 ```
 
 #### Downloading and validating (per photo)
@@ -239,6 +271,8 @@ script silently overwrites the output file — iteration is free.
 After each successful download, **view the file with the Read tool** and confirm:
 - The image shows the **right place**, recognizably.
 - It is **well-framed** (no extreme close-ups or partial views).
+- It is a **daylight** shot — reject night/dusk skylines (see above; they bias the style
+  sheet dark, which bleeds into every page using it).
 - It contains **no prominent people** — a person in the frame risks being read as a
   character by the render model. If present, pick another image.
 
@@ -294,8 +328,8 @@ slightly-off prop does not:
 > character lane: hero sheet → remaining character sheets
 > object lane: location refs → object refs → book-wide style frame (lowest priority)
 
-The location reference (its Stage-2 sheet, or the first photo as fallback) only competes
-against the object lane's cap — it is never dropped for having "too many characters" on the
+The location reference (its Stage-2 sheet — hard-required, no photo fallback, PER-84) only
+competes against the object lane's cap — it is never dropped for having "too many characters" on the
 page. It can still be dropped if the object lane itself is over its cap (logged — never
 silently dropped), which on a pro page needs fewer object/location refs to trigger than on
 flash. On pages whose `cast` lists only the place (no characters or objects), the location

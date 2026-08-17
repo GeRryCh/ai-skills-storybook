@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = []
+# dependencies = ["Pillow"]
 # ///
 """
 Run the unit test suite (zero API key, zero browser).

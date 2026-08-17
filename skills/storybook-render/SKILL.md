@@ -2,15 +2,15 @@
 name: storybook-render
 description: >
   Stage 3 of 4 in the storybook pipeline — render the illustrated pages.
-  Use when an approved story.json AND a style-sheet.png already exist (from
+  Use when an approved story.json AND its per-cast style sheets already exist (from
   storybook-story + storybook-stylesheet) and the user wants to generate, re-render,
   or fix page illustrations — e.g. "render the book", "render the pages", "re-render
   page 3", "regenerate the pages", "redo the cover". Generates one illustration per
-  page (using the style sheet as the consistency anchor) and overlays the story text.
-  Costs one image API call per page. Output is page images only — book file assembly
-  (PDF/EPUB) and packaging happen in Stage 4 (storybook-consolidate), free, after
-  the user reviews the rendered pages.
-  If the style sheet is missing, run storybook-stylesheet first; if story.json is
+  page (using each page's cast style sheets as the consistency anchor) and overlays
+  the story text. Costs one image API call per page. Output is page images only —
+  book file assembly (PDF/EPUB) and packaging happen in Stage 4 (storybook-consolidate),
+  free, after the user reviews the rendered pages.
+  If the style sheets are missing, run storybook-stylesheet first; if story.json is
   missing, run storybook-story first.
 metadata:
   requires:
@@ -25,10 +25,17 @@ metadata:
 ## Preconditions
 
 - `{out_dir}/story.json` exists (from **storybook-story**).
-- `{out_dir}/style-sheet.png` exists and `story.json` has `style_sheet_path` set (from **storybook-stylesheet**). The script warns and produces weaker consistency if it is missing.
+- Each cast entry a page uses has a per-entry sheet: `cast[].style_sheet` pointing at
+  `style-sheet-{id}.png` (from **storybook-stylesheet**). This is a **hard requirement**
+  for `kind: "character"` and `kind: "location"` entries — a page listing one with no
+  usable sheet fails before any paid call (`missing_required_sheets`; PER-69 for
+  characters, PER-84 for locations — there is no render-time raw-photo fallback for
+  either). Objects (`kind: "object"`) are softer: a missing sheet falls back to the
+  entry's first `ref_image` photo. The optional book-wide `style_frame` (from Stage 2's
+  "Lever B") is softer still — missing or absent-on-disk just warns and is skipped.
 - `GEMINI_API_KEY` is set; `uv` is installed. The script calls the Gemini image API directly (no sibling skill needed).
 
-If the style sheet is missing, run **storybook-stylesheet** first.
+If a required style sheet is missing, run **storybook-stylesheet** first.
 
 ---
 
@@ -46,7 +53,9 @@ uv run {skillDir}/scripts/render_book.py \
 - `--aspect-ratio RATIO` — override the aspect ratio from `story.json` for this run (choices: `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`). Aspect ratio is normally configured via the top-level `aspect_ratio` field in `story.json`; when neither is set the model chooses framing per call.
 - `--model gemini-3.1-flash-image|gemini-3-pro-image` — override the image model for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--model` flag > `pages[].model` > top-level `model` > flash default). Flash (default): faster/cheaper, character-lane cap 4, object-lane cap 10. Pro: higher quality, character-lane cap 5, object-lane cap 6 (PER-96 — Pro's documented 14-slot envelope spends more on the character lane and a style-reference lane we don't use yet). Style sheets always use pro regardless. References ride two lanes (PER-83): a character lane and an object lane (objects + locations), 14 total. **Auto-upgrade:** when a page's **character** lane has ≥5 images and the effective model is flash (including an explicit `--model gemini-3.1-flash-image` or per-page override), that page is automatically upgraded to `gemini-3-pro-image` for that call only; logged as `auto-upgraded page N to gemini-3-pro-image (5 characters > flash character-lane cap 4)`; `story.json` is never modified. Manually pinning a page's model to pro solely to avoid the character-lane cap is therefore no longer needed. Object-lane overflow never triggers an upgrade — but since the object cap is itself per-model, a character-triggered upgrade can shrink the object lane from 10 to 6 as a side effect. **Retry workflow:** set a page's `model` to `gemini-3-pro-image` in `story.json`, then `rm pages/page-NN*.png` and re-run `--only N`.
 - `--text-mode overlay|native|long` — override the text mode for every page this run. Normally set per-page or book-wide in `story.json` (precedence: `--text-mode` flag > `pages[].text_mode` > top-level `text_mode` > native default). A page-level `text_mode` field in `story.json` lets individual pages differ from the book default without this flag — e.g. one long-mode page in an otherwise native book. This flag overrides all page-level and book-level fields for the entire run. Mixed-mode books produce mixed filename suffixes in `pages/` (e.g. some `page-NN-native.png`, some `page-NN-long.png` pairs).
-- `--saved-formats pdf epub|none` — override `story.json`'s `saved_formats` for this run: which book file(s) to assemble after a full render. `epub` is a fixed-layout EPUB3 (pre-paginated, full-bleed pages). `none` skips assembly entirely (useful for partial `--from` runs where more pages are coming). `saved_formats` is normally configured in `story.json` (default: all formats when omitted).
+- `--out-dir DIR` — output directory for `pages/`, `log.txt`, `costs.jsonl` (default: same directory as `--story`).
+- `--composite-only` — abort instead of making any paid Gemini call; only rebuild free Pillow composites (overlay text panels, long-mode text pages, long cover) from existing raw/art/bg files. Needs no `GEMINI_API_KEY`. Pages that would require a new image fail with a message naming the missing prerequisite file (exit 1). Use this to prove a text/layout change costs nothing before committing to a real render.
+- `--fallback-vendor openai|none` — vendor to retry on when Gemini returns `finish_reason=PROHIBITED_CONTENT` (a deterministic content-policy block, not a transient error). `openai` (default): auto-retry that page on OpenAI `gpt-image-2` using the same resolved prompt and style-sheet references, when `STORYBOOK_SKILL_OPENAI_API_KEY` or `OPENAI_API_KEY` is set. `none`: disable the fallback — the page fails as today. Precedence: `--fallback-vendor` flag > `story.json`'s `fallback_vendor` field > `openai` default. Transient `5xx`/`429` errors are unaffected — they keep the Gemini retry path.
 
 All pages are fired concurrently via `asyncio` — one async Gemini request per page, no thread pool and no concurrency cap. Pages are independent (each call only uses the shared style sheet + character refs), so wall-clock ≈ the slowest single page. Transient `429`/`5xx` responses are retried automatically with exponential backoff + jitter (honoring `Retry-After`), so a momentary rate-limit no longer drops a page.
 
@@ -76,15 +85,18 @@ For overlay/native: `rm pages/page-NN{-native}.png` (and `pages/raw-page-NN.png`
 
 If `story.json` has `cast` entries with `kind: "location"` and a page lists one of those
 ids in its `pages[].cast` array, that place's Stage-2 reference sheet (`style_sheet`) is
-sent as an additional reference image — the same mechanism as characters and objects. When
-the entry has no sheet (e.g. a book rendered before Stage 2 was re-run with PER-50), the
-first `ref_image` photo is sent as a fallback instead (logged). Location references ride
-the **object lane** (PER-83) — the same lane as objects, cap 10 flash / 6 pro (PER-96) — and
-**outrank** objects within it: a wrong-style background poisons the whole frame, a
-slightly-off prop does not.
+sent as an additional reference image — the same mechanism as characters and objects.
+**Unlike objects, there is no render-time raw-photo fallback for locations (PER-84):** a
+raw location photo is a photoreal-bleed vector — one "redraw in book style" sentence has
+to fight a full photographic reference. A page whose location cast entry has no usable
+`style_sheet` **fails that page** before any paid call is made (other pages still render;
+the run exits 1) — run **storybook-stylesheet** first to build the missing sheet. Location
+references ride the **object lane** (PER-83) — the same lane as objects, cap 10 flash / 6
+pro (PER-96) — and **outrank** objects within it: a wrong-style background poisons the
+whole frame, a slightly-off prop does not.
 
 > **character lane** (cap 4 flash / 5 pro): hero sheet → remaining character sheets
-> **object lane** (cap 10 flash / 6 pro): **location ref (sheet, or photo fallback)** → object refs → **book-wide style frame** (lowest priority)
+> **object lane** (cap 10 flash / 6 pro): **location ref (sheet only, hard-required)** → object refs (sheet, or photo fallback) → **book-wide style frame** (lowest priority)
 
 Flash pages whose **character** lane exceeds 4 are **auto-upgraded to pro** before any
 character is dropped (see `--model` above). Anything past the pro character-lane cap (5),
@@ -92,11 +104,15 @@ or past the effective model's object-lane cap (10 flash / 6 pro), is logged (nev
 dropped). Object-lane overflow never triggers an upgrade on its own — but because the object
 cap is per-model, a character-triggered upgrade can shrink the object lane from 10 to 6 as a
 side effect. On scenery-only pages
-(`"cast": []`) the location photo is the sole reference image (plus the style frame, if set).
+(`"cast": []`) the location style sheet is the sole per-page-cast reference image (plus the
+book-wide style frame, if set).
 
 Each reference is sent with a short identifying note in the Gemini call so the model knows
-a location sheet or photo is the setting, not a character. Unknown ids and missing
-files degrade to a logged warning and skip — they never fail the render.
+a location sheet is the setting, not a character. A `pages[].cast` id not present in
+`story.json`'s `cast` array at all degrades to a logged warning and skip for every kind —
+that never fails the render. A **known** location id with no usable `style_sheet` is the
+one case above that does fail the render; the equivalent gap on an object degrades to its
+photo fallback instead.
 
 **Book-wide style frame (PER-82, "Lever B").** When `story.json`'s top-level `style_frame`
 is set (written by `make_style_sheet.py`, Stage 2) and the file exists on disk, it's sent as

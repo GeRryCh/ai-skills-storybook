@@ -202,8 +202,7 @@ uv run skills/storybook-consolidate/scripts/package_book.py --story story.json
 `--text-mode overlay|native|long` (override for entire run; precedence: CLI > per-page `text_mode` field > book `text_mode` field > native default; per-page `text_mode` lets individual pages differ from the book default without this flag),
 `--model gemini-3.1-flash-image|gemini-3-pro-image`
 (override per-page/book model for one run; precedence: CLI > page field > story field > flash default),
-`--saved-formats pdf epub|none` (override story.json
-`saved_formats`; default when neither set: all formats),
+`--out-dir DIR` (output directory for `pages/`, `log.txt`, `costs.jsonl`; default: same dir as `--story`),
 `--composite-only` (abort instead of making any paid Gemini call; only rebuild free Pillow
 composites from existing raw/art/bg files — needs no `GEMINI_API_KEY`; pages that would
 require a new image fail with a clear message naming the missing prerequisite, exit 1),
@@ -300,15 +299,21 @@ order) or a single string. Pages opt in by listing the place name in `pages[].ca
 reference used book-wide bleeds the place's environment into every page, including pages set
 elsewhere). Only list the place name on pages physically set there.
 
-**Stage 1 (in-session, free):** the agent detects real named places, calls
-`perplexity_search` to find ~3 distinct Wikimedia Commons freely-licensed photos (different
-angles/views preferred), builds a deterministic download URL per photo, and runs
-`fetch_location.py` once per photo (numbered outputs `loc-{slug}-1.jpg`, `-2.jpg`,
-`-3.jpg`), validating each inline (right place, well-framed, no prominent people). Accept
-1-2 when Commons lacks suitable photos (min 1) and tell the user. The resulting paths go
-into the cast entry's `ref_image` array. If the Perplexity MCP is absent, photo gathering
-is skipped with a user-facing message (the place still gets an appearance-only sheet) —
-Stage 1 never fails over this.
+**Stage 1 (in-session, free):** the agent detects real named places and searches the
+**Wikimedia Commons API directly via `curl`** — category listing
+(`list=categorymembers&cmtitle=Category:<name>`) first for hit quality, file text search
+(`list=search&srnamespace=6`) second, `perplexity_search` demoted to a fallback (unreachable
+API, or to help identify the category name) — to find ~3 distinct freely-licensed photos
+(different angles/views preferred, **daylight and people-free** — landmark searches skew
+heavily toward night shots, which bias the location style sheet dark and bleed into every
+page using it), builds a deterministic download URL per photo, and runs `fetch_location.py`
+once per photo (numbered outputs `loc-{slug}-1.jpg`, `-2.jpg`, `-3.jpg`; the URL is
+percent-encoded internally, so non-ASCII Commons titles — Cyrillic, Azerbaijani, CJK — pass
+through human-readable), validating each inline (right place, well-framed, daylight, no
+prominent people). Accept 1-2 when Commons lacks suitable photos (min 1) and tell the user.
+The resulting paths go into the cast entry's `ref_image` array. If neither the Commons API
+nor the Perplexity MCP is reachable, photo gathering is skipped with a user-facing message
+(the place still gets an appearance-only sheet) — Stage 1 never fails over this.
 
 **`fetch_location.py`** (`skills/storybook-story/scripts/fetch_location.py`): PEP-723,
 Pillow + stdlib `urllib`. Validates HTTP status, `content-type: image/*`, decodes with

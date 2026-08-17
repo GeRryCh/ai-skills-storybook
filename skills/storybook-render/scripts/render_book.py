@@ -82,7 +82,7 @@ Usage:
                         [--aspect-ratio RATIO] [--text-mode overlay|native|long]
                         [--model gemini-3.1-flash-image|gemini-3-pro-image]
                         [--fallback-vendor openai|none]
-                        [--saved-formats pdf epub|none]
+                        [--composite-only]
 """
 
 from __future__ import annotations
