@@ -2,6 +2,7 @@
 paths:
   - "skills/**/*.py"
   - "tests/regen.sh"
+  - "skills/storybook-story/assets/editor.html"
 ---
 
 # Script authoring rules
@@ -31,6 +32,16 @@ table itself stays identical either way. `edit_story.py` carries a **read-only**
 of `read_cost_ledger()` (renamed `summarize_costs_for_status()` for the summarizer, since its
 output shape is the `/api/status` JSON block, not a stdout line) — it never writes records,
 so `append_cost_record()`/`PRICING` have no reason to exist there.
+
+**PER-83/PER-96/PER-97 reference-lane-cap constants** are triplicated: `render_book.py`
+(`CHARACTER_LANE_CAP`, `MAX_CHARACTER_LANE`, `OBJECT_LANE_CAP`, `MAX_OBJECT_LANE`,
+`TOTAL_REF_CAP` — the source of truth), `edit_story.py` (`CHARACTER_LANE_HARD_CAP`, the
+validator's hard-block cap — mirrors `CHARACTER_LANE_CAP[PRO_IMAGE_MODEL]`), and
+`editor.html` (a JS mirror of all of `render_book.py`'s lane constants, backing the ref-count
+badge and the `@`-mention picker's character-lane guard). `tests/unit/test_lane_caps_in_sync.py`
+guards all three against drift — import-based for `edit_story.py` vs `render_book.py`,
+regex-over-source for `editor.html` (it's a static asset the browser loads, not importable —
+the one constant this repo's tests read out of source text rather than importing).
 
 ## No migration shim for legacy keys
 

@@ -1,0 +1,38 @@
+{
+  "title": "Crowded Cast",
+  "style": "flat vector illustration, bold outlines",
+  "style_guide": {
+    "medium": "flat vector illustration",
+    "palette": ["coral #FF6B6B", "teal #4ECDC4", "cream #FFF8E7"],
+    "line": "bold black outline, rounded corners",
+    "lighting": "even, shadowless",
+    "mood": "busy, cheerful"
+  },
+  "cast": [
+    {"id": "ash", "name": "Ash", "appearance": "small orange fox, white-tipped tail"},
+    {"id": "bo", "name": "Bo", "appearance": "round grey rabbit, long ears"},
+    {"id": "cleo", "name": "Cleo", "appearance": "tall brown deer, small antlers"},
+    {"id": "dex", "name": "Dex", "appearance": "stocky black bear cub"},
+    {"id": "eli", "name": "Eli", "appearance": "spotted yellow duckling"},
+    {"id": "fern", "name": "Fern", "appearance": "striped green lizard"},
+    {"id": "lantern", "name": "Old Lantern", "kind": "object", "appearance": "brass lantern with a cracked glass pane"}
+  ],
+  "pages": [
+    {
+      "page_num": 1,
+      "cast": ["ash", "bo", "cleo", "dex", "eli", "lantern"],
+      "text": "Five friends gathered by the old lantern.",
+      "image_prompt": "<ash>, <bo>, <cleo>, <dex>, and <eli> stand together around a glowing <lantern> at dusk, all five looking up in wonder.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark"
+    },
+    {
+      "page_num": 2,
+      "cast": ["ash", "bo", "cleo", "dex"],
+      "text": "Four of them set off down the path.",
+      "image_prompt": "<ash>, <bo>, <cleo>, and <dex> walk single-file down a winding forest path in the morning light.",
+      "text_placement": "bottom",
+      "text_color_hint": "dark"
+    }
+  ]
+}

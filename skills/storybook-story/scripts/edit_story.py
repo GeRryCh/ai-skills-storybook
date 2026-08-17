@@ -123,6 +123,15 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 DEFAULT_PORT = 8765
 
+# PER-97 — per-page character-lane hard cap. Mirrors render_book.py's
+# CHARACTER_LANE_CAP[PRO_IMAGE_MODEL] (5): a 5th character on flash silently
+# auto-upgrades the page to pro at render time, so 5 is legal and renders
+# correctly; 6 is the first count where select_refs is guaranteed to drop a
+# character sheet. Kept out of an import of render_book.py on purpose —
+# edit_story.py is stdlib-only PEP-723, render_book.py declares google-genai.
+# Drift guard: tests/unit/test_lane_caps_in_sync.py.
+CHARACTER_LANE_HARD_CAP = 5
+
 # render_book.py, resolved relative to this file's position in the skills/ tree:
 #   skills/storybook-story/scripts/ → parents[2] = skills/
 #   → skills/storybook-render/scripts/render_book.py
@@ -597,6 +606,31 @@ def validate_story(
                                     f"{where}.cast: '{cid}' is not in the cast "
                                     f"({cast_ids}) — must match cast[].id exactly"
                                 )
+                        # PER-97: hard-block a page's character lane past its
+                        # render-time cap. 5 is legal (a 5th character silently
+                        # auto-upgrades the page to pro at render — render_book.py's
+                        # select_refs); 6 is the first count where a sheet is
+                        # guaranteed to be dropped. Model-independent on purpose —
+                        # never mention flash/pro here. Unknown ids are skipped
+                        # (already an error above, from the membership loop).
+                        char_ids = []
+                        for cid in pc:
+                            ce = cast_by_id.get(cid)
+                            if ce is None:
+                                continue
+                            if (ce.get("kind") or "character") == "character":
+                                char_ids.append(cid)
+                        if len(char_ids) > CHARACTER_LANE_HARD_CAP:
+                            overflow = char_ids[CHARACTER_LANE_HARD_CAP:]
+                            errors.append(
+                                f"{where}.cast has {len(char_ids)} character-kind "
+                                f"entries; the hard cap is {CHARACTER_LANE_HARD_CAP} "
+                                "per page (Gemini 3 Pro character-lane limit — a 5th "
+                                "character auto-upgrades the page to pro at render). "
+                                f"Remove or split off: {', '.join(overflow)} — refs "
+                                "past the cap are dropped at render, so the page "
+                                "would not match its prompt (PER-97)"
+                            )
                         # PER-42: warn when image_prompt echoes a sheet-backed
                         # cast member's appearance (character/object kinds only;
                         # locations are excluded — their appearance is scenery

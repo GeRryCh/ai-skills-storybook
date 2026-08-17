@@ -88,6 +88,30 @@ class TestValidateStoryCLI(unittest.TestCase):
         finally:
             p.unlink(missing_ok=True)
 
+    def test_character_lane_over_cap_exits_2(self):
+        """PER-97: 6 character-kind entries on one page is a hard error."""
+        cast = [
+            {"id": f"char{i}", "name": f"Char {i}", "appearance": "a person"}
+            for i in range(6)
+        ]
+        p = _tmp_story({
+            "title": "T", "style": "s",
+            "style_guide": {"medium": "watercolor"},
+            "cast": cast,
+            "pages": [{
+                "page_num": 1,
+                "cast": [c["id"] for c in cast],
+                "text": "t",
+                "image_prompt": " ".join(f"<{c['id']}>" for c in cast),
+            }],
+        })
+        try:
+            r = self._validate(p)
+            self.assertEqual(r.returncode, 2, f"stdout: {r.stdout}\nstderr: {r.stderr}")
+            self.assertIn("hard cap is 5", r.stdout + r.stderr)
+        finally:
+            p.unlink(missing_ok=True)
+
     def test_invalid_json_exits_2(self):
         f = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"

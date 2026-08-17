@@ -131,7 +131,7 @@
           "page_num": { "type": "integer", "minimum": 1 },
           "cast": {
             "type": "array",
-            "description": "ids of the cast entries appearing on this page — characters, objects, and locations in ONE flat list, any mix and multiplicity (e.g. ['pip', 'red-umbrella', 'gazelle-valley']). MUST match cast[].id exactly. Drives which reference images are sent when rendering this page. The FIRST entry whose kind is 'character' (or kind is absent, defaulting to character) is the page HERO — it leads reference ordering into the cap; author the hero/child first among the characters so it gets top cap priority. Characters contribute only their style sheet (no extra photo). Objects and locations follow after characters. Use [] for scenery-only or subject-free pages.",
+            "description": "ids of the cast entries appearing on this page — characters, objects, and locations in ONE flat list, any mix and multiplicity (e.g. ['pip', 'red-umbrella', 'gazelle-valley']). MUST match cast[].id exactly. Drives which reference images are sent when rendering this page. The FIRST entry whose kind is 'character' (or kind is absent, defaulting to character) is the page HERO — it leads reference ordering into the cap; author the hero/child first among the characters so it gets top cap priority. Characters contribute only their style sheet (no extra photo). Objects and locations follow after characters. Use [] for scenery-only or subject-free pages. HARD CAP (PER-97): at most 5 character-kind ids per page — validate_story.py errors past 5 (Gemini 3 Pro's character-lane limit; a 5th character auto-upgrades the page to pro at render, but a 6th is guaranteed to be dropped).",
             "items": { "type": "string" }
           },
           "text": {
@@ -169,7 +169,7 @@
           "model": {
             "type": "string",
             "enum": ["gemini-3.1-flash-image", "gemini-3-pro-image"],
-            "description": "Optional per-page image model override. Unset = inherit the book-level 'model' field (or gemini-3.1-flash-image default). Set to 'gemini-3-pro-image' to retry a specific page on the stronger model without re-rendering the whole book. Also raises that page's reference-image cap from 4 to 5. Note: pages whose reference list exceeds 4 are automatically upgraded to gemini-3-pro-image at render time regardless of this field (runtime-only; story.json is never modified)."
+            "description": "Optional per-page image model override. Unset = inherit the book-level 'model' field (or gemini-3.1-flash-image default). Set to 'gemini-3-pro-image' to retry a specific page on the stronger model without re-rendering the whole book. Also raises that page's character-lane cap from 4 to 5 (its hard ceiling — see pages[].cast). Note: pages whose CHARACTER-lane count exceeds 4 are automatically upgraded to gemini-3-pro-image at render time regardless of this field (runtime-only; story.json is never modified) — the object lane (objects + locations) never triggers this upgrade on its own."
           },
           "text_mode": {
             "type": "string",

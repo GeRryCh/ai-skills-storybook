@@ -88,6 +88,125 @@ class TestPlaceholderValidation(unittest.TestCase):
         )
 
 
+class TestCharacterLaneHardCap(unittest.TestCase):
+    """PER-97: pages[].cast character-kind count > 5 is a hard error.
+
+    5 is legal (a 5th character silently auto-upgrades the page to pro at
+    render — render_book.py's select_refs); 6 is the first count where a
+    sheet is guaranteed to be dropped. The check is model-independent: it
+    must never mention flash/pro, since 5 is fine on either.
+    """
+
+    @staticmethod
+    def _char_entry(cid: str) -> dict:
+        return {"id": cid, "name": cid.title(), "appearance": "a small creature"}
+
+    @staticmethod
+    def _kind_entry(cid: str, kind: str) -> dict:
+        return {"id": cid, "name": cid.title(), "appearance": "a thing", "kind": kind}
+
+    def _story_with_cast(self, extra_cast: list) -> dict:
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["cast"].extend(extra_cast)
+        return story
+
+    def test_six_characters_is_error(self):
+        extra = [self._char_entry(f"char{i}") for i in range(5)]  # + pip = 6
+        story = self._story_with_cast(extra)
+        cast_ids = ["pip"] + [c["id"] for c in extra]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(
+            any("character-kind entries" in e and "hard cap is 5" in e for e in errors),
+            f"Expected character-lane hard-cap error, got: {errors}",
+        )
+        # Names the overflow entries (char4 is the 6th mention, index 5, first dropped).
+        self.assertTrue(any("char4" in e for e in errors), errors)
+
+    def test_five_characters_no_error(self):
+        extra = [self._char_entry(f"char{i}") for i in range(4)]  # + pip = 5
+        story = self._story_with_cast(extra)
+        cast_ids = ["pip"] + [c["id"] for c in extra]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertFalse(
+            any("character-kind entries" in e for e in errors),
+            f"5 characters must be legal, got: {errors}",
+        )
+
+    def test_five_characters_flash_model_still_no_error(self):
+        """The cap is model-independent — pinning the page to flash must not
+        change the outcome, and the error text must never mention either model."""
+        extra = [self._char_entry(f"char{i}") for i in range(4)]
+        story = self._story_with_cast(extra)
+        cast_ids = ["pip"] + [c["id"] for c in extra]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        story["pages"][0]["model"] = "gemini-3.1-flash-image"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertFalse(any("character-kind entries" in e for e in errors), errors)
+
+    def test_error_never_mentions_model(self):
+        extra = [self._char_entry(f"char{i}") for i in range(5)]  # 6 total
+        story = self._story_with_cast(extra)
+        cast_ids = ["pip"] + [c["id"] for c in extra]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        cap_errors = [e for e in errors if "character-kind entries" in e]
+        self.assertTrue(cap_errors)
+        for e in cap_errors:
+            self.assertNotIn("flash", e.lower())
+            self.assertNotIn("gemini-3-pro", e.lower())
+
+    def test_five_characters_plus_eight_objects_no_character_error(self):
+        """Object/location count never counts toward the character-lane cap."""
+        chars = [self._char_entry(f"char{i}") for i in range(4)]  # + pip = 5
+        objs = [self._kind_entry(f"obj{i}", "object") for i in range(8)]
+        story = self._story_with_cast(chars + objs)
+        cast_ids = ["pip"] + [c["id"] for c in chars] + [o["id"] for o in objs]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertFalse(any("character-kind entries" in e for e in errors), errors)
+
+    def test_kind_absent_counts_as_character(self):
+        """No 'kind' field defaults to character (same default as render_book.py)."""
+        extra = [self._char_entry(f"char{i}") for i in range(5)]  # kind omitted → 6 chars
+        story = self._story_with_cast(extra)
+        cast_ids = ["pip"] + [c["id"] for c in extra]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(any("character-kind entries" in e for e in errors), errors)
+
+    def test_location_kind_does_not_count(self):
+        """kind: 'location' entries never count toward the character lane."""
+        chars = [self._char_entry(f"char{i}") for i in range(4)]  # + pip = 5
+        locs = [self._kind_entry(f"loc{i}", "location") for i in range(3)]
+        story = self._story_with_cast(chars + locs)
+        cast_ids = ["pip"] + [c["id"] for c in chars] + [l["id"] for l in locs]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids)
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertFalse(any("character-kind entries" in e for e in errors), errors)
+
+    def test_unknown_page_cast_id_does_not_crash_counter(self):
+        """An unknown id alongside 6 real characters: membership error fires,
+        counter skips the unknown id, and the character-lane error still fires
+        for the 6 real characters (it doesn't crash or get silently skipped)."""
+        extra = [self._char_entry(f"char{i}") for i in range(5)]  # + pip = 6
+        story = self._story_with_cast(extra)
+        cast_ids = ["pip"] + [c["id"] for c in extra] + ["ghost"]
+        story["pages"][0]["cast"] = cast_ids
+        story["pages"][0]["image_prompt"] = " ".join(f"<{c}>" for c in cast_ids[:-1])
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(any("not in the cast" in e for e in errors), errors)
+        self.assertTrue(any("character-kind entries" in e for e in errors), errors)
+
+
 class TestAppearanceEcho(unittest.TestCase):
     """_appearance_echo (PER-42) — trigram heuristic, direct unit tests."""
 

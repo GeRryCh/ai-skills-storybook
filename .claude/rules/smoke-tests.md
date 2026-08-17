@@ -14,6 +14,8 @@ uv run skills/storybook-story/scripts/validate_story.py \
   --story tests/fixtures/pip-storm-long/story.json
 uv run skills/storybook-story/scripts/validate_story.py \
   --story tests/fixtures/gazelle-valley/story.json
+uv run skills/storybook-story/scripts/validate_story.py \
+  --story tests/fixtures/crowded-cast/story.json
 
 # No API cost — exercise text overlay against a committed fixture page
 uv run skills/storybook-render/scripts/overlay_text.py \

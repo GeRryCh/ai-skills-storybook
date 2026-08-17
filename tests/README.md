@@ -60,6 +60,9 @@ tests/
     test_validate_story.py
     test_cli_exit_codes.py
     test_costs.py        # PER-35: pricing math + ledger round-trip (both scripts)
+    test_book_premise.py # PER-66: premise injected into every page render prompt
+    test_openai_fallback.py # PER-67: PROHIBITED_CONTENT auto-retry on gpt-image-2
+    test_lane_caps_in_sync.py # PER-97: guards the triplicated lane-cap constants
   e2e/
     _support.py         # EditorServer (start/stop server + temp fixture copy)
     test_mention_picker.py
@@ -67,6 +70,11 @@ tests/
     test_save_roundtrip.py
     test_cost_readout.py # PER-35: top-bar cost readout renders from /api/status
   fixtures/             # committed sample books (read-only for tests)
+    pip-storm/          # overlay + native pages, reference image, style sheet
+    pip-storm-long/     # long-mode: full-bleed art, shared text-page background
+    gazelle-valley/     # location cast entry with real-place ref photos
+    crowded-cast/       # PER-97: 6 characters + 1 object, no rendered artifacts —
+                         # drives the character-lane hard-cap picker/save tests
   gen_ref.py            # paid artifact-regeneration script (not a test)
   regen.sh              # paid regen script (not a test)
 ```

@@ -199,6 +199,12 @@ dialog#consolidate-modal h3 small{font-weight:400;font-size:12px;color:#64748b}
 .mention-row .m-kind{font-size:10px;padding:1px 6px;border-radius:8px;
   background:#f1f5f9;color:#64748b;font-weight:500;text-transform:uppercase;letter-spacing:.03em}
 .mention-row .m-id{font-size:11px;color:#94a3b8;font-family:monospace}
+/* PER-97: character-lane-full rows stay visible but inert, with a reason line
+   appended below the list — a silently shorter list is worse than a greyed one. */
+.mention-row.blocked{cursor:not-allowed;opacity:.45}
+.mention-row.blocked:hover{background:none}
+.mention-note{padding:6px 10px;font-size:11px;color:#92400e;background:#fef3c7;
+  border-top:1px solid #fde68a;white-space:normal;max-width:320px;line-height:1.4}
 </style>
 </head>
 <body>
@@ -351,10 +357,12 @@ const NEUTRAL_BOOK_FIELDS = new Set(['title', 'language', 'saved_formats']);
 // textarea opens a filterable list of all cast entries; selecting one inserts
 // the correct <id> token at the caret and manually syncs story state (a
 // programmatic .value set does NOT fire 'change', so we do it explicitly).
-let _mentionPop    = null;  // the #mention-pop element
-let _mentionActive = null;  // {ta, page, atIdx} while open; null when closed
-let _mentionHlIdx  = 0;     // keyboard-highlighted row index
-let _mentionItems  = [];    // current filtered cast entries
+let _mentionPop     = null;  // the #mention-pop element
+let _mentionActive  = null;  // {ta, page, atIdx} while open; null when closed
+let _mentionHlIdx   = 0;     // keyboard-highlighted row index (-1 if nothing selectable)
+let _mentionItems   = [];    // current filtered cast entries
+let _mentionBlocked = [];    // PER-97: index-aligned with _mentionItems — true =
+                              // character-lane full, row shown but not selectable
 
 function _initMentionPop() {
   _mentionPop = document.createElement('div');
@@ -368,9 +376,10 @@ function _initMentionPop() {
 
 function _hideMentionPop() {
   if (_mentionPop) _mentionPop.style.display = 'none';
-  _mentionActive = null;
-  _mentionItems  = [];
-  _mentionHlIdx  = 0;
+  _mentionActive  = null;
+  _mentionItems   = [];
+  _mentionBlocked = [];
+  _mentionHlIdx   = 0;
 }
 
 function _showMentionPop(ta, page, atIdx, query, container) {
@@ -382,20 +391,41 @@ function _showMentionPop(ta, page, atIdx, query, container) {
   ));
   if (!items.length) { _hideMentionPop(); return; }
 
-  _mentionActive = { ta, page, atIdx, container };
-  _mentionItems  = items;
-  _mentionHlIdx  = 0;
+  // PER-97: a character-kind row is blocked when the page's character lane is
+  // already at its hard cap AND this id isn't already on the page — re-mentioning
+  // an id already in page.cast is a no-op for the count (_castIdsFromPrompt
+  // dedupes by first appearance), so it must stay selectable. Object/location
+  // rows ride a different lane and are never blocked here.
+  const { characters } = pageRefLaneCounts(page);
+  const charCap = CHARACTER_LANE_CAP[PRO_IMAGE_MODEL] ?? MAX_CHARACTER_LANE;
+  const laneFull = characters >= charCap;
+  const onPage = new Set(page.cast || []);
+  const blocked = items.map(c =>
+    laneFull && (c.kind || 'character') === 'character' && !onPage.has(c.id)
+  );
 
-  _mentionPop.innerHTML = items.map((c, idx) => {
+  _mentionActive  = { ta, page, atIdx, container };
+  _mentionItems   = items;
+  _mentionBlocked = blocked;
+  _mentionHlIdx   = blocked.indexOf(false);  // first selectable row; -1 if none
+
+  const rowsHtml = items.map((c, idx) => {
     const kind = c.kind || 'character';
-    return `<div class="mention-row" data-idx="${idx}">` +
+    const cls = blocked[idx] ? 'mention-row blocked' : 'mention-row';
+    return `<div class="${cls}" data-idx="${idx}">` +
       `<span class="m-name">${esc(c.name || c.id)}</span>` +
       `<span class="m-kind">${esc(kind)}</span>` +
       `<span class="m-id">&lt;${esc(c.id)}&gt;</span>` +
       `</div>`;
   }).join('');
+  const noteHtml = laneFull
+    ? `<div class="mention-note">Character lane full — ${charCap} characters max per page. ` +
+      `Remove a character mention to add another. Objects and places are unaffected.</div>`
+    : '';
+  _mentionPop.innerHTML = rowsHtml + noteHtml;
 
   _mentionPop.querySelectorAll('.mention-row').forEach(row => {
+    if (row.classList.contains('blocked')) return;  // inert — no click handler
     row.addEventListener('pointerdown', e => {
       e.preventDefault(); // prevent textarea blur so we can set selection
       const idx = parseInt(row.dataset.idx, 10);
@@ -419,8 +449,20 @@ function _mentionHlUpdate() {
   });
 }
 
+// PER-97: walk from `from` in direction `dir` (+1/-1), skipping blocked rows.
+// Clamps like the pre-PER-97 Math.min/max nav (no wraparound) — returns `from`
+// unchanged when there is no further selectable row that way, including when
+// nothing is selectable at all (from === -1).
+function _mentionNextIdx(from, dir) {
+  for (let i = from + dir; i >= 0 && i < _mentionItems.length; i += dir) {
+    if (!_mentionBlocked[i]) return i;
+  }
+  return from;
+}
+
 function _selectMentionItem(idx) {
   if (!_mentionActive || !_mentionPop) return;
+  if (_mentionBlocked[idx]) return;  // defensive — should be unreachable (no handler wired)
   const { ta, page, atIdx, container } = _mentionActive;
   const item = _mentionItems[idx];
   if (!item) return;
@@ -1351,10 +1393,16 @@ function updateRefBadge(badgeEl, page) {
   const objCap = OBJECT_LANE_CAP[effModel] ?? MAX_OBJECT_LANE;
   if (characters > charCap || objectLane > objCap || total > TOTAL_REF_CAP) {
     badgeEl.className = 'badge-refs over';
+    // PER-97: the character lane is now a hard cap — save is refused before
+    // this state can reach story.json, so "refs will drop" would be wrong for
+    // it. The object lane has no such block (see plan's Out of scope), so it
+    // keeps the original drop-at-render wording.
     badgeEl.textContent = characters > charCap
-      ? `${characters} characters > pro character-lane cap ${charCap} — refs will drop`
+      ? `${characters} characters > hard cap ${charCap} — save blocked`
       : `${objectLane} objects/locations > object-lane cap ${objCap} — refs will drop`;
-    badgeEl.title = `References ride two lanes: a character lane (4 flash / 5 pro) and an object lane (objects + locations, cap 10 flash / 6 pro — PER-96). The lowest-priority refs in the overflowing lane are dropped at render and logged. Upgrading a page to pro to keep a 5th character also shrinks its object lane from 10 to 6.`;
+    badgeEl.title = characters > charCap
+      ? `Character lane hard cap is ${charCap} (Gemini 3 Pro's character-lane limit). Pages over this cap cannot be saved — remove a character mention in the image prompt (PER-97).`
+      : `References ride two lanes: a character lane (4 flash / 5 pro) and an object lane (objects + locations, cap 10 flash / 6 pro — PER-96). The lowest-priority refs in the overflowing object lane are dropped at render and logged.`;
   } else if (upgraded) {
     badgeEl.className = 'badge-refs warn';
     badgeEl.textContent = '5 characters → pro required';
@@ -1487,11 +1535,11 @@ function buildPageCard(page, i) {
     if (!_mentionActive || !_mentionPop || _mentionPop.style.display === 'none') return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      _mentionHlIdx = Math.min(_mentionHlIdx + 1, _mentionItems.length - 1);
+      _mentionHlIdx = _mentionNextIdx(_mentionHlIdx, 1);
       _mentionHlUpdate();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      _mentionHlIdx = Math.max(_mentionHlIdx - 1, 0);
+      _mentionHlIdx = _mentionNextIdx(_mentionHlIdx, -1);
       _mentionHlUpdate();
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();

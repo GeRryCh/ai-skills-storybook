@@ -101,5 +101,67 @@ class TestCastDerivation(unittest.TestCase):
         self.assertEqual(count, 2, f"Expected 2 cast entries on page 0 after load, got {count}")
 
 
+class TestCastDerivationLaneCapSave(unittest.TestCase):
+    """PER-97: hand-typing a 6th character <id> directly into the textarea
+    (bypassing the @-picker entirely) must still be caught — the picker guard
+    alone would be cosmetic, since the real chokepoint is validate_story() on
+    save (edit_story.py's PUT /api/story → 422).
+
+    Fixture: crowded-cast (page 0 already has 5 characters — the hard cap —
+    plus 1 object; 'fern' is the 6th character, not yet mentioned).
+    """
+
+    FIXTURE = "crowded-cast"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._server = EditorServer(cls.FIXTURE).start()
+        cls._playwright = sync_playwright().start()
+        cls._browser = cls._playwright.chromium.launch(headless=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._browser.close()
+        cls._playwright.stop()
+        cls._server.stop()
+
+    def setUp(self):
+        self._pw = self._browser.new_page()
+        self._pw.goto(self._server.url)
+        self._pw.wait_for_selector("#pg-prompt-0", state="visible", timeout=10_000)
+
+    def tearDown(self):
+        self._pw.close()
+
+    def test_hand_typed_sixth_character_blocks_save(self):
+        ta = self._pw.locator("#pg-prompt-0")
+        ta.click()
+        ta.press("End")
+        ta.type(" <fern>")  # 6th character-kind mention, typed directly — no picker
+        ta.press("Tab")    # blur → change → _syncPageCast + markDirty (arms auto-save)
+
+        # Cast-on-page view reflects all 7 entries immediately (6 characters + lantern),
+        # confirming page.cast already grew past the cap before we ever try to save.
+        section = self._pw.locator("#pg-cast-0")
+        expect(section.locator(".cast-entry")).to_have_count(7)
+
+        # Let the 1500ms auto-save debounce (editor.html markDirty) settle before our
+        # own explicit save click. Otherwise an in-flight background-save response
+        # (routed to the quiet auto-save hint, not the panel) could be the one
+        # `expect_response` below captures instead of the click's own response.
+        self._pw.wait_for_timeout(1700)
+
+        with self._pw.expect_response("**/api/story") as resp_info:
+            self._pw.locator("#btn-save").click()
+        self.assertEqual(
+            resp_info.value.status, 422,
+            "A page over the character-lane hard cap must be refused, not saved",
+        )
+
+        panel = self._pw.locator("#status-panel")
+        expect(panel).to_be_visible()
+        expect(panel).to_contain_text("hard cap is 5")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -141,5 +141,103 @@ class TestMentionPicker(unittest.TestCase):
                          f"Focus moved away from textarea (activeElement.id={focused_id!r})")
 
 
+class TestMentionPickerLaneCap(unittest.TestCase):
+    """PER-97: character-lane-full rows are shown disabled, with a reason line.
+
+    Fixture: crowded-cast (page 0 = 5 characters + 1 object → lane full;
+    page 1 = 4 characters → under cap, nothing blocked).
+    """
+
+    FIXTURE = "crowded-cast"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._server = EditorServer(cls.FIXTURE).start()
+        cls._playwright = sync_playwright().start()
+        cls._browser = cls._playwright.chromium.launch(headless=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._browser.close()
+        cls._playwright.stop()
+        cls._server.stop()
+
+    def setUp(self):
+        self._pw = self._browser.new_page()
+        self._pw.goto(self._server.url)
+        self._pw.wait_for_selector("#pg-prompt-0", state="visible", timeout=10_000)
+
+    def tearDown(self):
+        self._pw.close()
+
+    # ------------------------------------------------------------------
+
+    def _ta(self, page_idx: int = 0):
+        return self._pw.locator(f"#pg-prompt-{page_idx}")
+
+    def _pop(self):
+        return self._pw.locator("#mention-pop")
+
+    def _type_at(self, text: str, page_idx: int = 0):
+        ta = self._ta(page_idx)
+        ta.click()
+        ta.press("End")
+        ta.type(text)
+
+    # ------------------------------------------------------------------
+
+    def test_unmentioned_character_row_is_blocked_at_cap(self):
+        """Page 0 is at the 5-character cap; 'fern' (Fern) is not yet on the
+        page — its row must be disabled and clicking it must not insert."""
+        self._type_at(" @fern")
+        expect(self._pop()).to_be_visible()
+        row = self._pw.locator("#mention-pop .mention-row").first
+        self.assertIn("blocked", row.get_attribute("class") or "")
+        before = self._ta().input_value()
+        row.click(force=True)  # blocked row has no click handler; force past pointer-events
+        after = self._ta().input_value()
+        self.assertNotIn("<fern>", after,
+                          f"Blocked row must not insert — before={before!r} after={after!r}")
+
+    def test_already_mentioned_character_row_stays_selectable(self):
+        """'ash' is already on page 0's cast — re-mentioning it is a no-op for
+        the count (_castIdsFromPrompt dedupes), so its row must stay enabled."""
+        self._type_at(" @ash")
+        expect(self._pop()).to_be_visible()
+        row = self._pw.locator("#mention-pop .mention-row").first
+        self.assertNotIn("blocked", row.get_attribute("class") or "")
+        row.click()
+        expect(self._pop()).not_to_be_visible()  # _selectMentionItem hides it synchronously
+        self.assertIn("<ash>", self._ta().input_value())
+
+    def test_object_row_stays_selectable_at_character_cap(self):
+        """The object lane is independent — 'lantern' must never be blocked
+        by a full character lane."""
+        self._type_at(" @lantern")
+        expect(self._pop()).to_be_visible()
+        row = self._pw.locator("#mention-pop .mention-row").first
+        self.assertNotIn("blocked", row.get_attribute("class") or "")
+        row.click()
+        expect(self._pop()).not_to_be_visible()
+        self.assertIn("<lantern>", self._ta().input_value())
+
+    def test_note_visible_when_lane_full(self):
+        """Unfiltered '@' on the at-cap page shows the character-lane-full reason line."""
+        self._type_at(" @")
+        expect(self._pop()).to_be_visible()
+        note = self._pw.locator("#mention-pop .mention-note")
+        expect(note).to_be_visible()
+        self.assertIn("Character lane full", note.text_content())
+
+    def test_under_cap_page_nothing_blocked(self):
+        """Page 1 has 4 characters (under the 5 cap) — no row is disabled, no note."""
+        self._type_at(" @", page_idx=1)
+        expect(self._pop()).to_be_visible()
+        self.assertEqual(
+            self._pw.locator("#mention-pop .mention-row.blocked").count(), 0
+        )
+        self.assertEqual(self._pw.locator("#mention-pop .mention-note").count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ directory (default: a newly created `{slug(title)}/` folder under the user's cwd
 an explicitly user-named path is used verbatim):
 
 1. **storybook-story** (free, no API) — views any supplied photos (free, in-session), optionally analyzes a **style reference image** in-session to seed `style_guide` (PER-9: free, no API, same Claude-vision seam as cast photos), then writes `story.json`: per-page `text`, `image_prompt`, per-page `cast` list
-   (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors). **Has a hard approval gate** — it must stop
+   (mixed kinds), and a global `cast` array (characters, objects, and locations via `kind`). Validates `story.json` against `story_schema.json` via `scripts/validate_story.py` (free, stdlib-only, reuses the editor's validator — exit 2 on errors, including PER-97's hard-required ≤5-character-per-page cap). **Has a hard approval gate** — it must stop
    and wait for the user to edit/approve before any paid stage runs.
 2. **storybook-stylesheet** (paid, 1 image call per cast entry + 1 book-wide) — generates
    one `style-sheet-{slug}.png` per cast entry from the `cast` array (characters, objects, and
@@ -360,6 +360,17 @@ the sole per-page-cast reference image (PER-84 — no photo fallback for locatio
 book-wide style frame, if set, is still attached on top of it (it's sourced from `story`,
 not `page.cast`).
 
+**Authoring-time hard block (PER-97).** The character-lane overflow described above (a page
+past its lane cap silently loses sheets at render) is now unreachable through the normal
+authoring path: `validate_story()` (`edit_story.py`, shared by the CLI `validate_story.py`
+and the editor's `PUT /api/story`) hard-errors any page with more than 5 character-kind
+`pages[].cast` entries — model-independent, since 5 auto-upgrades cleanly but 6 always drops
+a sheet. The editor's `@`-mention picker also disables further character-kind rows once a
+page's character lane is full. This is authoring-time only — render-time keeps the
+drop-and-log behaviour above unchanged (a rendering stage must not fail a whole book), and a
+`story.json` built or edited outside the editor/validator can still reach `render_book.py`
+over-cap. The object lane is unaffected — it stays a warning (editor badge only).
+
 **Book-wide style frame (PER-82, "Lever B").** `story.json`'s top-level `style_frame`
 (written by `make_style_sheet.py`, Stage 2 — one abstract style board per book: palette
 swatches, a line/texture sample, a lighting study; no characters, no places, no scenery) is
@@ -420,7 +431,10 @@ the browser. It provides a visual form for `story.json` — book settings, cast 
 photo previews, palette swatches, **per-cast-entry style-sheet generate/regenerate button
 with version history and "Use in book" selector** (PER-59), and a page-by-page editor with
 **an `@`-mention cast picker in the image-prompt field** (PER-62: type `@` to insert an
-`<id>` placeholder, filterable by id/name, all kinds with badges, keyboard nav), a
+`<id>` placeholder, filterable by id/name, all kinds with badges, keyboard nav —
+**character-kind rows are shown disabled with a reason line once the page's character
+lane is full (PER-97: hard cap 5); already-mentioned ids and object/location rows stay
+selectable**, since re-mentioning an id already on the page is a no-op for the count), a
 **read-only "Cast on this page" view derived from the prompt's `<id>` mentions** (PER-62:
 the image_prompt is the single source of truth for a page's cast — `_castIdsFromPrompt()`
 collects valid `<id>` tokens in first-appearance order, `_syncPageCast()` reconciles
@@ -428,11 +442,13 @@ collects valid `<id>` tokens in first-appearance order, `_syncPageCast()` reconc
 add/remove/reorder UI), render-status badges, **per-page image preview, generation
 history browser, a regenerate button, a per-page model picker** (retry knob: set a page to `gemini-3-pro-image`
 and hit Regenerate to retry that page on the stronger model without touching the rest), **a
-per-page ref-count warning badge** (PER-58, made lane-aware in PER-83, made both lane caps
+per-page ref-count badge** (PER-58, made lane-aware in PER-83, made both lane caps
 per-model in PER-96: amber "5 characters → pro required" when the intent-based **character**
 count is 5 and the effective model is flash — render auto-upgrades at runtime; red
-"N characters > pro character-lane cap 5 — refs will drop" when character count exceeds 5,
-or "N objects/locations > object-lane cap 10|6 — refs will drop" when the object-lane
+"N characters > hard cap 5 — save blocked" when character count exceeds 5 — the picker guard
+above and `validate_story()`'s hard error (PER-97, see below) mean this state can no longer
+reach a save; "N objects/locations > object-lane cap 10|6 — refs will drop" is still a
+warning-only badge, since the object lane has no save block, when the object-lane
 (objects + locations) count exceeds its cap for the **effective** model — 10 on flash, 6 on
 pro, resolved after the same auto-upgrade check the badge mirrors from `select_refs`), and
 **a per-page text mode picker** (unset = same as book; override lets individual pages render in a
@@ -457,8 +473,10 @@ Round-trip contract: the editor preserves unknown keys at all levels and uses th
 formatter as `make_style_sheet.py` (`json.dump(indent=2, ensure_ascii=False)`). Optional
 fields never get materialised when absent — the no-edit save is semantically stable.
 Validates against `story_schema.json` before writing, with separate error (blocking) vs.
-warning (non-blocking) tiers. Includes a 409 conflict guard: if `story.json` changes on
-disk while the editor is open (e.g. Stage 2 writes `style_sheet` paths), the save
+warning (non-blocking) tiers — a page's character-kind count exceeding the hard cap of 5
+is an error tier check (PER-97), same as unknown `<id>` placeholders; see
+`validate_story()` in `edit_story.py`. Includes a 409 conflict guard: if `story.json`
+changes on disk while the editor is open (e.g. Stage 2 writes `style_sheet` paths), the save
 returns an error and a Reload button rather than silently clobbering the new content.
 
 ### Style-sheet endpoints (PER-59)
