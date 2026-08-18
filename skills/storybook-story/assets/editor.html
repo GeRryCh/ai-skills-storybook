@@ -171,20 +171,22 @@ header .dirty-dot.visible{display:inline}
   text-decoration:none;cursor:pointer;user-select:none;transition:background .15s,color .15s}
 .side-link:hover{background:var(--surface-hover);color:var(--accent)}
 .side-link.active{background:var(--accent-soft);color:var(--accent-soft-text);font-weight:700}
-.side-count{margin-left:auto;background:var(--m3-surface-variant);color:var(--m3-on-surface-variant);
+.side-count{margin-left:auto;background:var(--neutral-bg);color:var(--neutral-text);
   font-size:11px;font-weight:700;padding:1px 8px;border-radius:var(--radius-full)}
 .side-link.active .side-count{background:var(--surface);color:var(--accent-soft-text)}
 .side-pages-label{margin-top:6px;cursor:default}
-.side-pages-label:hover{background:none;color:var(--text-muted)}
+/* :not(.active) — the plain-hover reset must not out-specify the scroll-spy's
+   active state, which it otherwise ties with and wins on source order. */
+.side-pages-label:not(.active):hover{background:none;color:var(--text-muted)}
 /* Nested page list — Stitch renders this as an indented rail under "Pages". */
 .side-pages-list{display:flex;flex-direction:column;gap:2px;margin:8px 0 0 24px;padding-left:12px;
-  border-left:2px solid var(--m3-surface-variant);max-height:38vh;overflow-y:auto}
+  border-left:2px solid var(--border-soft);max-height:38vh;overflow-y:auto}
 .side-page-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--radius-md);
   font-family:var(--font-label);font-size:12px;color:var(--text-muted);text-decoration:none;
   cursor:pointer;transition:background .15s,color .15s}
 .side-page-row:hover{background:var(--surface-hover);color:var(--accent)}
 .side-page-row .side-page-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.side-dot{width:8px;height:8px;border-radius:var(--radius-full);background:var(--m3-outline-variant);
+.side-dot{width:8px;height:8px;border-radius:var(--radius-full);background:var(--border);
   flex-shrink:0}
 .side-dot.rendered{background:var(--success-icon)}
 .side-footer{display:flex;flex-direction:column;gap:8px;padding-top:16px;border-top:1px solid var(--border)}
@@ -202,9 +204,12 @@ header .dirty-dot.visible{display:inline}
   cursor:pointer;user-select:none;display:flex;align-items:center;gap:12px}
 .panel-icon{color:var(--accent);display:flex}
 .panel-hint{font-family:var(--font-body);font-weight:400;color:var(--text-faint);font-size:12px}
-.panel-head .toggle{margin-left:auto;color:var(--text-muted);display:flex;
-  transition:transform .2s}
-.panel-head .toggle.collapsed{transform:rotate(-90deg)}
+/* One chevron rotated by CSS carries the open/closed cue for both the section
+   panels and the cast/page cards — the two used to swap ▼/▶ glyphs instead. */
+.panel-head .toggle,.card-header .toggle{margin-left:auto;color:var(--text-muted);
+  display:flex;flex-shrink:0;transition:transform .2s}
+.card-header .toggle{margin-left:0}
+.panel-head .toggle.collapsed,.card-header .toggle.collapsed{transform:rotate(-90deg)}
 .section-body{padding:24px}
 .section-body.collapsed{display:none}
 .section-bar{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;
@@ -228,7 +233,7 @@ header .dirty-dot.visible{display:inline}
   color:var(--text-muted);margin-bottom:6px}
 .field input[type=text],.field select,.field textarea{width:100%;border:1px solid var(--border);
   border-radius:var(--radius-md);padding:10px 12px;font-size:14px;font-family:var(--font-body);
-  background:var(--m3-surface);color:var(--text);transition:border-color .15s,box-shadow .15s}
+  background:var(--surface-sunken);color:var(--text);transition:border-color .15s,box-shadow .15s}
 .field input[type=text]:focus,.field select:focus,.field textarea:focus{
   outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
 .field textarea{resize:vertical;min-height:72px;line-height:1.5}
@@ -252,7 +257,7 @@ button{cursor:pointer;border:none;border-radius:var(--radius-md);padding:8px 16p
   transition:background .15s,box-shadow .15s,transform .1s,color .15s}
 button:active:not(:disabled){transform:scale(.96)}
 .btn-primary{background:var(--accent);color:var(--accent-contrast)}
-.btn-primary:hover:not(:disabled){background:var(--accent-strong);color:var(--m3-on-primary-container)}
+.btn-primary:hover:not(:disabled){background:var(--accent-strong);color:var(--accent-contrast)}
 .btn-primary:disabled{background:var(--neutral-bg);color:var(--text-faint);cursor:not-allowed}
 .btn-sm{background:var(--neutral-bg);color:var(--text-muted);padding:4px 12px;font-size:12px;
   border-radius:var(--radius-md)}
@@ -291,11 +296,11 @@ button:active:not(:disabled){transform:scale(.96)}
 .card-header:hover{background:var(--surface-hover)}
 .card-header .card-avatar{width:40px;height:40px;border-radius:var(--radius-full);object-fit:cover;
   border:2px solid var(--surface);box-shadow:var(--shadow-card);flex-shrink:0;
-  background:var(--m3-surface-dim)}
+  background:var(--surface-hover)}
 .card-header .card-avatar-ph{width:40px;height:40px;border-radius:var(--radius-full);flex-shrink:0;
   border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;
-  color:var(--text-faint);background:var(--m3-surface)}
-.card-header > span:first-of-type{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  color:var(--text-faint);background:var(--surface-sunken)}
+.card-header .card-title{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .card-header .card-id{font-family:var(--font-mono);font-size:11px;font-weight:400;color:var(--text-faint);
   flex-shrink:0}
 .card-header .badge-dirty{color:var(--accent);font-size:11px;display:none}
@@ -334,7 +339,7 @@ button:active:not(:disabled){transform:scale(.96)}
 .hero-badge{background:var(--accent);color:var(--accent-contrast);font-size:9px;padding:1px 6px;
   border-radius:var(--radius-full);font-weight:700;letter-spacing:.04em}
 .kind-badge{display:inline-block;font-family:var(--font-mono);font-size:9px;font-weight:600;
-  padding:1px 5px;border-radius:var(--radius-sm);background:var(--m3-surface-dim);color:var(--text);
+  padding:1px 5px;border-radius:var(--radius-sm);background:var(--neutral-bg);color:var(--neutral-text);
   border:1px solid var(--border);vertical-align:middle;letter-spacing:.5px}
 
 /* ── page cast chips (derived from the prompt's <id> mentions) ─────────── */
@@ -372,7 +377,7 @@ button:active:not(:disabled){transform:scale(.96)}
 .sheet-ver-wrap{margin-top:6px}
 .sheet-ver-img{max-width:100%;width:220px;aspect-ratio:4/3;object-fit:cover;
   border-radius:var(--radius-md);border:1px solid var(--border);display:block;
-  background:var(--m3-surface-dim)}
+  background:var(--surface-hover)}
 .style-frame-img{max-height:120px;display:block}
 .warn-inline{color:var(--warn-text);font-size:12px;margin-top:4px}
 .hint-block{color:var(--text-faint);font-size:13px}
@@ -399,11 +404,11 @@ button:active:not(:disabled){transform:scale(.96)}
 .preview-img-area{margin-bottom:4px}
 .preview-pair{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
 .preview-img-wrap{position:relative;display:inline-block;max-width:100%}
-.textpage-badge{background:var(--m3-inverse-surface);color:var(--m3-inverse-on-surface);font-size:10px;
+.textpage-badge{background:var(--text);color:var(--bg);font-size:10px;
   padding:2px 8px;border-radius:var(--radius-sm);font-weight:600;pointer-events:none;white-space:nowrap;
   font-family:var(--font-mono)}
 .preview-img{max-width:100%;max-height:300px;border-radius:var(--radius-lg);
-  border:1px solid var(--border);display:block;background:var(--m3-surface-dim);
+  border:1px solid var(--border);display:block;background:var(--surface-hover);
   box-shadow:var(--shadow-card)}
 .preview-overlay{position:absolute;top:8px;right:8px}
 .inuse-badge{background:var(--success-icon);color:#fff;font-size:10px;padding:2px 8px;
@@ -438,7 +443,7 @@ button:active:not(:disabled){transform:scale(.96)}
 .btn-recomp{background:var(--accent);color:var(--accent-contrast);font-size:12px;padding:7px 14px;
   border-radius:var(--radius-lg);border:none;font-family:var(--font-label);font-weight:700;
   box-shadow:var(--shadow-card);display:inline-flex;align-items:center;gap:6px}
-.btn-recomp:hover:not(:disabled){background:var(--accent-strong);color:var(--m3-on-primary-container);
+.btn-recomp:hover:not(:disabled){background:var(--accent-strong);color:var(--accent-contrast);
   cursor:pointer}
 .btn-recomp:disabled{background:var(--neutral-bg);color:var(--text-faint);cursor:not-allowed;box-shadow:none}
 .regen-status-inline{font-size:11px;color:var(--text-faint)}
@@ -1114,7 +1119,9 @@ function hexFromPaletteStr(s) {
 }
 function updateSwatch(swatchEl, inputEl) {
   const hex = hexFromPaletteStr(inputEl.value);
-  swatchEl.style.background = hex || '#e2e8f0';
+  // No hex in the entry → fall back to the themed empty-swatch fill rather than
+  // a hardcoded light grey, which read as a white disc in dark mode.
+  swatchEl.style.background = hex || 'var(--surface-hover)';
   swatchEl.title = hex || 'no hex colour detected';
 }
 
@@ -1294,7 +1301,7 @@ function buildCharCard(char, i) {
   card.innerHTML = `
     <div class="card-header" onclick="toggleCard(this)">
       ${avatar}
-      <span id="char-title-${i}">${esc(char.name || '(no name)')}${char.kind && char.kind !== 'character' ? ' <span class="kind-badge">' + char.kind.toUpperCase().slice(0,3) + '</span>' : ''}</span>
+      <span class="card-title" id="char-title-${i}">${esc(char.name || '(no name)')}${char.kind && char.kind !== 'character' ? ' <span class="kind-badge">' + char.kind.toUpperCase().slice(0,3) + '</span>' : ''}</span>
       <span class="card-id">${esc(char.id || '—')}</span>
       <span class="spacer"></span>
       <button class="btn-sm btn-danger" onclick="deleteChar(event,${i})">${icon('delete', 'mi-sm')}</button>
@@ -1817,7 +1824,7 @@ function buildPageCard(page, i) {
   const badgeId = `badge-${i}`;
   card.innerHTML = `
     <div class="card-header" onclick="toggleCard(this)">
-      <span>Page ${page.page_num}${pageBlurb(page) ? ': ' + esc(pageBlurb(page)) : ''}</span>
+      <span class="card-title">Page ${page.page_num}${pageBlurb(page) ? ': ' + esc(pageBlurb(page)) : ''}</span>
       ${dirtyMarkup}
       <span class="spacer"></span>
       <span class="badge-render none" id="${badgeId}" data-page-badge="${i}"></span>
