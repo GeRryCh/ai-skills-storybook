@@ -268,6 +268,17 @@ STYLE_GUIDE_EXAMPLE = """  "style_guide": {
   }"""
 
 
+DEFAULT_SHEET_STYLE = (
+    "Medium: soft painterly watercolor portrait study with fine pencil underdrawing. "
+    "Palette: the subject's own natural colours — skin, hair, and eye colour exactly as "
+    "described and as seen in any reference photographs; never recoloured or tinted toward "
+    "a decorative palette. "
+    "Line: light graphite underdrawing, soft watercolor edges, no heavy outlines. "
+    "Lighting: even, neutral, diffuse studio light — no coloured cast, no dramatic shadow. "
+    "Mood: clear, accurate, reference-plate neutrality"
+)
+
+
 def build_style_block(story: dict) -> str:
     """Verbatim style descriptor for this book, injected byte-identically into every call.
 
@@ -353,7 +364,35 @@ def require_cast_ids(story: dict) -> None:
         sys.exit(2)
 
 
-def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
+def resolve_sheet_style(story: dict, entry: dict, cli_override: str | None = None) -> str:
+    """Rendering style for ONE cast entry's reference sheet.
+
+    A reference sheet is an *identity* artifact, not a style artifact: the book's look is
+    applied downstream at page-render time by the style block plus 'style_frame'. Rendering
+    the sheet itself in a hard/graphic book style measurably costs identity — a flat sheet
+    lost the character's face structure entirely, and palette-dominant rendering recolours
+    identity-carrying attributes (hair, skin) to the book palette before they ever reach a
+    page.
+
+    Resolution order:
+      1. cli_override / story['sheet_style'], when set — applies to EVERY kind.
+      2. unset: characters get DEFAULT_SHEET_STYLE (painterly watercolor, identity-safe);
+         objects and locations keep the book's own style block (unchanged behaviour — their
+         identity is shape, which survives styling).
+
+    The literal value "book" selects the book's style_guide block, restoring the pre-change
+    behaviour for every kind.
+    """
+    chosen = (cli_override or story.get("sheet_style") or "").strip()
+    if chosen:
+        return build_style_block(story) if chosen.lower() == "book" else chosen
+    kind = (entry.get("kind") or "character").strip() or "character"
+    return DEFAULT_SHEET_STYLE if kind == "character" else build_style_block(story)
+
+
+def build_sheet_prompt(
+    story: dict, entry: dict, has_refs: bool = False, sheet_style: str | None = None
+) -> str:
     """Prompt for one cast entry's individual reference sheet, branched on kind.
 
     has_refs: True when this entry has reference photos that will be attached to
@@ -361,8 +400,11 @@ def build_sheet_prompt(story: dict, entry: dict, has_refs: bool = False) -> str:
     reference photo(s) are provided...") to an assertive instruction naming the
     concrete subject — the conditional phrasing let the model treat the photos
     as loose style hints and draw a generic person from the appearance prose.
+
+    sheet_style: already-resolved rendering style for this sheet (see
+    resolve_sheet_style). Defaults to that resolver when not supplied.
     """
-    style = build_style_block(story)
+    style = sheet_style if sheet_style is not None else resolve_sheet_style(story, entry)
     kind = (entry.get("kind") or "character").strip() or "character"
     name = (entry.get("name") or "").strip()
     appearance = (entry.get("appearance") or "").strip()
@@ -940,6 +982,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--sheet-style",
+        metavar="STYLE",
+        default=None,
+        dest="sheet_style",
+        help=(
+            "Rendering style for the reference sheets themselves, overriding story.json's "
+            "'sheet_style' field. Applies to every cast kind when set. Pass 'book' to render "
+            "sheets in the book's own style_guide. Unset: character sheets use the built-in "
+            "identity-safe watercolor reference style, objects and locations use the book style. "
+            "Sheets are identity references — the book's look is applied at page-render time."
+        ),
+    )
+    parser.add_argument(
         "--only",
         metavar="ID",
         default=None,
@@ -1025,7 +1080,12 @@ def main() -> None:
             continue
 
         input_images = collect_ref_images_for_entry(entry, story_path.parent)
-        prompt = build_sheet_prompt(story, entry, has_refs=bool(input_images))
+        prompt = build_sheet_prompt(
+            story,
+            entry,
+            has_refs=bool(input_images),
+            sheet_style=resolve_sheet_style(story, entry, args.sheet_style),
+        )
         print(f"\nGenerating sheet for {name!r} (id={cid!r}, kind={kind}) -> {target}")
         print(f"Prompt: {prompt}")
 

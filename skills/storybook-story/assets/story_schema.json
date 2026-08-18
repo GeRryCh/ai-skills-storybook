@@ -24,6 +24,11 @@
         "mood": { "type": "string", "description": "Overall mood and rendering vocabulary, e.g. 'cozy and gentle' or 'graphic, high-contrast, irreverent'." }
       }
     },
+    "sheet_style": {
+      "type": "string",
+      "description": "Optional rendering style for the Stage-2 reference sheets themselves (make_style_sheet.py only — never used at page render). A reference sheet is an IDENTITY artifact: the book's look is applied downstream at page-render time by the style block plus 'style_frame', so rendering the sheet in a hard/graphic book style measurably costs identity — a flattened sheet loses face structure, and palette-dominant rendering recolours identity-carrying attributes (hair, skin) toward the book palette before they ever reach a page. When set, this value applies to EVERY cast kind. The literal value 'book' selects the book's own style_guide block (the pre-change behaviour). When omitted, character sheets use a built-in identity-safe watercolor reference style while objects and locations use the book style (their identity is shape, which survives styling). The --sheet-style CLI flag overrides this field.",
+      "x-interview": { "priority": "advanced", "ask": "Rendering style for the character reference sheets — default identity-safe watercolor, or 'book' to draw them in the book's own style." }
+    },
     "style_frame": { "type": "string", "description": "Path to the book-wide 'style frame' PNG (PER-82, Lever B) — filled in by make_style_sheet.py, not user-authored. An abstract style board (palette swatches, a line/texture sample, a lighting study; no characters, no places, no scenery) sent as the lowest-priority reference on every Stage 3 page render call to anchor the look of everything that isn't cast. Omit for no style frame — Stage 2 always attempts to generate one once per book." },
     "cast": {
       "type": "array",

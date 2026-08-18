@@ -75,6 +75,32 @@ uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json
 visual editor's "↻ Regenerate sheet" button invokes (it deletes the PNG first, then calls
 `--only ID` via the server).
 
+**Sheet rendering style (identity vs. book style).** A reference sheet is an **identity
+artifact**, not a style artifact — the book's look is applied downstream at page-render
+time by the style block plus `style-frame.png`, which is strong enough on its own.
+Rendering the sheet itself in a hard/graphic book style measurably costs identity:
+a flattened character sheet lost face structure entirely, and palette-dominant rendering
+recolours identity-carrying attributes (hair, skin) toward the book palette before they
+ever reach a page.
+
+So by default **character** sheets render in a built-in identity-safe watercolor reference
+style (natural hair/skin colour, neutral light), while **object and location** sheets keep
+the book's own style — their identity is shape, which survives styling. The style frame
+always uses the book style.
+
+Override with the top-level `sheet_style` field in `story.json`, or `--sheet-style STYLE`
+for one run (the flag wins). When set, it applies to **every** cast kind. The literal value
+`book` renders sheets in the book's own `style_guide`:
+
+```bash
+# draw the sheets in the book's own style (pre-change behaviour)
+uv run {skillDir}/scripts/make_style_sheet.py --story {out_dir}/story.json --sheet-style book
+```
+
+Never encode a sheet's rendering style by writing style instructions into
+`cast[].appearance` — that field describes *who the character is*, and style prose there
+competes with the photo-likeness instructions in the same prompt.
+
 **Other flags:** `--out-dir DIR` — output directory (default: same dir as `--story`).
 `--aspect-ratio RATIO` — override `story.json`'s `aspect_ratio` field for this run (choices:
 `1:1` `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `9:16` `16:9` `21:9`; default: unset — model
