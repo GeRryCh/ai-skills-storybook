@@ -237,7 +237,7 @@ def overlay(
             match so the text stays legible.
         font_name: optional explicit family name (e.g. 'Arial'); resolved via bundled
             asset -> system font -> bundled role fallback. None = use the role font.
-        align: 'left' (default) or 'center' — horizontal alignment of each text line.
+        align: 'left' (default), 'center', or 'right' — horizontal alignment of each text line.
 
     Returns:
         Path to written file.
@@ -317,6 +317,9 @@ def overlay(
             if align == "center":
                 line_w = text_draw.textlength(line, font=pil_font)
                 x = int((w - line_w) / 2)
+            elif align == "right":
+                line_w = text_draw.textlength(line, font=pil_font)
+                x = int(w - h_pad - line_w)
             else:
                 x = h_pad
             text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
@@ -364,7 +367,7 @@ def text_page(
         box_alpha: Panel opacity 0-255.
         feather: Edge blur radius in px.
         font_name: Explicit font family; resolved via bundled asset -> system font -> fallback.
-        align: 'left' or 'center'.
+        align: 'left', 'center', or 'right'.
         canvas_from: When set, open this image to get target (W, H); scale-crop image_path to fit.
 
     Returns:
@@ -469,6 +472,9 @@ def text_page(
             if align == "center":
                 line_w = text_draw.textlength(line, font=pil_font)
                 x = int((w - line_w) / 2)
+            elif align == "right":
+                line_w = text_draw.textlength(line, font=pil_font)
+                x = int(w - h_pad - line_w)
             else:
                 x = h_pad
             text_draw.text((x, text_y), line, font=pil_font, fill=text_color)
@@ -493,7 +499,7 @@ def main() -> None:
                         help="Explicit font family (e.g. 'Arial'); resolved via bundled asset "
                              "-> system font -> bundled role fallback")
     parser.add_argument("--color", choices=["dark", "light"], default="dark")
-    parser.add_argument("--align", choices=["left", "center"], default="left",
+    parser.add_argument("--align", choices=["left", "center", "right"], default="left",
                         help="Horizontal text alignment (default left)")
     parser.add_argument("--box-alpha", type=int, default=BOX_ALPHA,
                         help=f"Panel opacity 0-255 (default {BOX_ALPHA}; lower = more transparent)")

@@ -170,8 +170,8 @@
           },
           "text_align": {
             "type": "string",
-            "enum": ["left", "center"],
-            "description": "Horizontal alignment of the overlay text. Default: left. Use 'center' for cover/title pages.",
+            "enum": ["left", "center", "right"],
+            "description": "Horizontal alignment of the overlay text. Default: left. Use 'center' for cover/title pages. 'right' is a deliberate, rare choice (e.g. an intentional design flourish) — leave body pages left-aligned.",
             "default": "left"
           },
           "font": {

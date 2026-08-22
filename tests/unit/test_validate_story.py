@@ -325,5 +325,28 @@ class TestSceneTextAndPersistentDetails(unittest.TestCase):
         )
 
 
+class TestTextAlignRight(unittest.TestCase):
+    """PER-100: 'right' is a legal pages[].text_align value alongside left/center."""
+
+    def test_right_align_no_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["text_align"] = "right"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertEqual(errors, [])
+
+    def test_bogus_align_is_error_listing_three_values(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["text_align"] = "justify"
+        errors, _ = edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+        self.assertTrue(
+            any(
+                "text_align" in e and "justify" in e
+                and all(v in e for v in ("left", "center", "right"))
+                for e in errors
+            ),
+            f"Expected text_align enum error naming all three values, got: {errors}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

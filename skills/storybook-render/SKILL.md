@@ -216,7 +216,7 @@ uv run {skillDir}/scripts/overlay_text.py \
 **Band mode (overlay/native):** text sits on a soft, feathered white panel anchored to the top or bottom. Tune with:
 - `--box-alpha N` — panel opacity 0–255 (default `205`)
 - `--feather N` — edge blur radius in px (default `14`; `0` = hard edge)
-- `--align left|center` — horizontal text alignment (default `left`)
+- `--align left|center|right` — horizontal text alignment (default `left`)
 
 **Text-page mode (`--text-page`, long mode):** `--image` is a purpose-made background (the render stage generates it with a reserved central text section); it is used as-is — no blur, no wash. Story text sits on a vertically centered, feathered panel. Tune with:
 - `--canvas-from PATH` — scale-to-cover + center-crop `--image` to the dims of this art image, so the text page matches its art page
@@ -225,7 +225,7 @@ uv run {skillDir}/scripts/overlay_text.py \
 
 **Sizing (text-page mode):** font shrinks from 96px toward a 22px floor; panel capped at ~80% of page height — large enough for ~80–200 words per logical page.
 
-Per-page `story.json` fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light, default dark — affects all text modes: dark = near-black ink on a light panel in overlay/long, warm dark ink baked in for native; light = near-white ink on a dark panel in overlay/long, cream-white ink with a forced dark backdrop area for native; default dark is unchanged from prior behaviour), `text_align` (left/center), `font` (reader/display), `model` (gemini-3.1-flash-image/gemini-3-pro-image — retry knob; unset inherits book-level `model` or flash default), `text_mode` (overlay/native/long — per-page override; unset inherits book-level `text_mode` or native default; lets individual pages differ from the book default), `text_background_prompt` (long mode only — per-page dedicated text-page background overriding the shared one, +1 paid call). Top-level `text_background_prompt` customizes the shared book-wide text-page background (relevant when any page's effective mode is long).
+Per-page `story.json` fields: `text_placement` (top/bottom/floating, default floating), `text_color_hint` (dark/light, default dark — affects all text modes: dark = near-black ink on a light panel in overlay/long, warm dark ink baked in for native; light = near-white ink on a dark panel in overlay/long, cream-white ink with a forced dark backdrop area for native; default dark is unchanged from prior behaviour), `text_align` (left/center/right), `font` (reader/display), `model` (gemini-3.1-flash-image/gemini-3-pro-image — retry knob; unset inherits book-level `model` or flash default), `text_mode` (overlay/native/long — per-page override; unset inherits book-level `text_mode` or native default; lets individual pages differ from the book default), `text_background_prompt` (long mode only — per-page dedicated text-page background overriding the shared one, +1 paid call). Top-level `text_background_prompt` customizes the shared book-wide text-page background (relevant when any page's effective mode is long).
 
 ---
 
