@@ -228,6 +228,8 @@ def _known_keys(schema: dict) -> dict[str, set]:
         "style_guide": set(top["style_guide"]["properties"].keys()),
         "cast_entry": set(top["cast"]["items"]["properties"].keys()),
         "fonts": set(top["fonts"]["properties"].keys()),
+        "layout": set(top["layout"]["properties"].keys()),
+        "layout_padding": set(top["layout"]["properties"]["padding"]["properties"].keys()),
         "page": set(top["pages"]["items"]["properties"].keys()),
     }
 
@@ -459,6 +461,35 @@ def validate_story(
             for role, fam in fonts.items():
                 if role in known["fonts"] and not isinstance(fam, str):
                     errors.append(f"'fonts.{role}' must be a string")
+    # --- layout (PER-104's one box model) -------------------------------------
+    layout = story.get("layout")
+    if layout is not None:
+        if not isinstance(layout, dict):
+            errors.append("'layout' must be an object")
+        else:
+            warn_unknown(layout, known["layout"], "layout")
+            for key in ("reference_size", "font_size", "min_font_size", "radius", "feather"):
+                if key not in layout:
+                    continue
+                v = layout[key]
+                if not isinstance(v, int) or isinstance(v, bool) or v < (1 if key in ("reference_size", "font_size", "min_font_size") else 0):
+                    errors.append(f"'layout.{key}' must be a non-negative integer" if key in ("radius", "feather") else f"'layout.{key}' must be a positive integer")
+            if "max_panel_fraction" in layout:
+                v = layout["max_panel_fraction"]
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 < v <= 1):
+                    errors.append("'layout.max_panel_fraction' must be a number in (0, 1]")
+            padding = layout.get("padding")
+            if padding is not None:
+                if not isinstance(padding, dict):
+                    errors.append("'layout.padding' must be an object")
+                else:
+                    warn_unknown(padding, known["layout_padding"], "layout.padding")
+                    for key in ("h", "v"):
+                        if key in padding:
+                            v = padding[key]
+                            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                                errors.append(f"'layout.padding.{key}' must be a non-negative integer")
+
     sf = story.get("saved_formats")
     if sf is not None:
         if not isinstance(sf, list) or not all(
@@ -590,6 +621,10 @@ def validate_story(
                             f"{where}.{key} must be one of {enums[key]} "
                             f"(got {page[key]!r})"
                         )
+                if "font_size" in page:
+                    fs = page["font_size"]
+                    if not isinstance(fs, int) or isinstance(fs, bool) or fs < 1:
+                        errors.append(f"{where}.font_size must be a positive integer")
                 # Warn when text_background_prompt is set but effective mode is not long.
                 eff_mode = page.get("text_mode") or story.get("text_mode") or "native"
                 if "text_background_prompt" in page and isinstance(page["text_background_prompt"], str) and eff_mode != "long":
@@ -1050,7 +1085,8 @@ def _build_versions_payload(
         )
 
     with _regen_lock:
-        regen = dict(_regen_jobs.get(num, {"status": None, "error": None}))
+        regen = dict(_regen_jobs.get(num, {"status": None, "error": None, "warnings": []}))
+    regen.setdefault("warnings", [])  # older job records predate PER-104
 
     return {"versions": versions, "regen": regen}
 
@@ -1313,7 +1349,11 @@ def _run_regen(
         if result.returncode == 0:
             _adopt_canonical(pages_dir, num)
             with _regen_lock:
-                _regen_jobs[num] = {"status": "done", "error": None}
+                _regen_jobs[num] = {
+                    "status": "done",
+                    "error": None,
+                    "warnings": _extract_overflow_warnings(result.stdout or ""),
+                }
         else:
             _restore_from_history(pages_dir, num)
             # Prefer stderr (Python tracebacks); fall back to stdout (per-page render
@@ -1325,6 +1365,7 @@ def _run_regen(
                 _regen_jobs[num] = {
                     "status": "error",
                     "error": error_msg,
+                    "warnings": [],
                 }
     except subprocess.TimeoutExpired:
         _restore_from_history(pages_dir, num)
@@ -1332,11 +1373,44 @@ def _run_regen(
             _regen_jobs[num] = {
                 "status": "error",
                 "error": "render timed out after 10 minutes",
+                "warnings": [],
             }
     except Exception as exc:  # noqa: BLE001
         _restore_from_history(pages_dir, num)
         with _regen_lock:
-            _regen_jobs[num] = {"status": "error", "error": str(exc)}
+            _regen_jobs[num] = {"status": "error", "error": str(exc), "warnings": []}
+
+
+def _extract_overflow_warnings(stdout: str) -> list[str]:
+    """Pull PER-104's TEXT-OVERFLOW lines out of a render_book.py run's stdout.
+
+    render_book.py prints each page's log (including any lines overlay_text.py
+    wrote to its own stderr, forwarded verbatim by run_overlay/run_text_page)
+    via one plain print() to its own stdout — so a warn-and-composite page,
+    which exits 0, still surfaces here rather than being discarded.
+    """
+    return [
+        line.strip() for line in stdout.splitlines() if line.strip().startswith("TEXT-OVERFLOW:")
+    ]
+
+
+_OVERFLOW_PAGE_NUM_RE = re.compile(r"page-0*(\d+)")
+
+
+def _overflow_warnings_by_page(stdout: str) -> dict[int, list[str]]:
+    """Group TEXT-OVERFLOW lines by page number, for a run that rendered several
+    pages in one subprocess (regenerate-all — no --only, so _extract_overflow_
+    warnings alone can't say which page each line belongs to). Each warning
+    names its output file (e.g. 'page-04.png', 'page-04-long-text.png'); the
+    leading page-NN gives the number.
+    """
+    by_page: dict[int, list[str]] = {}
+    for line in _extract_overflow_warnings(stdout):
+        m = _OVERFLOW_PAGE_NUM_RE.search(line)
+        if not m:
+            continue
+        by_page.setdefault(int(m.group(1)), []).append(line)
+    return by_page
 
 
 def _run_consolidate(story_path: Path, formats: list[str], env: dict) -> None:
@@ -1433,6 +1507,10 @@ def _run_regen_all(
     except Exception as exc:  # noqa: BLE001
         err_tail = str(exc)
 
+    # PER-104: one combined stdout for the whole run, so warnings must be
+    # split back out per page number before the sweep below attaches them.
+    overflow_by_page = _overflow_warnings_by_page(result.stdout if result is not None else "")
+
     # Uniform outcome sweep: determine per-page success from file existence.
     for num in nums:
         candidates = _page_preview_candidates(num)
@@ -1440,12 +1518,16 @@ def _run_regen_all(
         if rendered:
             _adopt_canonical(pages_dir, num)
             with _regen_lock:
-                _regen_jobs[num] = {"status": "done", "error": None}
+                _regen_jobs[num] = {
+                    "status": "done",
+                    "error": None,
+                    "warnings": overflow_by_page.get(num, []),
+                }
         else:
             _restore_from_history(pages_dir, num)
             page_err = err_tail or "page failed to render"
             with _regen_lock:
-                _regen_jobs[num] = {"status": "error", "error": page_err}
+                _regen_jobs[num] = {"status": "error", "error": page_err, "warnings": []}
 
     # Aggregate job status.
     rc = result.returncode if result is not None else -1

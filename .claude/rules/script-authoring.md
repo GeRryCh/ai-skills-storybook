@@ -46,6 +46,16 @@ guards all three against drift — import-based for `edit_story.py` vs `render_b
 regex-over-source for `editor.html` (it's a static asset the browser loads, not importable —
 the one constant this repo's tests read out of source text rather than importing).
 
+**PER-104 layout defaults** are duplicated the same way, at smaller scale: `overlay_text.py`'s
+`REFERENCE_SIZE` / `DEFAULT_FONT_SIZE` / `DEFAULT_MIN_FONT_SIZE` / `DEFAULT_PAD_H` /
+`DEFAULT_PAD_V` / `DEFAULT_RADIUS` / `DEFAULT_FEATHER` / `DEFAULT_MAX_PANEL_FRACTION` are the
+source of truth (the values used when a `layout` key is absent), mirrored as `"default"` values
+on `story_schema.json`'s `layout` object — `editor.html`'s layout fieldset reads its input
+placeholders from `/api/schema`, never hard-coding a number, so this is the only place the two
+can drift. `tests/unit/test_text_layout.py`'s `TestLayoutDefaultsInSync` guards it —
+import-based both sides (`overlay_text` and `edit_story.load_schema()`), no editor.html regex
+needed since the HTML carries no numeric defaults of its own.
+
 ## No migration shim for legacy keys
 
 Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`, `locations`, `pages[].characters`, `pages[].location`) with `exit 2` and a migration message. No shim — clean break.

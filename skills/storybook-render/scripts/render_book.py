@@ -426,6 +426,52 @@ def resolve_scene_text(
     return cli or page_val or story.get("scene_text") or "suppress"
 
 
+# Maps story.json's top-level `layout` object (PER-104) to overlay_text.py CLI
+# flags. Only the key name and flag name are duplicated here — not the numeric
+# defaults, which live solely in overlay_text.py's LayoutSettings and are
+# omitted from the command line whenever story.json doesn't set them. `padding`
+# is nested ({"h": .., "v": ..}) and handled separately from this table.
+_LAYOUT_FLAGS = (
+    ("reference_size", "--reference-size"),
+    ("min_font_size", "--min-font-size"),
+    ("radius", "--radius"),
+    ("feather", "--feather"),
+    ("max_panel_fraction", "--max-panel-fraction"),
+)
+
+
+def resolve_layout_flags(
+    story: dict,
+    page: dict | None = None,
+    cli_font_size: int | None = None,
+) -> list[str]:
+    """Build the overlay_text.py CLI flags for one page's text layout (PER-104).
+
+    font_size precedence: CLI --font-size > page 'font_size' > story.json
+    top-level 'layout.font_size'. Every other layout[] key is book-wide only
+    (no per-page override, no CLI override) — reference_size, min_font_size,
+    padding, radius, feather, max_panel_fraction. Keys absent from story.json's
+    'layout' are simply not passed, so overlay_text.py's own defaults apply —
+    this function never carries a numeric default of its own.
+    """
+    layout = story.get("layout") or {}
+    flags: list[str] = []
+    for key, flag in _LAYOUT_FLAGS:
+        if key in layout:
+            flags += [flag, str(layout[key])]
+    padding = layout.get("padding") or {}
+    if "h" in padding:
+        flags += ["--pad-h", str(padding["h"])]
+    if "v" in padding:
+        flags += ["--pad-v", str(padding["v"])]
+
+    page_font_size = page.get("font_size") if page else None
+    font_size = cli_font_size or page_font_size or layout.get("font_size")
+    if font_size is not None:
+        flags += ["--font-size", str(font_size)]
+    return flags
+
+
 def cast_index(story: dict) -> dict[str, dict]:
     """id -> cast entry lookup, built once per call site.
 
@@ -1852,7 +1898,7 @@ async def run_nano_banana(
 
 async def run_overlay(
     raw_path: Path, text: str, placement: str, color: str, font: str,
-    font_name: str | None, align: str, final_path: Path, log: list[str]
+    font_name: str | None, align: str, layout_flags: list[str], final_path: Path, log: list[str]
 ) -> bool:
     cmd = [
         "uv", "run", str(OVERLAY_SCRIPT),
@@ -1863,6 +1909,7 @@ async def run_overlay(
         "--color", color,
         "--font", font,
         "--align", align,
+        *layout_flags,
     ]
     if font_name:
         cmd += ["--font-name", font_name]
@@ -1872,11 +1919,13 @@ async def run_overlay(
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        if stdout:
-            log.append(stdout.decode().rstrip())
-        if stderr:
-            log.append(stderr.decode().rstrip())
+    # stderr is always surfaced, not only on failure: a warn-and-composite page
+    # (PER-104's TEXT-OVERFLOW guard) exits 0 and its warning must still reach
+    # the page log rather than being discarded.
+    if stderr:
+        log.append(stderr.decode().rstrip())
+    if proc.returncode != 0 and stdout:
+        log.append(stdout.decode().rstrip())
     return proc.returncode == 0
 
 
@@ -1887,6 +1936,7 @@ async def run_text_page(
     font: str,
     font_name: str | None,
     align: str,
+    layout_flags: list[str],
     out_path: Path,
     canvas_from: Path | None,
     log: list[str],
@@ -1901,6 +1951,7 @@ async def run_text_page(
         "--color", color,
         "--font", font,
         "--align", align,
+        *layout_flags,
     ]
     if font_name:
         cmd += ["--font-name", font_name]
@@ -1912,15 +1963,15 @@ async def run_text_page(
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        if stdout:
-            log.append(stdout.decode().rstrip())
-        if stderr:
-            log.append(stderr.decode().rstrip())
+    # See run_overlay's comment: stderr always surfaces, even on a clean exit.
+    if stderr:
+        log.append(stderr.decode().rstrip())
+    if proc.returncode != 0 and stdout:
+        log.append(stdout.decode().rstrip())
     return proc.returncode == 0
 
 
-async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, base_dir: Path | None = None, cli_scene_text: str | None = None) -> bool:
+async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, base_dir: Path | None = None, cli_scene_text: str | None = None, cli_font_size: int | None = None) -> bool:
     """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
     # Resolve model once: CLI override > page field > story field > default flash.
@@ -1929,6 +1980,9 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     text_mode = resolve_text_mode(story, page, cli_text_mode)
     # Resolve scene-text policy once: CLI override > page field > story field > "suppress".
     scene_text = resolve_scene_text(story, page, cli_scene_text)
+    # Resolve layout (PER-104) once: CLI --font-size > page 'font_size' > story
+    # 'layout' object > overlay_text.py's own reference-unit defaults.
+    layout_flags = resolve_layout_flags(story, page, cli_font_size)
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
 
@@ -1954,7 +2008,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                 font = page.get("font", "reader")
                 font_name = (story.get("fonts") or {}).get(font)
                 align = page.get("text_align", "left")
-                ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, final_path, log)
+                ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, layout_flags, final_path, log)
                 if not ok or not final_path.exists():
                     log.append("  ERROR: text overlay failed for cover")
                     print("\n" + "\n".join(log))
@@ -2013,7 +2067,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                     print("\n" + "\n".join(log))
                     return False
             # bg_path is the source image; canvas_from=art_path locks the dims.
-            ok = await run_text_page(bg_path, page_text, color, font, font_name, align, text_path, art_path, log)
+            ok = await run_text_page(bg_path, page_text, color, font, font_name, align, layout_flags, text_path, art_path, log)
             if not ok or not text_path.exists():
                 log.append(f"  ERROR: text page failed for page {page_num}")
                 print("\n" + "\n".join(log))
@@ -2060,7 +2114,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         font_name = (story.get("fonts") or {}).get(font)
         align = page.get("text_align", "left")
 
-        ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, final_path, log)
+        ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, layout_flags, final_path, log)
         if not ok or not final_path.exists():
             log.append(f"  ERROR: text overlay failed for page {page_num}")
             print("\n" + "\n".join(log))
@@ -2072,7 +2126,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     return True
 
 
-async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None, fallback_vendor: str = "openai", cli_scene_text: str | None = None) -> int:
+async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, composite_only: bool = False, base_dir: Path | None = None, fallback_vendor: str = "openai", cli_scene_text: str | None = None, cli_font_size: int | None = None) -> int:
     """Fire every page concurrently. Returns the number of failures.
 
     The genai.Client is built lazily on the first actual paid API call via _LazyClient,
@@ -2120,7 +2174,7 @@ async def render_all(todo: list[dict], story: dict, pages_dir: Path, resolution:
     modes = sorted({resolve_text_mode(story, p, cli_text_mode) for p in todo}) if todo else [resolve_text_mode(story, None, cli_text_mode)]
     print(f"\nRendering {len(todo)} page(s) concurrently ({', '.join(modes)} mode(s))...")
     results = await asyncio.gather(
-        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model, base_dir=base_dir, cli_scene_text=cli_scene_text) for page in todo)
+        *(render_page(client, page, story, pages_dir, resolution, cli_text_mode, aspect_ratio, cli_model=cli_model, base_dir=base_dir, cli_scene_text=cli_scene_text, cli_font_size=cli_font_size) for page in todo)
     )
     return sum(1 for ok in results if not ok)
 
@@ -2222,6 +2276,20 @@ def main() -> None:
             "the entire run."
         ),
     )
+    parser.add_argument(
+        "--font-size",
+        dest="font_size",
+        type=int,
+        default=None,
+        help=(
+            "Override the text-layout font size for every page this run, in "
+            "reference-size pixels (PER-104's one box model — see "
+            "docs/text-fitting.md). Panel height always follows the text at this "
+            "size; the font only shrinks below it as a last-resort overflow guard. "
+            "Precedence: this flag > per-page 'font_size' > story.json "
+            "'layout.font_size' > overlay_text.py's built-in default."
+        ),
+    )
     args = parser.parse_args()
 
     story_path = Path(args.story).resolve()
@@ -2300,7 +2368,7 @@ def main() -> None:
 
         todo.append(page)
 
-    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent, fallback_vendor=fallback_vendor, cli_scene_text=args.scene_text)) if todo else 0
+    errors = asyncio.run(render_all(todo, story, pages_dir, resolution, cli_text_mode=args.text_mode, aspect_ratio=aspect_ratio, cli_model=args.model, composite_only=args.composite_only, base_dir=story_path.parent, fallback_vendor=fallback_vendor, cli_scene_text=args.scene_text, cli_font_size=args.font_size)) if todo else 0
 
     print(f"\n{'All pages rendered.' if errors == 0 else f'{errors} page(s) failed.'}")
 

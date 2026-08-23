@@ -30,6 +30,10 @@
   "resolution": "1K",
   "aspect_ratio": "4:3",
   "saved_formats": ["pdf", "epub"],
+  "layout": {
+    "font_size": 44,
+    "max_panel_fraction": 0.85
+  },
   "pages": [
     {
       "page_num": 1,
@@ -39,7 +43,8 @@
       "text_placement": "bottom",
       "text_color_hint": "dark",
       "text_align": "center",
-      "font": "display"
+      "font": "display",
+      "font_size": 72
     },
     {
       "page_num": 2,

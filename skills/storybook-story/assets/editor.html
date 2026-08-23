@@ -430,6 +430,8 @@ button:active:not(:disabled){transform:scale(.96)}
   border-radius:var(--radius-md);padding:8px 10px}
 .regen-error pre{white-space:pre-wrap;word-break:break-all;font-size:11px;font-family:var(--font-mono);
   margin-top:2px;max-height:100px;overflow:auto}
+.regen-warning{color:var(--warn-text);font-size:12px;margin-top:6px;background:var(--warn-bg);
+  border-radius:var(--radius-md);padding:8px 10px;white-space:pre-wrap;word-break:break-word}
 .preview-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}
 .btn-regen{background:var(--surface);color:var(--text-muted);font-size:12px;padding:7px 14px;
   border-radius:var(--radius-lg);border:1px solid var(--border);font-family:var(--font-label);
@@ -703,7 +705,7 @@ let   unsavedChanges = false; // any unsaved edit (page, cast, or book-level)
 // Fields that only affect Pillow post-processing in overlay/long mode —
 // changing only these fields makes the fast "Re-composite (free)" path eligible.
 // (text_background_prompt excluded: needs a paid bg call.)
-const PILLOW_FIELDS = new Set(['text', 'text_placement', 'text_color_hint', 'text_align', 'font']);
+const PILLOW_FIELDS = new Set(['text', 'text_placement', 'text_color_hint', 'text_align', 'font', 'font_size']);
 // Book-level fields that don't affect renders at all — changes to these never
 // set bookPaidEdit (e.g. title is metadata only; saved_formats is a consolidate hint).
 const NEUTRAL_BOOK_FIELDS = new Set(['title', 'language', 'saved_formats']);
@@ -936,6 +938,16 @@ function markDirty(pageObj, field) {
       editedPages.add(p);
       if (!editedFields.has(p)) editedFields.set(p, new Set());
       editedFields.get(p).add('font');
+      updateRegenButtons(p.page_num);
+    });
+  } else if (field === 'layout') {
+    // Book-level layout object change (PER-104) is pure Pillow work — panel
+    // sizing only, never the underlying art — so it stays on the fast free
+    // re-composite path, same class as text/text_placement/font.
+    (story.pages || []).forEach(p => {
+      editedPages.add(p);
+      if (!editedFields.has(p)) editedFields.set(p, new Set());
+      editedFields.get(p).add('font_size');
       updateRegenButtons(p.page_num);
     });
   } else if (!field || !NEUTRAL_BOOK_FIELDS.has(field)) {
@@ -1876,6 +1888,10 @@ function buildPageCard(page, i) {
         </div>
       </div>
       <div class="field field-narrow">
+        <label>Font size (px) <small>(unset = book default)</small></label>
+        <input type="number" id="pg-fontsize-${i}" min="1">
+      </div>
+      <div class="field field-narrow">
         <label>Text colour</label>
         <select id="pg-colorhint-${i}"></select>
       </div>
@@ -1970,6 +1986,23 @@ function buildPageCard(page, i) {
     enumFor('text_align'), { optional: true, page });
   bindEnum(card.querySelector(`#pg-font-${i}`), page, 'font',
     enumFor('font'), { optional: true, page });
+
+  // Font size override (PER-104) — sentinel placeholder shows the inherited
+  // default (book 'layout.font_size' → overlay_text.py's own built-in default).
+  const fontSizeInp = card.querySelector(`#pg-fontsize-${i}`);
+  fontSizeInp.placeholder = String(
+    (story.layout || {}).font_size ?? schema.properties.layout.properties.font_size.default
+  );
+  fontSizeInp.value = page.font_size !== undefined ? page.font_size : '';
+  fontSizeInp.addEventListener('change', () => {
+    if (fontSizeInp.value === '') {
+      delete page.font_size;
+    } else {
+      const n = parseInt(fontSizeInp.value, 10);
+      if (!Number.isNaN(n)) page.font_size = n;
+    }
+    markDirty(page, 'font_size');
+  });
   // Text mode override — sentinel shows the inherited default (page → book → schema default).
   bindEnum(card.querySelector(`#pg-textmode-${i}`), page, 'text_mode',
     enumFor('text_mode'), { optional: true, page,
@@ -2159,6 +2192,24 @@ function renderBook() {
         <div class="field"><label>Display font (titles)</label><input type="text" id="book-font-display" placeholder="Patrick Hand"></div>
       </div>
     </fieldset>
+
+    <fieldset class="fieldset-box">
+      <legend class="fieldset-legend">layout (optional — one box model: panel is sized from its content at this font size; leave blank for the built-in defaults)</legend>
+      <div class="grid3">
+        <div class="field"><label>Font size (px)</label><input type="number" id="layout-font-size" min="1"></div>
+        <div class="field"><label>Min font size (px) <small>(overflow-guard floor)</small></label><input type="number" id="layout-min-font-size" min="1"></div>
+        <div class="field"><label>Reference size (px) <small>(page size these are authored at)</small></label><input type="number" id="layout-reference-size" min="1"></div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>Padding — horizontal (px)</label><input type="number" id="layout-pad-h" min="0"></div>
+        <div class="field"><label>Padding — vertical (px)</label><input type="number" id="layout-pad-v" min="0"></div>
+        <div class="field"><label>Corner radius (px)</label><input type="number" id="layout-radius" min="0"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Feather (px) <small>(0 = hard edge)</small></label><input type="number" id="layout-feather" min="0"></div>
+        <div class="field"><label>Max panel fraction <small>(boundary — most of the page a panel may cover)</small></label><input type="number" id="layout-max-panel-fraction" min="0" max="1" step="0.01"></div>
+      </div>
+    </fieldset>
     `;
 
   // Bind scalar fields
@@ -2208,6 +2259,62 @@ function renderBook() {
   };
   fontReaderInp.addEventListener('change', updateFonts);
   fontDisplayInp.addEventListener('change', updateFonts);
+
+  // Layout (PER-104) — lazy-create/delete, same pattern as fonts above.
+  // Placeholders come from the schema's own 'default' values (not hard-coded
+  // here), so this fieldset never drifts from overlay_text.py's real defaults.
+  const layoutSchema = schema.properties.layout.properties;
+  const layout = story.layout || {};
+  const layoutFields = [
+    ['#layout-font-size',          'font_size',          layoutSchema.font_size.default],
+    ['#layout-min-font-size',      'min_font_size',      layoutSchema.min_font_size.default],
+    ['#layout-reference-size',     'reference_size',     layoutSchema.reference_size.default],
+    ['#layout-radius',             'radius',             layoutSchema.radius.default],
+    ['#layout-feather',            'feather',            layoutSchema.feather.default],
+    ['#layout-max-panel-fraction', 'max_panel_fraction', layoutSchema.max_panel_fraction.default],
+  ].map(([sel, key, def]) => {
+    const el = b.querySelector(sel);
+    el.placeholder = String(def);
+    el.value = layout[key] !== undefined ? layout[key] : '';
+    return [el, key];
+  });
+  const padSchema = layoutSchema.padding.properties;
+  const padHInp = b.querySelector('#layout-pad-h');
+  const padVInp = b.querySelector('#layout-pad-v');
+  padHInp.placeholder = String(padSchema.h.default);
+  padVInp.placeholder = String(padSchema.v.default);
+  padHInp.value = (layout.padding || {}).h !== undefined ? layout.padding.h : '';
+  padVInp.value = (layout.padding || {}).v !== undefined ? layout.padding.v : '';
+
+  const updateLayout = () => {
+    // Mutate story.layout (and .padding) in place, field by field — never a
+    // wholesale replace. A hand-authored layout can carry keys this form
+    // doesn't know about (a future setting, a typo caught by the 'unknown
+    // key' warning but kept as-is per validate_story); replacing the whole
+    // object would silently drop them, violating the round-trip contract
+    // (.claude/rules/editor-contract.md: "preserve unknown keys at all
+    // levels"). Only delete story.layout/.padding once they are genuinely
+    // empty — i.e. no known field set AND no unknown key survived.
+    if (!story.layout) story.layout = {};
+    const L = story.layout;
+    for (const [el, key] of layoutFields) {
+      if (el.value === '') { delete L[key]; continue; }
+      const n = key === 'max_panel_fraction' ? parseFloat(el.value) : parseInt(el.value, 10);
+      if (Number.isNaN(n)) delete L[key]; else L[key] = n;
+    }
+    if (!L.padding) L.padding = {};
+    const h = padHInp.value === '' ? NaN : parseInt(padHInp.value, 10);
+    const v = padVInp.value === '' ? NaN : parseInt(padVInp.value, 10);
+    if (Number.isNaN(h)) delete L.padding.h; else L.padding.h = h;
+    if (Number.isNaN(v)) delete L.padding.v; else L.padding.v = v;
+    if (Object.keys(L.padding).length === 0) delete L.padding;
+    if (Object.keys(L).length === 0) delete story.layout;
+
+    markDirty(null, 'layout');  // special key — free re-composite, never a paid re-render
+  };
+  layoutFields.forEach(([el]) => el.addEventListener('change', updateLayout));
+  padHInp.addEventListener('change', updateLayout);
+  padVInp.addEventListener('change', updateLayout);
 
   // Palette
   renderPaletteRows(b.querySelector('#palette-container'));
@@ -2351,6 +2458,12 @@ function _renderVersionUI(num, apiData) {
       : '') +
     (regen.status === 'error'
       ? `<div class="regen-error">${icon('error', 'mi-sm')} Render failed:<pre>${esc((regen.error || '').slice(-400))}</pre></div>`
+      : '') +
+    ((regen.warnings || []).length
+      // PER-104: text was clipped at the overflow-guard floor — the render
+      // still succeeded (warn-and-composite), so this shows alongside a
+      // normal preview, not instead of one.
+      ? `<div class="regen-warning">${icon('info', 'mi-sm')} ${esc(regen.warnings.join(' '))}</div>`
       : '');
 
   // Delegate all button state to the central function (kills poll flicker)

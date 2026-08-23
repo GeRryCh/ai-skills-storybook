@@ -348,5 +348,116 @@ class TestTextAlignRight(unittest.TestCase):
         )
 
 
+class TestLayoutValidation(unittest.TestCase):
+    """PER-104: top-level 'layout' object and per-page 'font_size' override."""
+
+    def _validate(self, story):
+        return edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+
+    def test_valid_layout_no_errors(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {
+            "reference_size": 2048,
+            "font_size": 48,
+            "min_font_size": 22,
+            "padding": {"h": 40, "v": 48},
+            "max_panel_fraction": 0.9,
+            "radius": 36,
+            "feather": 14,
+        }
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_layout_not_object_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = "not an object"
+        errors, _ = self._validate(story)
+        self.assertTrue(any("layout" in e and "object" in e for e in errors))
+
+    def test_layout_font_size_wrong_type_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"font_size": "big"}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("layout.font_size" in e for e in errors))
+
+    def test_layout_font_size_zero_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"font_size": 0}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("layout.font_size" in e for e in errors))
+
+    def test_max_panel_fraction_out_of_range_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"max_panel_fraction": 1.5}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("max_panel_fraction" in e for e in errors))
+
+    def test_max_panel_fraction_zero_is_error(self):
+        """exclusiveMinimum: 0 — a panel that may cover none of the page makes no sense."""
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"max_panel_fraction": 0}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("max_panel_fraction" in e for e in errors))
+
+    def test_padding_negative_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"padding": {"h": -5}}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("layout.padding.h" in e for e in errors))
+
+    def test_padding_not_object_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"padding": "wide"}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("layout.padding" in e for e in errors))
+
+    def test_unknown_layout_key_is_warning_not_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"font_size": 48, "line_height": 99}
+        errors, warnings = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+        self.assertTrue(any("line_height" in w for w in warnings))
+
+    def test_unknown_layout_padding_key_is_warning_not_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["layout"] = {"padding": {"h": 40, "diagonal": 5}}
+        errors, warnings = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+        self.assertTrue(any("diagonal" in w for w in warnings))
+
+    def test_page_font_size_valid_no_errors(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["font_size"] = 72
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_page_font_size_wrong_type_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["font_size"] = "large"
+        errors, _ = self._validate(story)
+        self.assertTrue(any("font_size" in e for e in errors))
+
+    def test_page_font_size_zero_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["font_size"] = 0
+        errors, _ = self._validate(story)
+        self.assertTrue(any("font_size" in e for e in errors))
+
+    def test_page_font_size_absent_no_errors(self):
+        """Absent per-page font_size must never be materialised or required —
+        it means 'inherit the book value'."""
+        story = copy.deepcopy(PIP_STORM_STORY)
+        self.assertNotIn("font_size", story["pages"][0])
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [])
+
+    def test_text_align_right_is_valid(self):
+        """PER-100: 'right' joins the text_align enum."""
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["text_align"] = "right"
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+
 if __name__ == "__main__":
     unittest.main()

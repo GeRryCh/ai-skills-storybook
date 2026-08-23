@@ -36,6 +36,7 @@ Write `image_prompt` for scene content only — characters, setting, mood, art s
 - Per-page `font` field selects the *role*: `"reader"` (body, default) or `"display"` (titles). Set the cover/title page to `"display"`; leave body pages on `"reader"` (or omit — it defaults).
 - Per-page `text_align`: `"left"` (default), `"center"`, or `"right"`. Center the cover/title; leave body pages left-aligned. `"right"` is a deliberate, rare choice (e.g. an intentional design flourish) — do not use it as a default for body pages.
 - Optional top-level `fonts` map redefines what each role's font is, e.g. `"fonts": {"reader": "Arial", "display": "Patrick Hand"}`. Family names resolve at render time: bundled asset → system-installed font → bundled role default. No manual install needed for system fonts (Arial, Georgia, …); unknown names fall back to the bundled font. Omit `fonts` to keep the bundled Andika/PatrickHand.
+- **One box model (PER-104):** the panel is sized from its text content at a fixed font size — it never auto-shrinks to fit a "comfortable zone". Optional top-level `layout` object sets the book-wide font size (`font_size`, default 48px) and panel boundary (`max_panel_fraction`, default 0.9); a per-page `font_size` overrides it for one page (e.g. a larger cover title). Omit both to keep the built-in defaults — they suit most books.
 
 ## Style guide (`style_guide`) — book-wide consistency anchor (REQUIRED)
 

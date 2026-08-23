@@ -91,6 +91,29 @@
         "display": { "type": "string", "description": "Title/cover font family. Default: Patrick Hand (bundled)." }
       }
     },
+    "layout": {
+      "type": "object",
+      "description": "Optional book-wide text-layout settings (PER-104's one box model — see docs/text-fitting.md). panel = text block (at font_size) + padding: the panel is sized from its content, never configured; font_size only shrinks below its value as a last-resort overflow guard, when the panel would otherwise exceed max_panel_fraction of the page. Every length here (all except max_panel_fraction) is authored as pixels at reference_size and scaled by min(page_w, page_h) / reference_size at composite time, so a 1K, 2K, or upscaled 4K page all compose identically. Omit any key to keep overlay_text.py's own default for it.",
+      "x-interview": { "priority": "advanced", "ask": "Custom text-layout sizing (font size, padding, panel boundary) — built-in defaults (48px font at a 2048px reference) fit most books." },
+      "additionalProperties": false,
+      "properties": {
+        "reference_size": { "type": "integer", "minimum": 1, "default": 2048, "description": "The page size (px, shorter edge) every other length in this object is authored against. Default: 2048." },
+        "font_size": { "type": "integer", "minimum": 1, "default": 48, "description": "Body text size in reference-size pixels. Panel height is derived from the text block at this size, not the other way around. Default: 48. A per-page 'font_size' field overrides this for one page (e.g. a larger cover title)." },
+        "min_font_size": { "type": "integer", "minimum": 1, "default": 22, "description": "Overflow-guard floor, in reference-size pixels: font_size shrinks toward this (never below) if the panel would otherwise exceed max_panel_fraction. Default: 22." },
+        "padding": {
+          "type": "object",
+          "description": "Panel padding in reference-size pixels — the surface the text pushes against from the inside.",
+          "additionalProperties": false,
+          "properties": {
+            "h": { "type": "integer", "minimum": 0, "default": 40, "description": "Gap between text and the panel's left/right edge. Default: 40." },
+            "v": { "type": "integer", "minimum": 0, "default": 48, "description": "Gap between the text block and the panel's top/bottom edge. Default: 48." }
+          }
+        },
+        "max_panel_fraction": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "default": 0.9, "description": "The boundary: the most of the page height a panel may cover before the overflow guard starts shrinking font_size. Default: 0.9. Same value applies to band and text-page surfaces — where the free space lands differs by growth anchor, not this setting." },
+        "radius": { "type": "integer", "minimum": 0, "default": 36, "description": "Panel corner radius in reference-size pixels. Default: 36." },
+        "feather": { "type": "integer", "minimum": 0, "default": 14, "description": "Panel edge blur radius in reference-size pixels; 0 = hard edge. Default: 14." }
+      }
+    },
     "resolution": {
       "type": "string",
       "enum": ["1K", "2K", "4K"],
@@ -179,6 +202,11 @@
             "enum": ["reader", "display"],
             "description": "Font for the text overlay. 'reader' (Andika, body text) or 'display' (PatrickHand, titles/cover). Default: reader.",
             "default": "reader"
+          },
+          "font_size": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional per-page override of the book-level 'layout.font_size', in reference-size pixels (PER-104). Unset = inherit the book value (or overlay_text.py's built-in default). Use for a page that legitimately wants different type — e.g. a larger cover title — without changing the rest of the book."
           },
           "model": {
             "type": "string",

@@ -451,33 +451,65 @@ three fields above), **`rm pages/page-NN*.png`** (skip this and idempotency sile
 the pre-fix proof page in the full run), then render everything. See storybook-render's
 SKILL.md for the full sequence.
 
-## Text overlay (`overlay_text.py`)
+## Text overlay (`overlay_text.py`) — one box model (PER-104)
 
 Pillow composites text on a feathered, semi-transparent panel that blends into the art (no hard
 edge). Panel base colour follows `text_color_hint` (`dark` → white panel `(255,255,255)`,
 `light` → near-black panel `(30,30,30)`); text colour is near-black on dark, near-white on light.
-`dark` behaviour is byte-identical to pre-PER-52 output. A `bottom` panel anchors flush to the image bottom (full-bleed); a
-`top` panel keeps a 4%-height margin. Font size auto-shrinks (72px → 22px floor) to fit the
-comfortable 25% zone; the panel may grow past it but is hard-capped at 1/3 of page height. If
-text won't fit 1/3 even at the 22px floor, the font shrinks below it (down to a 12px hard min)
-so it fits rather than clipping. See `MAX_BOX_FRACTION` / `ABS_MIN_FONT_PX` and the two-phase
-`_pick_font_size`. Per-page `text_align` (`left`/`center`/`right`, default `left`,
-passed as `--align`) centers cover titles. Two
-bundled OFL fonts back two **roles**: `reader` (Andika, body) and `display` (PatrickHand,
-titles), selected per page via the `font` field in `story.json` (default `reader`);
-`render_book.py`'s `run_overlay` passes the role through as `--font`. An optional top-level
-`fonts` map (`{"reader": "Arial", "display": "Patrick Hand"}`) redefines each role's font;
-`render_book.py` looks up the page's role in it and passes the family name as `--font-name`.
-`overlay_text.py`'s `_resolve_font_ref()` resolves a name in order: bundled asset
-(`_bundled_font_path`) → system font (PIL searches OS font dirs) → bundled role default +
-one-time warning. So system fonts (Arial, etc.) need no manual install, and unknown names
-never crash the render. Tunables are module constants near the top (`BOX_ALPHA`,
-`FEATHER_PX`, padding, font px range) exposed as `--box-alpha` / `--feather` flags. The render
-script never bakes story text into the generated image (overlay mode) — every `image_prompt` reserves a
-low-detail safe zone for this overlay. In native mode, `NATIVE_TEXT_DIRECTIVE` in `render_book.py`
-instructs the model to letter text into the art; `text_color_hint` is spliced into it as `{ink_clause}`,
-selecting warm dark ink (with a lightly-toned backdrop) for `dark` or cream-white ink (with an
-explicitly forced dark-toned backdrop area) for `light`.
+`dark` behaviour is byte-identical to pre-PER-52 output.
+
+**The box model:** `panel = text block (at the configured font size) + padding` — the panel
+is sized from its own content, never configured; there is no separate "comfortable zone" or
+per-surface font ceiling. Font size shrinks in exactly one circumstance: the panel would
+otherwise exceed `layout.max_panel_fraction` of the page height (default 0.9) — a
+last-resort overflow guard, not a layout mechanism. `overlay()` (band mode) and
+`text_page()` (text-page mode) share one `measure_text_block()` for this fit, and both the
+boundary check and the draw loop consume that single measurement (an earlier version
+measured the fit and the draw with two slightly different formulas — exactly the kind of
+drift that makes a fixed-font guard misfire). The two surfaces differ **only** in growth
+anchor — `bottom` grows upward from the bottom edge (drawn `radius` px past it so the
+bottom reads full-bleed), `top` grows downward from a 4%-height margin
+(`EDGE_MARGIN_FRACTION`, a placement constant, not part of `layout`), text-page `center`
+grows both directions symmetrically. See `docs/text-fitting.md` for the full model.
+
+**Reference units:** every `layout` length (all but `max_panel_fraction`, already a
+fraction) is authored as pixels at a declared `reference_size` (default 2048) and scaled by
+one uniform factor — `min(page_w, page_h) / reference_size` — at composite time
+(`LayoutSettings.scaled()`), so a 1K OpenAI-fallback page, a 2K Gemini page, and a future
+upscaled 4K page all compose identically. Book-wide via `story.json`'s optional `layout`
+object (`reference_size`, `font_size` default 48, `min_font_size` default 22, `padding.h`/
+`padding.v`, `max_panel_fraction`, `radius`, `feather`); a per-page `font_size` field
+overrides `layout.font_size` for one page (e.g. a larger cover title), absent = inherit.
+Every `layout` key is also a `render_book.py`/`overlay_text.py` CLI flag
+(`--font-size`/`--min-font-size`/`--pad-h`/`--pad-v`/`--radius`/`--feather`/
+`--max-panel-fraction`/`--reference-size`); `render_book.py`'s `--font-size` is the one
+run-level override (precedence: CLI > page field > story field > built-in default).
+`box_alpha` (0–255) stays outside `layout` — unitless, nothing to scale.
+
+**Loud failure:** if text still doesn't fit at `min_font_size`, the remaining lines are
+truncated explicitly (never silently) and reported to stderr with a stable marker —
+`TEXT-OVERFLOW: {file} — configured {N}px, used {M}px, {K} line(s) dropped` — while the
+composite still ships (warn-and-composite, never fail a book over one over-long page).
+`render_book.py`'s `run_overlay`/`run_text_page` forward `overlay_text.py`'s stderr into the
+page log unconditionally, not only on failure, since a warn-and-composite page exits 0. The
+editor's page-regen job scans for the marker and surfaces it next to the preview.
+
+Per-page `text_align` (`left`/`center`/`right`, default `left`, passed as `--align`; PER-100
+added `right`) — all three defined against the text column `[h_pad, w - h_pad]`, not raw
+canvas width. Two bundled OFL fonts back two **roles**: `reader` (Andika, body) and
+`display` (PatrickHand, titles), selected per page via the `font` field in `story.json`
+(default `reader`); `render_book.py`'s `run_overlay` passes the role through as `--font`. An
+optional top-level `fonts` map (`{"reader": "Arial", "display": "Patrick Hand"}`) redefines
+each role's font; `render_book.py` looks up the page's role in it and passes the family name
+as `--font-name`. `overlay_text.py`'s `_resolve_font_ref()` resolves a name in order: bundled
+asset (`_bundled_font_path`) → system font (PIL searches OS font dirs) → bundled role default
++ one-time warning. So system fonts (Arial, etc.) need no manual install, and unknown names
+never crash the render. The render script never bakes story text into the generated image
+(overlay mode) — every `image_prompt` reserves a low-detail safe zone for this overlay. In
+native mode, `NATIVE_TEXT_DIRECTIVE` in `render_book.py` instructs the model to letter text
+into the art; `text_color_hint` is spliced into it as `{ink_clause}`, selecting warm dark ink
+(with a lightly-toned backdrop) for `dark` or cream-white ink (with an explicitly forced
+dark-toned backdrop area) for `light`.
 
 ## Local visual editor (`edit_story.py`)
 
