@@ -486,6 +486,18 @@ Every `layout` key is also a `render_book.py`/`overlay_text.py` CLI flag
 run-level override (precedence: CLI > page field > story field > built-in default).
 `box_alpha` (0–255) stays outside `layout` — unitless, nothing to scale.
 
+**`reference_size` is progressively disclosed in the editor.** It is a unit declaration, not
+a setting to tune — the scaling it drives is automatic — so the layout fieldset renders only
+the six real knobs and explains the baseline once in a hint line under the legend. The input
+appears only when a book already sets `reference_size` to something other than the schema
+default, because the other fields' placeholders come from schema defaults that assume 2048
+and would otherwise silently mean something else on screen. The markup and the
+`layoutFields` binding array are both gated on the same `refShown` flag and must stay
+together: an array entry with no input throws on `el.placeholder`, and an input with no array
+entry never binds. With no input, `updateLayout()` simply never touches the key, so a
+hand-authored `reference_size` round-trips through the same unknown-key preservation path as
+any other key the form doesn't own.
+
 **Loud failure:** if text still doesn't fit at `min_font_size`, the remaining lines are
 truncated explicitly (never silently) and reported to stderr with a stable marker —
 `TEXT-OVERFLOW: {file} — configured {N}px, used {M}px, {K} line(s) dropped` — while the

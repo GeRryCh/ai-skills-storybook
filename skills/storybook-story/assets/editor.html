@@ -386,6 +386,9 @@ button:active:not(:disabled){transform:scale(.96)}
 .style-frame-img{max-height:120px;display:block}
 .warn-inline{color:var(--warn-text);font-size:12px;margin-top:4px}
 .hint-block{color:var(--text-faint);font-size:13px}
+/* A hint that explains a whole fieldset sits between the legend and the first
+   row, so it needs the row's bottom gap without the legend's leading space. */
+.fieldset-box > .hint-block{margin:0 0 16px}
 
 /* ── saved-formats toggle ─────────────────────────────────────────────── */
 .sf-toggle-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
@@ -1893,7 +1896,7 @@ function buildPageCard(page, i) {
         </div>
       </div>
       <div class="field field-narrow">
-        <label>Font size (px) <small>(unset = book default)</small></label>
+        <label>Font size <small>(unset = book default)</small></label>
         <input type="number" id="pg-fontsize-${i}" min="1">
       </div>
       <div class="field field-narrow">
@@ -2141,6 +2144,18 @@ function toggleCard(header) {
 // ── Book section ───────────────────────────────────────────────────────────
 function renderBook() {
   const b = document.getElementById('book-body');
+
+  // PER-104: every layout length is a reference-unit point — overlay_text.py
+  // scales it by min(page_w, page_h) / reference_size at composite time, so the
+  // baseline is a unit declaration, not a knob to tune. Keep it out of the grid
+  // (it competed with the six real settings and made the automatic scaling look
+  // like a manual step) and disclose it only for the book that already overrides
+  // it — otherwise the other fields' placeholders, which come from the schema
+  // defaults and assume 2048, would silently mean something else on screen.
+  const refDefault = schema.properties.layout.properties.reference_size.default;
+  const refOverride = (story.layout || {}).reference_size;
+  const refShown = refOverride !== undefined && refOverride !== refDefault;
+
   b.innerHTML = `
     <div class="grid2">
       <div class="field"><label>Title</label><input type="text" id="book-title"></div>
@@ -2199,21 +2214,22 @@ function renderBook() {
     </fieldset>
 
     <fieldset class="fieldset-box">
-      <legend class="fieldset-legend">layout (optional — text size &amp; panel padding; leave blank for the built-in defaults)</legend>
+      <legend class="fieldset-legend">layout (optional — text size &amp; panel padding)</legend>
+      <div class="hint-block">Sizes are points at a ${refShown ? esc(String(refOverride)) : refDefault}px page — scaled automatically to the real render size. Leave blank for the built-in defaults.</div>
       <div class="grid2">
-        <div class="field"><label>Font size (px)</label><input type="number" id="layout-font-size" min="1"></div>
+        <div class="field"><label>Font size</label><input type="number" id="layout-font-size" min="1"></div>
         <div class="field"><label>Max panel fraction <small>(most of the page a panel may fill, 0–1)</small></label><input type="number" id="layout-max-panel-fraction" min="0" max="1" step="0.01"></div>
       </div>
       <div class="grid3">
-        <div class="field"><label>Padding — horizontal (px)</label><input type="number" id="layout-pad-h" min="0"></div>
-        <div class="field"><label>Padding — vertical (px)</label><input type="number" id="layout-pad-v" min="0"></div>
-        <div class="field"><label>Corner radius (px)</label><input type="number" id="layout-radius" min="0"></div>
+        <div class="field"><label>Padding — horizontal</label><input type="number" id="layout-pad-h" min="0"></div>
+        <div class="field"><label>Padding — vertical</label><input type="number" id="layout-pad-v" min="0"></div>
+        <div class="field"><label>Corner radius</label><input type="number" id="layout-radius" min="0"></div>
       </div>
-      <div class="grid3">
-        <div class="field"><label>Min font size (px) <small>(smallest size before text is dropped)</small></label><input type="number" id="layout-min-font-size" min="1"></div>
-        <div class="field"><label>Feather (px) <small>(0 = hard edge)</small></label><input type="number" id="layout-feather" min="0"></div>
-        <div class="field"><label>Reference size (px) <small>(sizes above assume this page size)</small></label><input type="number" id="layout-reference-size" min="1"></div>
+      <div class="grid2">
+        <div class="field"><label>Min font size <small>(smallest size before text is dropped)</small></label><input type="number" id="layout-min-font-size" min="1"></div>
+        <div class="field"><label>Feather <small>(0 = hard edge)</small></label><input type="number" id="layout-feather" min="0"></div>
       </div>
+      ${refShown ? `<div class="field"><label>Reference size (px) <small>(the page size the points above are measured at — this book overrides the ${refDefault}px default)</small></label><input type="number" id="layout-reference-size" min="1"></div>` : ''}
     </fieldset>
     `;
 
@@ -2273,10 +2289,16 @@ function renderBook() {
   const layoutFields = [
     ['#layout-font-size',          'font_size',          layoutSchema.font_size.default],
     ['#layout-min-font-size',      'min_font_size',      layoutSchema.min_font_size.default],
-    ['#layout-reference-size',     'reference_size',     layoutSchema.reference_size.default],
     ['#layout-radius',             'radius',             layoutSchema.radius.default],
     ['#layout-feather',            'feather',            layoutSchema.feather.default],
     ['#layout-max-panel-fraction', 'max_panel_fraction', layoutSchema.max_panel_fraction.default],
+    // Disclosed only when this book overrides the baseline (see refShown above).
+    // The entry must track the markup: updateLayout() deletes exactly the keys
+    // it lists, so an entry with no input would throw, and an input with no
+    // entry would never bind.
+    ...(refShown
+      ? [['#layout-reference-size', 'reference_size', layoutSchema.reference_size.default]]
+      : []),
   ].map(([sel, key, def]) => {
     const el = b.querySelector(sel);
     el.placeholder = String(def);
