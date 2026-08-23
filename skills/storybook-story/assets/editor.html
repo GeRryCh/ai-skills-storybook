@@ -2194,20 +2194,20 @@ function renderBook() {
     </fieldset>
 
     <fieldset class="fieldset-box">
-      <legend class="fieldset-legend">layout (optional — one box model: panel is sized from its content at this font size; leave blank for the built-in defaults)</legend>
-      <div class="grid3">
+      <legend class="fieldset-legend">layout (optional — text size &amp; panel padding; leave blank for the built-in defaults)</legend>
+      <div class="grid2">
         <div class="field"><label>Font size (px)</label><input type="number" id="layout-font-size" min="1"></div>
-        <div class="field"><label>Min font size (px) <small>(overflow-guard floor)</small></label><input type="number" id="layout-min-font-size" min="1"></div>
-        <div class="field"><label>Reference size (px) <small>(page size these are authored at)</small></label><input type="number" id="layout-reference-size" min="1"></div>
+        <div class="field"><label>Max panel fraction <small>(most of the page a panel may fill, 0–1)</small></label><input type="number" id="layout-max-panel-fraction" min="0" max="1" step="0.01"></div>
       </div>
       <div class="grid3">
         <div class="field"><label>Padding — horizontal (px)</label><input type="number" id="layout-pad-h" min="0"></div>
         <div class="field"><label>Padding — vertical (px)</label><input type="number" id="layout-pad-v" min="0"></div>
         <div class="field"><label>Corner radius (px)</label><input type="number" id="layout-radius" min="0"></div>
       </div>
-      <div class="grid2">
+      <div class="grid3">
+        <div class="field"><label>Min font size (px) <small>(smallest size before text is dropped)</small></label><input type="number" id="layout-min-font-size" min="1"></div>
         <div class="field"><label>Feather (px) <small>(0 = hard edge)</small></label><input type="number" id="layout-feather" min="0"></div>
-        <div class="field"><label>Max panel fraction <small>(boundary — most of the page a panel may cover)</small></label><input type="number" id="layout-max-panel-fraction" min="0" max="1" step="0.01"></div>
+        <div class="field"><label>Reference size (px) <small>(sizes above assume this page size)</small></label><input type="number" id="layout-reference-size" min="1"></div>
       </div>
     </fieldset>
     `;
