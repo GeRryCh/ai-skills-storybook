@@ -231,11 +231,16 @@ header .dirty-dot.visible{display:inline}
 .field.field-narrow{max-width:260px}
 .field label{display:block;font-family:var(--font-label);font-size:13px;font-weight:500;
   color:var(--text-muted);margin-bottom:6px}
-.field input[type=text],.field select,.field textarea{width:100%;border:1px solid var(--border);
+.field input[type=text],.field input[type=number],.field select,.field textarea{width:100%;border:1px solid var(--border);
   border-radius:var(--radius-md);padding:10px 12px;font-size:14px;font-family:var(--font-body);
   background:var(--surface-sunken);color:var(--text);transition:border-color .15s,box-shadow .15s}
-.field input[type=text]:focus,.field select:focus,.field textarea:focus{
+.field input[type=text]:focus,.field input[type=number]:focus,.field select:focus,.field textarea:focus{
   outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+/* Chrome/Safari's native spinner arrows don't match the dark input surface — hide them; a
+   plain typed value is the interaction model everywhere else in this form. */
+.field input[type=number]::-webkit-outer-spin-button,
+.field input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.field input[type=number]{-moz-appearance:textfield}
 .field textarea{resize:vertical;min-height:72px;line-height:1.5}
 .field select.unset{color:var(--text-faint)}
 /* ── Conditional field relevance (PER-48) ─────────────────────────────── */
