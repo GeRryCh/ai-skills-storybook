@@ -712,8 +712,18 @@ let   bookPaidEdit = false;
 let   unsavedChanges = false; // any unsaved edit (page, cast, or book-level)
 // Fields that only affect Pillow post-processing in overlay/long mode —
 // changing only these fields makes the fast "Re-composite (free)" path eligible.
-// (text_background_prompt excluded: needs a paid bg call.)
-const PILLOW_FIELDS = new Set(['text', 'text_placement', 'text_color_hint', 'text_align', 'font', 'font_size']);
+// (text_background_prompt excluded: needs a paid bg call.) 'border' (PER-105,
+// pages[].border 'none' opt-out) is pure Pillow work in every mode.
+const PILLOW_FIELDS = new Set(['text', 'text_placement', 'text_color_hint', 'text_align', 'font', 'font_size', 'border']);
+// PER-105: native has NO Pillow text step at all (the model letters the art
+// itself) — only its frame is ever free to recomposite. A native page's fast
+// path is eligible only when every edited field is the frame sentinel
+// ('font_size', stamped by a book-level layout/border edit — see markDirty's
+// 'layout'/'border' branches) or its own per-page border opt-out. A real
+// text/placement/color/align/font edit on a native page always needs the
+// model to re-letter the art, so those stay off this list even though they're
+// in PILLOW_FIELDS for overlay/long.
+const NATIVE_SAFE_FIELDS = new Set(['font_size', 'border']);
 // Book-level fields that don't affect renders at all — changes to these never
 // set bookPaidEdit (e.g. title is metadata only; saved_formats is a consolidate hint).
 const NEUTRAL_BOOK_FIELDS = new Set(['title', 'language', 'saved_formats']);
@@ -948,10 +958,14 @@ function markDirty(pageObj, field) {
       editedFields.get(p).add('font');
       updateRegenButtons(p.page_num);
     });
-  } else if (field === 'layout') {
-    // Book-level layout object change (PER-104) is pure Pillow work — panel
-    // sizing only, never the underlying art — so it stays on the fast free
-    // re-composite path, same class as text/text_placement/font.
+  } else if (field === 'layout' || field === 'border') {
+    // Book-level layout (PER-104) or border (PER-105) object change is pure
+    // Pillow work — panel sizing / frame compositing, never the underlying
+    // art — so it stays on the fast free re-composite path, same class as
+    // text/text_placement/font. Reuses the 'font_size' stamp rather than a
+    // new sentinel: it's the only field fastAvailable() already trusts as
+    // free in every mode including native (see NATIVE_SAFE_FIELDS), and
+    // nothing else reads editedFields' contents besides membership checks.
     (story.pages || []).forEach(p => {
       editedPages.add(p);
       if (!editedFields.has(p)) editedFields.set(p, new Set());
@@ -1921,6 +1935,11 @@ function buildPageCard(page, i) {
         <label>Scene text <small>(unset = same as book)</small></label>
         <select id="pg-scenetext-${i}"></select>
       </div>
+      ${story.border ? `
+      <div class="field field-narrow">
+        <label>Border <small>(unset = same as book; 'none' keeps this page full-bleed)</small></label>
+        <select id="pg-border-${i}"></select>
+      </div>` : ''}
       </div>
      </div>
     </div>`;
@@ -2024,6 +2043,15 @@ function buildPageCard(page, i) {
   // Scene text override (PER-87) — sentinel shows the inherited default (page → book → schema default).
   bindEnum(card.querySelector(`#pg-scenetext-${i}`), page, 'scene_text',
     enumFor('scene_text'), { optional: true, page, defaultVal: story.scene_text || defaultFor('scene_text') });
+
+  // Border opt-out (PER-105) — field only rendered when the book has a border
+  // at all (see the template above); 'none' is the only value, so the
+  // sentinel is doing all the work: it names what this page inherits.
+  const pgBorderSel = card.querySelector(`#pg-border-${i}`);
+  if (pgBorderSel) {
+    bindEnum(pgBorderSel, page, 'border', enumFor('border'),
+      { optional: true, page, defaultVal: 'book frame' });
+  }
 
   // Color hint — enum dropdown matching established sentinel-inherit pattern (PER-52)
   bindEnum(card.querySelector(`#pg-colorhint-${i}`), page, 'text_color_hint',
@@ -2223,13 +2251,35 @@ function renderBook() {
       <div class="grid3">
         <div class="field"><label>Padding — horizontal</label><input type="number" id="layout-pad-h" min="0"></div>
         <div class="field"><label>Padding — vertical</label><input type="number" id="layout-pad-v" min="0"></div>
-        <div class="field"><label>Corner radius</label><input type="number" id="layout-radius" min="0"></div>
+        <div class="field"><label>Panel corner radius</label><input type="number" id="layout-radius" min="0"></div>
       </div>
       <div class="grid2">
         <div class="field"><label>Min font size <small>(smallest size before text is dropped)</small></label><input type="number" id="layout-min-font-size" min="1"></div>
         <div class="field"><label>Feather <small>(0 = hard edge)</small></label><input type="number" id="layout-feather" min="0"></div>
       </div>
       ${refShown ? `<div class="field"><label>Reference size (px) <small>(the page size the points above are measured at — this book overrides the ${refDefault}px default)</small></label><input type="number" id="layout-reference-size" min="1"></div>` : ''}
+    </fieldset>
+
+    <fieldset class="fieldset-box">
+      <legend class="fieldset-legend">border (optional — deterministic page frame)</legend>
+      <div class="hint-block">Composites a margin around the artwork instead of full-bleed — sizes are points at the layout reference page above. Leave every field blank for no frame (today's full-bleed default). Setting this on a book already rendered before this frame existed doubles the margin — re-render those pages first.</div>
+      <div class="grid2">
+        <div class="field"><label>Margin width</label><input type="number" id="border-width" min="0"></div>
+        <div class="field"><label>Artwork corner radius <small>(not the text panel's — see layout above)</small></label><input type="number" id="border-radius" min="0"></div>
+      </div>
+      <div class="field">
+        <label>Margin colour</label>
+        <div class="palette-row">
+          <div class="swatch" id="border-color-swatch"></div>
+          <input type="text" id="border-color" placeholder="#FFFFFF">
+        </div>
+      </div>
+      <div class="hint-block" style="margin-top:16px">Drop shadow — leave all three blank for no shadow.</div>
+      <div class="grid3">
+        <div class="field"><label>Shadow offset</label><input type="number" id="border-shadow-offset" min="0"></div>
+        <div class="field"><label>Shadow blur</label><input type="number" id="border-shadow-blur" min="0"></div>
+        <div class="field"><label>Shadow opacity <small>(0–1)</small></label><input type="number" id="border-shadow-opacity" min="0" max="1" step="0.01"></div>
+      </div>
     </fieldset>
     `;
 
@@ -2343,6 +2393,71 @@ function renderBook() {
   padHInp.addEventListener('change', updateLayout);
   padVInp.addEventListener('change', updateLayout);
 
+  // Border (PER-105) — same lazy-create/delete pattern as layout above.
+  // Placeholders come from the schema's own 'default' values, never
+  // hard-coded here, so this fieldset can't drift from overlay_text.py's
+  // real BorderSettings/ShadowSettings defaults.
+  const borderSchema = schema.properties.border.properties;
+  const border = story.border || {};
+  const borderFields = [
+    ['#border-width',  'width',  borderSchema.width.default],
+    ['#border-radius', 'radius', borderSchema.radius.default],
+  ].map(([sel, key, def]) => {
+    const el = b.querySelector(sel);
+    el.placeholder = String(def);
+    el.value = border[key] !== undefined ? border[key] : '';
+    return [el, key];
+  });
+  const borderColorInp = b.querySelector('#border-color');
+  const borderColorSwatch = b.querySelector('#border-color-swatch');
+  borderColorInp.placeholder = borderSchema.color.default;
+  borderColorInp.value = border.color !== undefined ? border.color : '';
+  updateSwatch(borderColorSwatch, borderColorInp);
+
+  const shadowSchema = borderSchema.shadow.properties;
+  const shadowOffsetInp  = b.querySelector('#border-shadow-offset');
+  const shadowBlurInp    = b.querySelector('#border-shadow-blur');
+  const shadowOpacityInp = b.querySelector('#border-shadow-opacity');
+  shadowOffsetInp.placeholder  = String(shadowSchema.offset.default);
+  shadowBlurInp.placeholder    = String(shadowSchema.blur.default);
+  shadowOpacityInp.placeholder = String(shadowSchema.opacity.default);
+  const shadow = border.shadow || {};
+  shadowOffsetInp.value  = shadow.offset  !== undefined ? shadow.offset  : '';
+  shadowBlurInp.value    = shadow.blur    !== undefined ? shadow.blur    : '';
+  shadowOpacityInp.value = shadow.opacity !== undefined ? shadow.opacity : '';
+
+  const updateBorder = () => {
+    // Same field-by-field mutate-in-place discipline as updateLayout — never
+    // a wholesale replace, so an unknown key a human hand-authored survives.
+    // Delete story.border only once every known field AND .shadow are empty.
+    if (!story.border) story.border = {};
+    const B = story.border;
+    for (const [el, key] of borderFields) {
+      if (el.value === '') { delete B[key]; continue; }
+      const n = parseInt(el.value, 10);
+      if (Number.isNaN(n)) delete B[key]; else B[key] = n;
+    }
+    if (borderColorInp.value === '') delete B.color; else B.color = borderColorInp.value;
+    updateSwatch(borderColorSwatch, borderColorInp);
+
+    if (!B.shadow) B.shadow = {};
+    const off = shadowOffsetInp.value === '' ? NaN : parseInt(shadowOffsetInp.value, 10);
+    const blur = shadowBlurInp.value === '' ? NaN : parseInt(shadowBlurInp.value, 10);
+    const opac = shadowOpacityInp.value === '' ? NaN : parseFloat(shadowOpacityInp.value);
+    if (Number.isNaN(off)) delete B.shadow.offset; else B.shadow.offset = off;
+    if (Number.isNaN(blur)) delete B.shadow.blur; else B.shadow.blur = blur;
+    if (Number.isNaN(opac)) delete B.shadow.opacity; else B.shadow.opacity = opac;
+    if (Object.keys(B.shadow).length === 0) delete B.shadow;
+    if (Object.keys(B).length === 0) delete story.border;
+
+    markDirty(null, 'border');  // special key — free re-composite, never a paid re-render
+  };
+  borderFields.forEach(([el]) => el.addEventListener('change', updateBorder));
+  borderColorInp.addEventListener('change', updateBorder);
+  shadowOffsetInp.addEventListener('change', updateBorder);
+  shadowBlurInp.addEventListener('change', updateBorder);
+  shadowOpacityInp.addEventListener('change', updateBorder);
+
   // Palette
   renderPaletteRows(b.querySelector('#palette-container'));
 
@@ -2379,18 +2494,21 @@ function renderStyleFramePreview() {
 
 // Returns true when all in-session edits for this page are Pillow-only and the
 // server has confirmed the raw/art/bg prerequisite exists (fast.eligible).
-// Conservative: unknown fields, native mode, and any render-affecting book edit
-// all disable the fast path (current behavior = paid re-render).
+// Conservative: unknown fields and any render-affecting book edit disable the
+// fast path (current behavior = paid re-render). Native (PER-105) is no longer
+// categorically excluded — it has its own, narrower safe-field set, since only
+// its frame (never its baked-in text) can be free to recomposite.
 function fastAvailable(num) {
   if (bookPaidEdit) return false;
-  // text_mode absent → native (default) → no Pillow split
+  // text_mode absent → native (default)
   const mode = story.text_mode;
-  if (mode !== 'overlay' && mode !== 'long') return false;
+  if (mode !== 'overlay' && mode !== 'long' && mode !== 'native') return false;
   const page = (story.pages || []).find(p => p.page_num === num);
   if (!page) return false;
   const fields = editedFields.get(page);
   if (!fields || fields.size === 0) return false;
-  if (![...fields].every(f => PILLOW_FIELDS.has(f))) return false;
+  const allowed = mode === 'native' ? NATIVE_SAFE_FIELDS : PILLOW_FIELDS;
+  if (![...fields].every(f => allowed.has(f))) return false;
   const serverFast = (_pageVersionData.get(num) || {}).fast;
   return !!(serverFast && serverFast.eligible);
 }

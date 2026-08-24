@@ -56,6 +56,14 @@ can drift. `tests/unit/test_text_layout.py`'s `TestLayoutDefaultsInSync` guards 
 import-based both sides (`overlay_text` and `edit_story.load_schema()`), no editor.html regex
 needed since the HTML carries no numeric defaults of its own.
 
+**PER-105 border defaults** join the same list: `overlay_text.py`'s `DEFAULT_BORDER_WIDTH` /
+`DEFAULT_BORDER_COLOR` / `DEFAULT_BORDER_RADIUS` / `DEFAULT_SHADOW_OFFSET` /
+`DEFAULT_SHADOW_BLUR` / `DEFAULT_SHADOW_OPACITY` are the source of truth, mirrored as
+`"default"` values on `story_schema.json`'s `border` object (and its nested `shadow`);
+`editor.html`'s border fieldset reads placeholders from `/api/schema` the same way the layout
+fieldset does. `tests/unit/test_page_frame.py`'s `TestBorderDefaultsInSync` guards it,
+import-based, same shape as `TestLayoutDefaultsInSync`.
+
 ## No migration shim for legacy keys
 
 Both paid scripts reject pre-PER-34 `story.json` files (legacy keys `characters`, `locations`, `pages[].characters`, `pages[].location`) with `exit 2` and a migration message. No shim — clean break.

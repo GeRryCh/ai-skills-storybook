@@ -459,5 +459,132 @@ class TestLayoutValidation(unittest.TestCase):
         self.assertEqual(errors, [], f"Unexpected errors: {errors}")
 
 
+class TestBorderValidation(unittest.TestCase):
+    """PER-105: top-level 'border' object and per-page 'border': 'none' opt-out."""
+
+    def _validate(self, story):
+        return edit_story.validate_story(story, PIP_STORM_DIR, SCHEMA)
+
+    def test_valid_border_no_errors(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {
+            "width": 64,
+            "color": "#FFEDC7",
+            "radius": 48,
+            "shadow": {"offset": 12, "blur": 24, "opacity": 0.25},
+        }
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_border_not_object_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = "thick"
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border" in e and "object" in e for e in errors))
+
+    def test_border_width_negative_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"width": -1}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.width" in e for e in errors))
+
+    def test_border_width_wrong_type_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"width": "wide"}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.width" in e for e in errors))
+
+    def test_border_radius_zero_is_valid(self):
+        # Unlike layout.font_size, a zero radius (square corners) is legitimate.
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"radius": 0}
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_border_color_bad_hex_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"color": "cream"}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.color" in e for e in errors))
+
+    def test_border_color_short_hex_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"color": "#FFF"}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.color" in e for e in errors))
+
+    def test_border_color_valid_hex_no_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"color": "#FFEDC7"}
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_shadow_not_object_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"shadow": "soft"}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.shadow" in e and "object" in e for e in errors))
+
+    def test_shadow_opacity_out_of_range_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"shadow": {"opacity": 1.5}}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.shadow.opacity" in e for e in errors))
+
+    def test_shadow_offset_negative_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"shadow": {"offset": -1}}
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border.shadow.offset" in e for e in errors))
+
+    def test_unknown_border_key_is_warning_not_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"width": 64, "opacity": 0.5}
+        errors, warnings = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+        self.assertTrue(any("opacity" in w for w in warnings))
+
+    def test_unknown_shadow_key_is_warning_not_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"shadow": {"offset": 12, "spread": 4}}
+        errors, warnings = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+        self.assertTrue(any("spread" in w for w in warnings))
+
+    def test_border_absent_no_errors(self):
+        """Absent 'border' must never be required — it means full-bleed."""
+        story = copy.deepcopy(PIP_STORM_STORY)
+        self.assertNotIn("border", story)
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [])
+
+    def test_page_border_none_is_valid(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["border"] = {"width": 64}
+        story["pages"][0]["border"] = "none"
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_page_border_none_valid_even_with_no_book_border(self):
+        """A harmless no-op, not a misconfiguration — the book has nothing to opt out of."""
+        story = copy.deepcopy(PIP_STORM_STORY)
+        self.assertNotIn("border", story)
+        story["pages"][0]["border"] = "none"
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [], f"Unexpected errors: {errors}")
+
+    def test_page_border_bogus_value_is_error(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        story["pages"][0]["border"] = "thick"
+        errors, _ = self._validate(story)
+        self.assertTrue(any("border" in e and "thick" in e for e in errors))
+
+    def test_page_border_absent_no_errors(self):
+        story = copy.deepcopy(PIP_STORM_STORY)
+        self.assertNotIn("border", story["pages"][0])
+        errors, _ = self._validate(story)
+        self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

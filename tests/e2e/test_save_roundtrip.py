@@ -82,6 +82,22 @@ class TestSaveRoundtrip(unittest.TestCase):
         saved = self._pw.locator("#pg-prompt-0").input_value()
         self.assertEqual(saved, new_prompt)
 
+    def test_border_width_persists_after_reload(self):
+        """PER-105: setting the book-level border width writes story.border and
+        survives a reload — the fixture has no 'border' object at the start, so
+        this also exercises the lazy-create path in updateBorder()."""
+        inp = self._pw.locator("#border-width")
+        inp.click()
+        inp.fill("90")
+        inp.press("Tab")
+
+        self._save_and_assert_200()
+
+        self._pw.reload()
+        self._pw.wait_for_selector("#border-width", state="visible", timeout=10_000)
+        saved = self._pw.locator("#border-width").input_value()
+        self.assertEqual(saved, "90")
+
 
 if __name__ == "__main__":
     unittest.main()

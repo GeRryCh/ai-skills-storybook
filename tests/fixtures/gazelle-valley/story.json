@@ -34,6 +34,10 @@
     "font_size": 44,
     "max_panel_fraction": 0.85
   },
+  "border": {
+    "width": 72,
+    "color": "#F5E9D4"
+  },
   "pages": [
     {
       "page_num": 1,

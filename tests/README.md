@@ -64,11 +64,13 @@ tests/
     test_openai_fallback.py # PER-67: PROHIBITED_CONTENT auto-retry on gpt-image-2
     test_lane_caps_in_sync.py # PER-97: guards the triplicated lane-cap constants
     test_text_layout.py  # PER-104: one box model — fixed font, content-derived panel
+    test_page_frame.py   # PER-105: deterministic page frame — art_rect, frame_canvas,
+                          # no-border byte-identity, resolve_border_flags
   e2e/
     _support.py         # EditorServer (start/stop server + temp fixture copy)
     test_mention_picker.py
     test_cast_derivation.py
-    test_save_roundtrip.py
+    test_save_roundtrip.py  # incl. PER-105 border-field round-trip
     test_cost_readout.py # PER-35: top-bar cost readout renders from /api/status
   fixtures/             # committed sample books (read-only for tests)
     pip-storm/          # overlay + native pages, reference image, style sheet

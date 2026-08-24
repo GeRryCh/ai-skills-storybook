@@ -114,6 +114,27 @@
         "feather": { "type": "integer", "minimum": 0, "default": 14, "description": "Panel edge blur radius in reference-size pixels; 0 = hard edge. Default: 14." }
       }
     },
+    "border": {
+      "type": "object",
+      "description": "Optional deterministic page frame (PER-105) — a margin of a fixed colour composited around the artwork, with a corner radius on the artwork itself and an optional drop shadow. Presence of this object turns the frame on for every page (omitted keys fall back to the defaults below); ABSENCE of this object means today's full-bleed behaviour — no frame at all. Every length here (width, radius, shadow.offset, shadow.blur) is authored as pixels at 'layout.reference_size' — it shares that one unit baseline rather than declaring its own — and scaled the same way at composite time. Pillow-only: rendering itself always asks the model for true full-bleed art (render_book.py's NO_FRAME_DIRECTIVE, unconditional — no story field opts out of it), so toggling this object never requires a re-render, only a re-composite. A page's own text panel is re-based onto the resulting inset art rect, so it never spills onto the margin. IMPORTANT: a book already rendered before PER-105 has the old model-invented margin baked into its pixels — setting 'border' on it composites a second frame on top. Re-render (or at least re-composite from a fresh raw) before adding a border to an existing book.",
+      "x-interview": { "priority": "advanced", "ask": "A deterministic page border/margin around the artwork (colour, width, corner radius, optional drop shadow) — omit for full-bleed art edge to edge." },
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "minimum": 0, "default": 64, "description": "Margin width in reference-size pixels — how far the artwork is inset from each edge. Default: 64." },
+        "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "default": "#FFFFFF", "description": "Margin colour as a literal #RRGGBB hex value. Not sampled from the art or the palette — deliberately explicit, since an auto-sampled margin would reintroduce the same page-to-page inconsistency this feature exists to remove. Default: #FFFFFF." },
+        "radius": { "type": "integer", "minimum": 0, "default": 48, "description": "Corner radius of the artwork itself (not the text panel — see 'layout.radius' for that) in reference-size pixels. Default: 48." },
+        "shadow": {
+          "type": "object",
+          "description": "Optional drop shadow cast by the artwork onto the margin. Absent = no shadow at all (not a zero-opacity one).",
+          "additionalProperties": false,
+          "properties": {
+            "offset": { "type": "integer", "minimum": 0, "default": 12, "description": "Shadow offset (down and right) in reference-size pixels. Default: 12." },
+            "blur": { "type": "integer", "minimum": 0, "default": 24, "description": "Shadow blur radius in reference-size pixels. Default: 24." },
+            "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.25, "description": "Shadow opacity, 0 (invisible) to 1 (solid black). Default: 0.25." }
+          }
+        }
+      }
+    },
     "resolution": {
       "type": "string",
       "enum": ["1K", "2K", "4K"],
@@ -207,6 +228,11 @@
             "type": "integer",
             "minimum": 1,
             "description": "Optional per-page override of the book-level 'layout.font_size', in reference-size pixels (PER-104). Unset = inherit the book value (or overlay_text.py's built-in default). Use for a page that legitimately wants different type — e.g. a larger cover title — without changing the rest of the book."
+          },
+          "border": {
+            "type": "string",
+            "enum": ["none"],
+            "description": "Optional per-page opt-out of the book-level 'border' frame (PER-105). Unset = inherit the book border (or no border, if the book sets none). 'none' = this page renders full-bleed regardless of the book setting — e.g. keeping a cover full-bleed in an otherwise bordered book. Harmless no-op on a book with no 'border' object at all."
           },
           "model": {
             "type": "string",

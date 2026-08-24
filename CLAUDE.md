@@ -439,6 +439,16 @@ fast way to confirm they're enough before paying for a full run.
    Never reaches `build_text_bg_prompt` (the long-mode text-page background call) — that
    prompt already hard-bans lettering unconditionally, and must, regardless of the knob.
 
+4. **`NO_FRAME_DIRECTIVE`** (PER-105, unconditional — no story field gates it, unlike
+   `scene_text`) — bans the model from drawing a paper margin, border, frame, mat, drop
+   shadow, or simulated print edge around the artwork; the illustration must bleed off all
+   four sides. Also injected explicitly into `build_text_bg_prompt()` (the one prompt
+   builder that takes no guards at all — see "Deterministic page frame" below), since that
+   call would otherwise be the one surface a model-invented margin could still sneak back in
+   on. Keeping this ban unconditional (never opted out of) is what keeps the composited
+   frame below a free knob — art is always requested full-bleed, so the frame is always pure
+   Pillow work, never a re-render.
+
 `FULL_BLEED_ART_DIRECTIVE` (long-mode art pages) is narrowed to ban only story text/
 narrative typography, not all lettering — the blanket ban moved to the scene-text guard
 above so `scene_text: "allow"` has something to opt out of. Net effect on the default path
@@ -523,6 +533,66 @@ into the art; `text_color_hint` is spliced into it as `{ink_clause}`, selecting 
 (with a lightly-toned backdrop) for `dark` or cream-white ink (with an explicitly forced
 dark-toned backdrop area) for `light`.
 
+## Deterministic page frame (PER-105)
+
+Pages used to render with a cream paper margin, rounded corners, and a drop shadow — a
+printed-poster idiom the model invented ("mid-century poster" implies printed paper). It was
+unrepeatable (measured inset swung 51→93px across one book) and defeated
+`FULL_BLEED_ART_DIRECTIVE`'s explicit full-bleed request. **Fixed by no longer asking the
+model for it at all, and compositing it deterministically instead.** See `docs/page-frame.md`
+for the full model.
+
+**Stop generating it:** `NO_FRAME_DIRECTIVE` (see item 4 above) is unconditional — every
+page of every mode always requests true full-bleed art. **Composite it:** an optional
+top-level `border` object (`width`, `color`, `radius`, `shadow: {offset, blur, opacity}`) —
+presence turns the frame on (even `{}`), absence is today's full-bleed default, same
+"presence is the switch" contract as everywhere else in this schema. `width`/`radius`/
+`shadow.offset`/`shadow.blur` are reference-unit px, scaled by `layout.reference_size` (border
+declares no `reference_size` of its own — one unit baseline per book). `color` is a literal
+`#RRGGBB` hex — never auto-sampled from the art or `style_guide.palette`, since that would
+reintroduce the exact unrepeatable inconsistency this feature removes. A per-page
+`border: "none"` opts one page out (e.g. keeping a cover full-bleed); unset inherits the book
+setting.
+
+**The art rect.** `overlay_text.py`'s `art_rect(w, h, border)` returns the rectangle the
+artwork occupies — the full canvas when `border` is absent (or `width: 0`), inset by
+`border.width` on all four sides otherwise, never collapsing the art to nothing. Every panel/
+text geometry `_compose()` computes (PER-104's box model — "Growth anchors", `edge_margin`,
+the text column) is now relative to this rect, not the canvas; with no border the rect equals
+the canvas, so a no-border book's output is byte-identical to pre-PER-105. With a border set,
+the text panel is additionally clipped to the art rect's own rounded shape — fixing the
+concrete defect that motivated this: the band spilling onto the model-invented margin because
+its geometry was derived from the canvas while the margin ate into the art.
+
+**Frame-only pages (native, long-body art).** These two modes had no Pillow pass at all
+before PER-105 — the model's bytes went straight to the final file. Both gained a raw/final
+split mirroring overlay's (`raw-page-NN-native.png` → `page-NN-native.png`,
+`raw-page-NN-long.png` → `page-NN-long.png`); `render_book.py`'s `run_frame()` composites the
+frame via `overlay_text.py`'s normal band-mode path called with `--text ""` (the frame step
+runs before `_compose()`'s empty-text early return, so this is exactly the framing subset of
+a normal overlay call, not a separate CLI mode). No border set → a plain file copy, no
+subprocess, byte-identical to the old direct write. Bonus: both modes now have a free
+re-composite path they never had — `edit_story.py`'s `_recomposite_plan()` gained a native
+branch, and `POST /api/page/recomposite` no longer hard-blocks native with a 400.
+
+**Fit policy lives at the call site, never inside `frame_canvas()`.** Art pages resize the
+raw art down to the art rect (nothing may be lost — native art can carry model-lettered text
+near an edge a crop would clip); the long-mode text page instead crops its shared background
+straight to the art rect's dimensions (one resample regardless of whether a border is set,
+rather than cropping to the full canvas and resampling again for the frame).
+
+**⚠️ Existing books.** A book rendered before PER-105 has the old margin baked into its
+pixels. Setting `border` on it without re-rendering composites a second frame on top —
+opt-in only, no detection (an edge-pixel heuristic would just be a second unrepeatable
+mechanism). Re-render the affected pages first.
+
+`render_book.py`'s `resolve_border_flags(story, page)` mirrors `resolve_layout_flags`'s
+contract exactly (a key present in `story["border"]` becomes a CLI flag; an absent key falls
+through to `overlay_text.py`'s own default) but adds the explicit `--frame`/`--shadow`
+on/off toggles, since `border`'s complete absence must remain the byte-identical full-bleed
+path regardless of any other flag. No CLI override on `render_book.py` itself — tune via
+`story.json` + a free re-composite.
+
 ## Local visual editor (`edit_story.py`)
 
 `skills/storybook-story/scripts/edit_story.py` is a stdlib-only PEP-723 script that
@@ -552,7 +622,9 @@ warning-only badge, since the object lane has no save block, when the object-lan
 (objects + locations) count exceeds its cap for the **effective** model — 10 on flash, 6 on
 pro, resolved after the same auto-upgrade check the badge mirrors from `select_refs`), and
 **a per-page text mode picker** (unset = same as book; override lets individual pages render in a
-different mode than the book default). Fields that have no effect given the current effective text mode
+different mode than the book default), and **a per-page border opt-out** (PER-105, shown only
+when the book has a `border` object; `'none'` keeps that page full-bleed, unset inherits the
+book frame). Fields that have no effect given the current effective text mode
 are greyed-out (user may still pre-set them); the `floating` placement option is hard-hidden
 when not in native mode. No API cost for browsing/selecting; regenerate triggers one
 paid Gemini call per page. A **"📦 Consolidate Story" button** sits below the Pages section

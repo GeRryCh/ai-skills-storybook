@@ -9,10 +9,14 @@ Zero API calls. Verifies:
   - item 3: scene_text ("suppress"/"allow") default-on suppression of invented scene
     lettering, with a native-mode carve-out for the model's own story text; "allow"
     emits no replacement clause; resolve_scene_text() precedence
+  - PER-105: NO_FRAME_DIRECTIVE (unconditional — no story field gates it, unlike
+    scene_text) is present in build_page_guards() output on every page, including
+    a scenery-only page with no cast, no persistent_details, and scene_text: "allow"
   - guard placement: injected after the (premise-bearing) anchor, before the
     mode-specific directive; native mode keeps NATIVE_TEXT_DIRECTIVE the final token
-  - back-compat: a page/story using none of the new fields differs from a
-    guards-free baseline only by the default suppress clause
+  - back-compat: a page/story using none of the PER-87 fields differs from a
+    guards-free baseline only by the default suppress clause + PER-105's
+    unconditional no-frame directive
 """
 import sys
 import unittest
@@ -245,6 +249,22 @@ class TestGuardPlacementInBuildImagePrompt(unittest.TestCase):
         out = render_book.build_image_prompt(page, story, "overlay")
         self.assertIn("No written signs, no lettering", out)
 
+    def test_no_frame_directive_present_in_all_three_modes_unconditionally(self):
+        # PER-105: unlike scene_text, nothing gates this — present even with
+        # scene_text: "allow" and an empty cast (no other guard would fire).
+        story = _story()
+        page = _page([])
+        for mode in ("overlay", "native", "long"):
+            out = self._out(mode, page, story, scene_text="allow")
+            self.assertIn(render_book.NO_FRAME_DIRECTIVE, out, f"missing in {mode} mode")
+
+    def test_no_frame_directive_also_in_text_bg_prompt(self):
+        # The one prompt builder that takes no guards at all (no STYLE_ANCHOR
+        # either) — PER-105 must be added there explicitly, not folded into
+        # build_page_guards, so it's easy to miss. Guard against that.
+        out = render_book.build_text_bg_prompt(_story())
+        self.assertIn(render_book.NO_FRAME_DIRECTIVE, out)
+
 
 # ---------------------------------------------------------------------------
 # Back-compat: stories/pages using none of the new fields
@@ -255,19 +275,26 @@ class TestBackCompat(unittest.TestCase):
     def test_no_new_fields_differs_only_by_suppress_clause(self):
         # A page shaped like pre-PER-87 authoring (no character cast, no
         # persistent_details anywhere, story doesn't set scene_text) should carry
-        # exactly the default suppress guard and nothing else new.
+        # exactly the default suppress guard and nothing else new — except
+        # PER-105's unconditional no-frame directive, which no field opts out of.
         story = _story()
         page = _page([])  # scenery-only: no duplicate guard, no persistent-details clause
         out = render_book.build_image_prompt(page, story, "overlay")
         self.assertNotIn("named character", out)
         self.assertNotIn("Continuity details", out)
         self.assertIn(render_book.SCENE_TEXT_SUPPRESS_DIRECTIVE, out)
+        self.assertIn(render_book.NO_FRAME_DIRECTIVE, out)
 
-    def test_build_page_guards_empty_cast_is_suppress_clause_only(self):
+    def test_build_page_guards_empty_cast_is_suppress_plus_no_frame_only(self):
+        # PER-105 replaces the old "exactly the suppress clause" contract: the
+        # no-frame directive is now unconditional, so an otherwise-empty page's
+        # guards are exactly these two clauses, joined by build_page_guards'
+        # single-space separator — nothing more, nothing less.
         story = _story()
         page = _page([])
         guards = render_book.build_page_guards(page, story, "overlay", "suppress")
-        self.assertEqual(guards, render_book.SCENE_TEXT_SUPPRESS_DIRECTIVE)
+        expected = f"{render_book.SCENE_TEXT_SUPPRESS_DIRECTIVE} {render_book.NO_FRAME_DIRECTIVE}"
+        self.assertEqual(guards, expected)
 
 
 if __name__ == "__main__":

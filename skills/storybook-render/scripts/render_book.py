@@ -94,6 +94,7 @@ import mimetypes
 import os
 import random
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -300,6 +301,20 @@ SCENE_TEXT_SUPPRESS_DIRECTIVE_NATIVE = (
 # image_prompt (which would trip the PER-42 echo warning). See build_page_guards.
 PERSISTENT_DETAILS_DIRECTIVE = "Continuity details that must stay visible: {clauses}."
 
+# PER-105: unconditional — unlike scene_text (which "allow" can opt out of),
+# nothing gates this. The model reliably invents a paper margin, border, and
+# drop shadow around the artwork ("mid-century poster" style implies printed
+# paper) even when FULL_BLEED_ART_DIRECTIVE already asks for full-bleed art.
+# PER-105 composites a deterministic frame in Pillow instead (overlay_text.py's
+# BorderSettings) — keeping the model-side ban unconditional is what keeps that
+# a free knob: turning story.json's 'border' on/off never needs a re-render.
+NO_FRAME_DIRECTIVE = (
+    "Fill the entire canvas with the illustration, edge to edge. Do not draw a "
+    "paper margin, border, frame, mat, drop shadow, torn or simulated print "
+    "edge, or any inset rectangle around the artwork — the illustration must "
+    "bleed off all four sides."
+)
+
 
 def _duplicate_guard(page: dict, story: dict) -> str:
     """Build the PER-87 item 1 no-duplicate-characters guard for one page.
@@ -368,6 +383,7 @@ def build_page_guards(page: dict, story: dict, text_mode: str, scene_text: str) 
         _duplicate_guard(page, story),
         _persistent_details_guard(page, story),
         _scene_text_guard(scene_text, text_mode),
+        NO_FRAME_DIRECTIVE,
     ]
     return " ".join(p for p in parts if p)
 
@@ -469,6 +485,55 @@ def resolve_layout_flags(
     font_size = cli_font_size or page_font_size or layout.get("font_size")
     if font_size is not None:
         flags += ["--font-size", str(font_size)]
+    return flags
+
+
+# Maps story.json's top-level `border` object (PER-105) to overlay_text.py CLI
+# flags. Same duplicated-key-name-only contract as _LAYOUT_FLAGS above — no
+# numeric defaults live here, so an absent key falls through to
+# overlay_text.py's own DEFAULT_BORDER_*/DEFAULT_SHADOW_* constant.
+_BORDER_FLAGS = (
+    ("width", "--border-width"),
+    ("color", "--border-color"),
+    ("radius", "--border-radius"),
+)
+_SHADOW_FLAGS = (
+    ("offset", "--shadow-offset"),
+    ("blur", "--shadow-blur"),
+    ("opacity", "--shadow-opacity"),
+)
+
+
+def resolve_border_flags(story: dict, page: dict | None = None) -> list[str]:
+    """Build the overlay_text.py CLI flags for one page's deterministic frame (PER-105).
+
+    Presence of story.json's top-level 'border' object (even {}) is the on/off
+    switch, mirrored as the bare --frame flag; individual keys absent from it
+    fall through to overlay_text.py's own defaults, exactly like
+    resolve_layout_flags. No book/border is book-wide only — there is no CLI
+    override, matching every layout key except font_size.
+
+    A page-level 'border': 'none' (PER-105's per-page opt-out), or a book with
+    no 'border' key at all, both return [] — no --frame flag, i.e. today's
+    full-bleed behaviour. An explicit '{}' is NOT absent — presence is the
+    switch (same contract as 'layout') — and returns --frame plus every
+    default. page=None resolves book-wide only.
+    """
+    if page is not None and page.get("border") == "none":
+        return []
+    border = story.get("border")
+    if border is None:
+        return []
+    flags = ["--frame"]
+    for key, flag in _BORDER_FLAGS:
+        if key in border:
+            flags += [flag, str(border[key])]
+    shadow = border.get("shadow")
+    if shadow is not None:
+        flags.append("--shadow")
+        for key, flag in _SHADOW_FLAGS:
+            if key in shadow:
+                flags += [flag, str(shadow[key])]
     return flags
 
 
@@ -764,6 +829,12 @@ def build_text_bg_prompt(story: dict, page: dict | None = None) -> str:
         "no characters, no faces, no lettering, no typography anywhere in the image. "
         "Use the full canvas from edge to edge, and reserve a large, especially "
         "low-detail, lightly-toned central area where story text will be placed. "
+        # PER-105: this call goes through build_page_guards' NO_FRAME_DIRECTIVE
+        # on every other prompt path, but build_text_bg_prompt takes no guards
+        # (it has no STYLE_ANCHOR either) — add it explicitly rather than let a
+        # framed text-page background be the one surface a model-invented
+        # margin can still sneak back in on.
+        f"{NO_FRAME_DIRECTIVE} "
         f"Art style: {style}. "
         "Keep this exact style identical on every page of the book."
     )
@@ -1898,7 +1969,8 @@ async def run_nano_banana(
 
 async def run_overlay(
     raw_path: Path, text: str, placement: str, color: str, font: str,
-    font_name: str | None, align: str, layout_flags: list[str], final_path: Path, log: list[str]
+    font_name: str | None, align: str, layout_flags: list[str], border_flags: list[str],
+    final_path: Path, log: list[str]
 ) -> bool:
     cmd = [
         "uv", "run", str(OVERLAY_SCRIPT),
@@ -1910,6 +1982,7 @@ async def run_overlay(
         "--font", font,
         "--align", align,
         *layout_flags,
+        *border_flags,
     ]
     if font_name:
         cmd += ["--font-name", font_name]
@@ -1937,6 +2010,7 @@ async def run_text_page(
     font_name: str | None,
     align: str,
     layout_flags: list[str],
+    border_flags: list[str],
     out_path: Path,
     canvas_from: Path | None,
     log: list[str],
@@ -1952,6 +2026,7 @@ async def run_text_page(
         "--font", font,
         "--align", align,
         *layout_flags,
+        *border_flags,
     ]
     if font_name:
         cmd += ["--font-name", font_name]
@@ -1971,6 +2046,54 @@ async def run_text_page(
     return proc.returncode == 0
 
 
+async def run_frame(raw_path: Path, final_path: Path, layout_flags: list[str], border_flags: list[str], log: list[str]) -> bool:
+    """Border-only composite for surfaces with no text panel of their own
+    (native pages, long-mode body art — PER-105). Reuses overlay_text.py's
+    band-mode path with an empty --text: _compose() applies the border/frame
+    step before its empty-text early return, so this is exactly the framing
+    subset of run_overlay(), not a separate CLI mode.
+
+    layout_flags is forwarded even though there's no text to lay out: border
+    lengths share layout.reference_size as their unit baseline (docs/page-frame.md),
+    and layout_flags is where a non-default --reference-size lives. Without it
+    this call would silently fall back to overlay_text.py's own default
+    reference size, scaling the frame differently here than on run_overlay/
+    run_text_page pages of the same book.
+
+    When border_flags is empty (no book-wide border, or this page opted out
+    via 'border': 'none'), this is a plain file copy — no subprocess, no
+    re-encode, byte-identical to writing the model's raw bytes straight to
+    final_path (pre-PER-105 behaviour for these two modes).
+    """
+    if not border_flags:
+        try:
+            shutil.copyfile(raw_path, final_path)
+        except Exception as e:
+            log.append(f"  ERROR: failed to copy {raw_path.name} -> {final_path.name}: {e}")
+            return False
+        return True
+    cmd = [
+        "uv", "run", str(OVERLAY_SCRIPT),
+        "--image", str(raw_path),
+        "--text", "",
+        "--placement", "bottom",
+        "--out", str(final_path),
+        *layout_flags,
+        *border_flags,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if stderr:
+        log.append(stderr.decode().rstrip())
+    if proc.returncode != 0 and stdout:
+        log.append(stdout.decode().rstrip())
+    return proc.returncode == 0
+
+
 async def render_page(client, page: dict, story: dict, pages_dir: Path, resolution: str, cli_text_mode: str | None = None, aspect_ratio: str | None = None, cli_model: str | None = None, base_dir: Path | None = None, cli_scene_text: str | None = None, cli_font_size: int | None = None) -> bool:
     """Render one page (nano-banana + optional overlay/text-page). Prints its own log atomically. Page-independent."""
     page_num = page["page_num"]
@@ -1983,6 +2106,10 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     # Resolve layout (PER-104) once: CLI --font-size > page 'font_size' > story
     # 'layout' object > overlay_text.py's own reference-unit defaults.
     layout_flags = resolve_layout_flags(story, page, cli_font_size)
+    # Resolve the deterministic frame (PER-105) once: story 'border' object,
+    # unless this page opts out via 'border': 'none'. Book-wide only — no CLI
+    # override (tune via story.json + a free re-composite instead).
+    border_flags = resolve_border_flags(story, page)
     log: list[str] = [f"=== Page {page_num} (text-mode: {text_mode}) ==="]
     nn = f"{page_num:02d}"
 
@@ -2008,7 +2135,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                 font = page.get("font", "reader")
                 font_name = (story.get("fonts") or {}).get(font)
                 align = page.get("text_align", "left")
-                ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, layout_flags, final_path, log)
+                ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, layout_flags, border_flags, final_path, log)
                 if not ok or not final_path.exists():
                     log.append("  ERROR: text overlay failed for cover")
                     print("\n" + "\n".join(log))
@@ -2018,13 +2145,24 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
             print("\n" + "\n".join(log))
             return True
 
-        # Body page: art page + optional text page.
+        # Body page: art page + optional text page. Raw/frame split mirrors
+        # overlay's raw-page-NN.png -> page-NN.png (PER-105): generation is
+        # guarded on the raw, framing on the final — deleting only art_path
+        # triggers a free re-composite (border on or off), deleting both
+        # triggers a paid re-render.
         art_path = pages_dir / f"page-{nn}-long.png"
         if not art_path.exists():
-            prompt = build_image_prompt(page, story, "long", scene_text)
-            ok = await run_nano_banana(client, prompt, art_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
+            raw_art_path = pages_dir / f"raw-page-{nn}-long.png"
+            if not raw_art_path.exists():
+                prompt = build_image_prompt(page, story, "long", scene_text)
+                ok = await run_nano_banana(client, prompt, raw_art_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
+                if not ok or not raw_art_path.exists():
+                    log.append(f"  ERROR: art image generation failed for page {page_num}")
+                    print("\n" + "\n".join(log))
+                    return False
+            ok = await run_frame(raw_art_path, art_path, layout_flags, border_flags, log)
             if not ok or not art_path.exists():
-                log.append(f"  ERROR: art image generation failed for page {page_num}")
+                log.append(f"  ERROR: frame compositing failed for page {page_num}")
                 print("\n" + "\n".join(log))
                 return False
 
@@ -2067,7 +2205,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
                     print("\n" + "\n".join(log))
                     return False
             # bg_path is the source image; canvas_from=art_path locks the dims.
-            ok = await run_text_page(bg_path, page_text, color, font, font_name, align, layout_flags, text_path, art_path, log)
+            ok = await run_text_page(bg_path, page_text, color, font, font_name, align, layout_flags, border_flags, text_path, art_path, log)
             if not ok or not text_path.exists():
                 log.append(f"  ERROR: text page failed for page {page_num}")
                 print("\n" + "\n".join(log))
@@ -2086,11 +2224,22 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
     prompt = build_image_prompt(page, story, text_mode, scene_text)
 
     if text_mode == "native":
-        # In native mode the model bakes text into the illustration — write directly
-        # to final_path; no separate raw file needed.
-        ok = await run_nano_banana(client, prompt, final_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
+        # In native mode the model bakes text into the illustration, so there's
+        # no text panel of ours to composite — but the frame still is (PER-105).
+        # Same raw/final split as overlay: generation guards on the raw,
+        # framing guards on the final. Deleting page-NN-native.png alone
+        # (without its raw) now triggers a free re-composite; deleting both
+        # triggers a paid re-render.
+        raw_path = pages_dir / f"raw-page-{nn}-native.png"
+        if not raw_path.exists():
+            ok = await run_nano_banana(client, prompt, raw_path, story, page, resolution, log, aspect_ratio, model=model, base_dir=base_dir)
+            if not ok or not raw_path.exists():
+                log.append(f"  ERROR: image generation failed for page {page_num}")
+                print("\n" + "\n".join(log))
+                return False
+        ok = await run_frame(raw_path, final_path, layout_flags, border_flags, log)
         if not ok or not final_path.exists():
-            log.append(f"  ERROR: image generation failed for page {page_num}")
+            log.append(f"  ERROR: frame compositing failed for page {page_num}")
             print("\n" + "\n".join(log))
             return False
     else:
@@ -2114,7 +2263,7 @@ async def render_page(client, page: dict, story: dict, pages_dir: Path, resoluti
         font_name = (story.get("fonts") or {}).get(font)
         align = page.get("text_align", "left")
 
-        ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, layout_flags, final_path, log)
+        ok = await run_overlay(raw_path, text, placement, color, font, font_name, align, layout_flags, border_flags, final_path, log)
         if not ok or not final_path.exists():
             log.append(f"  ERROR: text overlay failed for page {page_num}")
             print("\n" + "\n".join(log))

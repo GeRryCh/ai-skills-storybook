@@ -218,6 +218,7 @@ def _schema_enums(schema: dict) -> dict[str, list]:
         "font": page["font"]["enum"],
         "text_color_hint": page["text_color_hint"]["enum"],
         "kind": top["cast"]["items"]["properties"]["kind"]["enum"],
+        "border": page["border"]["enum"],
     }
 
 
@@ -230,6 +231,8 @@ def _known_keys(schema: dict) -> dict[str, set]:
         "fonts": set(top["fonts"]["properties"].keys()),
         "layout": set(top["layout"]["properties"].keys()),
         "layout_padding": set(top["layout"]["properties"]["padding"]["properties"].keys()),
+        "border": set(top["border"]["properties"].keys()),
+        "border_shadow": set(top["border"]["properties"]["shadow"]["properties"].keys()),
         "page": set(top["pages"]["items"]["properties"].keys()),
     }
 
@@ -490,6 +493,38 @@ def validate_story(
                             if not isinstance(v, int) or isinstance(v, bool) or v < 0:
                                 errors.append(f"'layout.padding.{key}' must be a non-negative integer")
 
+    # --- border (PER-105's deterministic page frame) --------------------------
+    border = story.get("border")
+    if border is not None:
+        if not isinstance(border, dict):
+            errors.append("'border' must be an object")
+        else:
+            warn_unknown(border, known["border"], "border")
+            for key in ("width", "radius"):
+                if key in border:
+                    v = border[key]
+                    if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                        errors.append(f"'border.{key}' must be a non-negative integer")
+            if "color" in border:
+                v = border["color"]
+                if not isinstance(v, str) or not re.match(r"^#[0-9a-fA-F]{6}$", v):
+                    errors.append("'border.color' must be a '#RRGGBB' hex string")
+            shadow = border.get("shadow")
+            if shadow is not None:
+                if not isinstance(shadow, dict):
+                    errors.append("'border.shadow' must be an object")
+                else:
+                    warn_unknown(shadow, known["border_shadow"], "border.shadow")
+                    for key in ("offset", "blur"):
+                        if key in shadow:
+                            v = shadow[key]
+                            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                                errors.append(f"'border.shadow.{key}' must be a non-negative integer")
+                    if "opacity" in shadow:
+                        v = shadow["opacity"]
+                        if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 1):
+                            errors.append("'border.shadow.opacity' must be a number in [0, 1]")
+
     sf = story.get("saved_formats")
     if sf is not None:
         if not isinstance(sf, list) or not all(
@@ -615,7 +650,7 @@ def validate_story(
                 for key in ("text", "image_prompt", "text_background_prompt"):
                     if key in page and not isinstance(page[key], str):
                         errors.append(f"{where}.{key} must be a string")
-                for key in ("text_placement", "text_align", "font", "text_color_hint", "model", "text_mode", "scene_text"):
+                for key in ("text_placement", "text_align", "font", "text_color_hint", "model", "text_mode", "scene_text", "border"):
                     if key in page and page[key] not in enums[key]:
                         errors.append(
                             f"{where}.{key} must be one of {enums[key]} "
@@ -820,12 +855,13 @@ def _canonical_artifact_names(num: int) -> list[str]:
     """
     nn = f"{num:02d}"
     return [
-        f"page-{nn}.png",           # overlay final
-        f"raw-page-{nn}.png",       # overlay raw
-        f"page-{nn}-native.png",    # native
-        f"page-{nn}-long.png",      # long body art / long cover final
-        f"raw-page-{nn}-long.png",  # long cover raw (page 1 only)
-        f"page-{nn}-long-text.png", # long body text page
+        f"page-{nn}.png",              # overlay final
+        f"raw-page-{nn}.png",          # overlay raw
+        f"page-{nn}-native.png",       # native final
+        f"raw-page-{nn}-native.png",   # native raw (PER-105)
+        f"page-{nn}-long.png",         # long body art / long cover final
+        f"raw-page-{nn}-long.png",     # long cover raw (page 1) / long body art raw (PER-105)
+        f"page-{nn}-long-text.png",    # long body text page
     ]
 
 
@@ -856,7 +892,18 @@ def _recomposite_plan(
     nn = f"{num:02d}"
 
     if mode == "native":
-        return ("native mode has no raw/composite split", [], "native")
+        # PER-105 gave native the same raw/final split overlay always had — the
+        # model's lettered art is the "raw", framing (if a book-wide 'border' is
+        # set) is the free Pillow step. No text panel of its own to re-composite,
+        # so the only thing a recomposite can ever change here is the frame.
+        raw = pages_dir / f"raw-page-{nn}-native.png"
+        if raw.is_file():
+            return (None, [f"page-{nn}-native.png"], "native")
+        return (
+            f"raw-page-{nn}-native.png not found — run a full paid re-render to generate the image first",
+            [],
+            "native",
+        )
 
     # Find the page in story.json
     page = next((p for p in story.get("pages", []) if p.get("page_num") == num), None)
@@ -1890,12 +1937,15 @@ def make_handler(story_path: Path, schema: dict):
             """Free Pillow re-composite — no paid Gemini call, no GEMINI_API_KEY needed.
 
             Deletes only the active-mode composite output (page-NN.png in overlay;
+            page-NN-native.png in native — PER-105 gave native a raw/final split too;
             page-01-long.png or page-NN-long-text.png in long), then spawns
             render_book.py --only N --composite-only --text-mode <mode>.
 
-            Returns 400 when native mode is active (no Pillow split).
             Returns 422 with fallback:true when the prerequisite raw/art/bg is missing
-            (the client should offer the user a paid re-render fallback).
+            (the client should offer the user a paid re-render fallback) — this now
+            covers a native page whose raw was never generated, exactly like an
+            overlay page missing its raw; there is no longer a mode that is
+            structurally ineligible.
             Returns 409 when a render is already running for that page.
             """
             body, err = self._read_json_body()
@@ -1923,9 +1973,6 @@ def make_handler(story_path: Path, schema: dict):
             pages_dir = story_dir / "pages"
             reason, delete_names, mode = _recomposite_plan(story, pages_dir, num)
 
-            if mode == "native":
-                self._fail(400, reason)
-                return
             if reason is not None:
                 # Ineligible but not native — fallback:true tells the client to offer
                 # a paid re-render. (409 lock conflicts have no fallback field so the

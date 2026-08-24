@@ -52,14 +52,20 @@ spacers, long words) and overflows the panel.
 Band mode and text-page mode differ only in **where the panel is anchored**, which
 determines which direction it grows. The sizing math above is identical either way.
 
+**PER-105:** every anchor below is relative to the **art rect**, not the canvas —
+`(0, 0, w, h)` when no page frame (`border`) is set, so nothing here changes for a book
+that doesn't use one. See `docs/page-frame.md` for the art rect itself.
+
 | Surface | Anchored | Grows | Panel corners |
 |---|---|---|---|
-| band, `bottom` | bottom edge, drawn `radius` px past it | upward | rounded, lower corners fall off-frame |
-| band, `top` | `EDGE_MARGIN_FRACTION` (4%, a module constant — see below) from the top | downward | all four rounded |
-| text page | center — `box_y0 = (h - box_h) // 2` | both directions, symmetrically | all four rounded |
+| band, `bottom` | art rect's bottom edge, drawn `radius` px past it | upward | rounded, lower corners fall off the art (not necessarily the canvas) |
+| band, `top` | `EDGE_MARGIN_FRACTION` (4%, a module constant — see below) from the art rect's top | downward | all four rounded |
+| text page | center of the art rect — `box_y0 = ay0 + (ah - box_h) // 2` | both directions, symmetrically | all four rounded |
 
 `overlay_text.py:_compose()`'s `anchor` parameter (`"top"` / `"bottom"` / `"center"`) is
-the only place this distinction lives.
+the only place this distinction lives. The panel mask is additionally clipped to the art
+rect's own (rounded) shape when a border is set, so the band can never spill onto the
+margin — the defect PER-105 exists to fix.
 
 ## The boundary
 
@@ -130,6 +136,10 @@ the book; absent, it inherits the book value. See `story_schema.json`'s `layout`
 `box_alpha` (panel opacity, 0–255) stays outside `layout` — it's unitless, nothing to
 scale, still a module constant plus the `--box-alpha` CLI flag.
 
+A separate, optional top-level `border` object (PER-105) shares `layout.reference_size` as
+its own unit baseline but is otherwise independent — it composites a margin/frame around
+the artwork rather than sizing the text panel. See `docs/page-frame.md`.
+
 ## Loud failure (never silent)
 
 If even `min_font_size` can't make the panel fit `max_panel_fraction`, `measure_text_block`
@@ -169,4 +179,6 @@ Every `layout` key is a CLI flag too (`--font-size`, `--min-font-size`, `--pad-h
 `--pad-v`, `--radius`, `--feather`, `--max-panel-fraction`, `--reference-size`), alongside
 `--box-alpha` and `--align left|center|right`. Tuning is zero-cost: re-run
 `overlay_text.py` against a committed fixture page (see "Smoke-testing changes" in
-CLAUDE.md) — no API call involved.
+CLAUDE.md) — no API call involved. The page frame (PER-105) has its own flag group
+(`--frame`, `--border-width`, `--border-color`, `--border-radius`, `--shadow`,
+`--shadow-offset`, `--shadow-blur`, `--shadow-opacity`) — see `docs/page-frame.md`.

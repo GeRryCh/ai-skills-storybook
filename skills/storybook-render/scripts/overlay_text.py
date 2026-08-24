@@ -37,6 +37,15 @@ page, and a 4K upscaled page all compose identically. Override the reference-uni
 defaults via --font-size/--pad-h/--pad-v/--radius/--feather/--max-panel-fraction/
 --reference-size, or programmatically via the `layout=` LayoutSettings argument.
 
+Optional deterministic page frame (PER-105, --frame / `border=` BorderSettings):
+composites a margin of a fixed colour around the artwork, with a corner radius on
+the artwork itself and an optional drop shadow. The artwork is downscaled to fit
+inside the resulting inset "art rect" — nothing is cropped. All panel/text
+geometry re-bases onto that art rect instead of the full canvas, so the text
+band never spills onto the margin. Omit --frame (border=None, the default) for
+today's full-bleed behaviour, byte-identical to pre-PER-105 output. See
+docs/page-frame.md.
+
 Importable:
   from overlay_text import overlay, text_page
   overlay("page.png", "Once upon a time...", "bottom", "page-final.png")
@@ -50,7 +59,7 @@ import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 SKILL_DIR = Path(__file__).parent.parent
 FONTS = {
@@ -85,6 +94,18 @@ EDGE_MARGIN_FRACTION = 0.04
 # Background panel alpha (0=transparent, 255=opaque) — unitless 0-255, nothing
 # to scale, so it also stays outside `layout`.
 BOX_ALPHA = 205
+
+# ---- Deterministic page frame (PER-105) -------------------------------------------
+# Reference-unit lengths (same reference_size as `layout` — border does not
+# declare its own; one unit baseline per book). Presence of a BorderSettings
+# instance (border=None is the off switch) is what turns the frame on; these
+# are only the values it uses once on.
+DEFAULT_BORDER_WIDTH = 64
+DEFAULT_BORDER_COLOR = "#FFFFFF"
+DEFAULT_BORDER_RADIUS = 48
+DEFAULT_SHADOW_OFFSET = 12
+DEFAULT_SHADOW_BLUR = 24
+DEFAULT_SHADOW_OPACITY = 0.25
 
 
 def _scale_len(v: float, scale: float, min_val: int = 0) -> int:
@@ -126,6 +147,102 @@ class LayoutSettings:
             radius=_scale_len(self.radius, scale),
             feather=_scale_len(self.feather, scale),
         )
+
+
+@dataclass(frozen=True)
+class ShadowSettings:
+    """Drop-shadow tunables, reference-unit px (opacity is already a fraction).
+    Only meaningful when nested inside a BorderSettings — there is no shadow
+    without a frame to cast it."""
+
+    offset: int = DEFAULT_SHADOW_OFFSET
+    blur: int = DEFAULT_SHADOW_BLUR
+    opacity: float = DEFAULT_SHADOW_OPACITY
+
+
+@dataclass(frozen=True)
+class BorderSettings:
+    """PER-105's deterministic page frame. Reference-unit px, scaled by the same
+    uniform factor as LayoutSettings — `.scaled()` takes the reference_size
+    explicitly (border has none of its own; it shares the book's `layout`
+    baseline). `shadow=None` (the default) means no drop shadow at all, not a
+    zero-opacity one.
+    """
+
+    width: int = DEFAULT_BORDER_WIDTH
+    color: str = DEFAULT_BORDER_COLOR
+    radius: int = DEFAULT_BORDER_RADIUS
+    shadow: ShadowSettings | None = None
+
+    def scaled(self, w: int, h: int, reference_size: int) -> "BorderSettings":
+        scale = min(w, h) / reference_size
+        new_shadow = None
+        if self.shadow is not None:
+            new_shadow = replace(
+                self.shadow,
+                offset=_scale_len(self.shadow.offset, scale),
+                blur=_scale_len(self.shadow.blur, scale),
+                # opacity is already a 0-1 fraction — nothing to scale.
+            )
+        return replace(
+            self,
+            width=_scale_len(self.width, scale),
+            radius=_scale_len(self.radius, scale),
+            shadow=new_shadow,
+        )
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    s = hex_color.lstrip("#")
+    return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+
+def art_rect(w: int, h: int, border: BorderSettings | None) -> tuple[int, int, int, int]:
+    """The (x0, y0, x1, y1) rectangle the artwork occupies inside a w x h canvas.
+
+    `border` must already be `.scaled()` to (w, h) — this function does no unit
+    conversion. None, or a non-positive width, returns the full canvas
+    (0, 0, w, h) — today's full-bleed behaviour, byte-identical. The margin
+    never collapses the art to nothing, even at a pathologically large width.
+    """
+    if border is None or border.width <= 0:
+        return (0, 0, w, h)
+    m = min(border.width, (min(w, h) - 1) // 2)
+    return (m, m, w - m, h - m)
+
+
+def frame_canvas(
+    art: Image.Image,
+    w: int,
+    h: int,
+    rect: tuple[int, int, int, int],
+    border: BorderSettings,
+) -> Image.Image:
+    """Composite `art` (already exactly rect-sized — resize/crop is the
+    caller's job, since art pages and text pages fit differently) onto a
+    w x h canvas: a flat margin in border.color, an optional soft drop
+    shadow, and the artwork itself with rounded corners.
+
+    `border` must already be `.scaled()` to (w, h).
+    """
+    ax0, ay0, ax1, ay1 = rect
+    canvas = Image.new("RGBA", (w, h), _hex_to_rgb(border.color) + (255,))
+
+    if border.shadow is not None:
+        sh = border.shadow
+        shadow_rect = (ax0 + sh.offset, ay0 + sh.offset, ax1 + sh.offset, ay1 + sh.offset)
+        shadow_mask = _panel_mask(
+            w, h, shadow_rect, border.radius, int(round(255 * sh.opacity)), sh.blur,
+        )
+        shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        shadow_layer.putalpha(shadow_mask)
+        canvas = Image.alpha_composite(canvas, shadow_layer)
+
+    art_mask = _panel_mask(w, h, rect, border.radius, 255, feather=0)
+    art_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    art_layer.paste(art.convert("RGBA"), (ax0, ay0))
+    art_layer.putalpha(art_mask)
+    return Image.alpha_composite(canvas, art_layer)
 
 
 def _normalize_family(name: str) -> str:
@@ -230,6 +347,7 @@ def measure_text_block(
     h: int,
     lay: LayoutSettings,
     max_box_h: int,
+    max_text_w: int | None = None,
 ) -> tuple[int, list[str], int, int, int]:
     """Fit text to one panel sized from its own content.
 
@@ -239,7 +357,11 @@ def measure_text_block(
     is a last-resort overflow guard, not a layout mechanism.
 
     `lay` must already be scaled to (w, h) via LayoutSettings.scaled() — this
-    function does no unit conversion of its own.
+    function does no unit conversion of its own. w, h are the CANVAS
+    dimensions (used only to derive the leading scale factor) — pass
+    max_text_w explicitly when the text column is narrower than the canvas
+    (PER-105's bordered art rect); omitted, it defaults to w's own
+    H_PAD_FRACTION inset, i.e. today's full-bleed behaviour.
 
     Returns (font_size, lines, line_h, box_h, dropped). Both the boundary check
     here and the draw loop in _compose() consume this single measurement —
@@ -250,7 +372,8 @@ def measure_text_block(
     """
     scale = min(w, h) / lay.reference_size
     leading = _scale_len(LINE_LEADING, scale, min_val=1)
-    max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
+    if max_text_w is None:
+        max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
     dummy = ImageDraw.Draw(Image.new("RGBA", (w, h)))
 
     size = lay.font_size
@@ -303,14 +426,20 @@ def _draw_text_lines(
     max_text_w: int,
     align: str,
     color: str,
+    x_origin: int = 0,
+    region_w: int | None = None,
 ) -> Image.Image:
     """Draw every line handed to it onto its own transparent layer — no clipping
     loop. Any truncation was already decided once, by measure_text_block().
 
     All three alignments are defined against the text column [h_pad, w - h_pad],
     not raw canvas width, so 'right' lands its edge at w - h_pad regardless of
-    padding.
+    padding. x_origin/region_w (PER-105) shift that column to a bordered art
+    rect: x_origin is the rect's left edge, region_w its width. Defaults
+    (x_origin=0, region_w=w) reproduce the pre-PER-105 formula byte-for-byte.
     """
+    if region_w is None:
+        region_w = w
     text_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(text_layer)
     text_color = (30, 30, 30, 255) if color == "dark" else (245, 245, 245, 255)
@@ -320,18 +449,20 @@ def _draw_text_lines(
         if line:
             line_w = draw.textlength(line, font=font)
             if align == "center":
-                x = int(h_pad + (max_text_w - line_w) / 2)
+                x = x_origin + int(h_pad + (max_text_w - line_w) / 2)
             elif align == "right":
-                x = int(w - h_pad - line_w)
+                x = x_origin + int(region_w - h_pad - line_w)
             else:
-                x = h_pad
+                x = x_origin + h_pad
             draw.text((x, y), line, font=font, fill=text_color)
         y += line_h
     return text_layer
 
 
 def _compose(
-    img: Image.Image,
+    art: Image.Image,
+    canvas_w: int,
+    canvas_h: int,
     text: str,
     out_path: Path,
     font: str,
@@ -340,65 +471,98 @@ def _compose(
     box_alpha: int,
     align: str,
     layout: LayoutSettings,
+    border: BorderSettings | None,
     anchor: str,
     label: str,
 ) -> Path:
-    """Shared panel-and-text compositor for both surfaces.
+    """Shared frame-panel-and-text compositor for both surfaces.
+
+    `art` is the artwork; its own size may be the full canvas (border=None) or
+    already exactly the art-rect size a caller pre-fit it to (PER-105's
+    caller-owned fit policy — see overlay()/text_page()). `canvas_w`/`canvas_h`
+    are the FINAL image dimensions, which never change: a border shrinks where
+    the art sits, not the page size.
 
     anchor: 'top' | 'bottom' (band mode) | 'center' (text-page mode) — which
     edge the panel is pinned to, and the only thing that legitimately differs
     between band mode and text-page mode. See docs/text-fitting.md "Growth
-    anchors".
+    anchors" and docs/page-frame.md.
     """
-    w, h = img.size
+    w, h = canvas_w, canvas_h
+    lay = layout.scaled(w, h)
+    scale = min(w, h) / lay.reference_size
+    scaled_border = border.scaled(w, h, lay.reference_size) if border is not None else None
+    ax0, ay0, ax1, ay1 = art_rect(w, h, scaled_border)
+    aw, ah = ax1 - ax0, ay1 - ay0
+    bordered = scaled_border is not None and (aw, ah) != (w, h)
+
+    # Frame first (PER-105) — before the empty-text early return, so a
+    # frame-only page (native, long-body art: overlay() called with text="")
+    # still gets composited. border=None is the identity path: `canvas` is
+    # exactly `art`, untouched — byte-identical to pre-PER-105 output.
+    if bordered:
+        art_for_canvas = art if art.size == (aw, ah) else art.resize((aw, ah), Image.LANCZOS)
+        canvas = frame_canvas(art_for_canvas, w, h, (ax0, ay0, ax1, ay1), scaled_border)
+    else:
+        canvas = art.convert("RGBA")
+
     if not text.strip():
-        img.convert("RGB").save(out_path)
+        canvas.convert("RGB").save(out_path)
         return out_path
 
     font_ref = _resolve_font_ref(font, font_name)
-    lay = layout.scaled(w, h)
 
-    edge_margin = int(h * EDGE_MARGIN_FRACTION)
-    max_box_h = int(h * lay.max_panel_fraction)
+    edge_margin = int(ah * EDGE_MARGIN_FRACTION)
+    max_box_h = int(ah * lay.max_panel_fraction)
     if anchor == "top":
         # A centred text page runs out of room top and bottom simultaneously; a
         # bottom-anchored band has one edge pinned and grows until it reaches
         # the top margin. Top placement is the one anchor with a second,
         # tighter ceiling: it must also leave the matching gap below.
-        max_box_h = min(max_box_h, h - 2 * edge_margin)
+        max_box_h = min(max_box_h, ah - 2 * edge_margin)
 
-    size, lines, line_h, box_h, dropped = measure_text_block(text, font_ref, w, h, lay, max_box_h)
+    h_pad = int(aw * H_PAD_FRACTION)
+    max_text_w = int(aw * (1 - 2 * H_PAD_FRACTION))
+    size, lines, line_h, box_h, dropped = measure_text_block(
+        text, font_ref, w, h, lay, max_box_h, max_text_w=max_text_w,
+    )
     font_obj = _load_font(font_ref, size)
 
-    max_text_w = int(w * (1 - 2 * H_PAD_FRACTION))
-    h_pad = int(w * H_PAD_FRACTION)
-    box_x0 = h_pad - lay.pad_h
-    box_x1 = w - h_pad + lay.pad_h
+    box_x0 = ax0 + h_pad - lay.pad_h
+    box_x1 = ax1 - h_pad + lay.pad_h
 
-    # Bottom placement anchors the panel flush to the image bottom (no gap); it
-    # is drawn past the canvas edge so its rounded corners fall off-frame and
-    # the bottom reads as a straight, full-bleed edge. Top keeps the edge
-    # margin. Center floats with all four corners rounded.
+    # Bottom placement anchors the panel flush to the art's bottom edge (no
+    # gap); it is drawn past that edge so its rounded corners fall off-frame
+    # and the bottom reads as a straight edge. Top keeps the edge margin.
+    # Center floats with all four corners rounded. All three anchor to the
+    # ART rect, not the canvas — with no border ax0=ay0=0 and aw=w, ah=h, so
+    # this reproduces the pre-PER-105 canvas-relative formulas exactly.
     if anchor == "top":
-        box_y0 = edge_margin
+        box_y0 = ay0 + edge_margin
         panel_y1 = box_y0 + box_h
     elif anchor == "bottom":
-        box_y0 = h - box_h
-        panel_y1 = h + lay.radius
+        box_y0 = ay1 - box_h
+        panel_y1 = ay1 + lay.radius
     else:  # center
-        box_y0 = (h - box_h) // 2
+        box_y0 = ay0 + (ah - box_h) // 2
         panel_y1 = box_y0 + box_h
 
-    mask = _panel_mask(w, h, (box_x0, box_y0, box_x1, panel_y1), lay.radius, box_alpha, lay.feather)
+    panel_mask = _panel_mask(w, h, (box_x0, box_y0, box_x1, panel_y1), lay.radius, box_alpha, lay.feather)
+    if bordered:
+        # Clip the panel to the artwork's own rounded shape so the band never
+        # spills onto the margin (the defect this whole change exists to fix).
+        art_mask = _panel_mask(w, h, (ax0, ay0, ax1, ay1), scaled_border.radius, 255, feather=0)
+        panel_mask = ImageChops.multiply(panel_mask, art_mask)
     panel_rgb = (255, 255, 255) if color == "dark" else (30, 30, 30)
     panel = Image.new("RGBA", (w, h), panel_rgb + (0,))
-    panel.putalpha(mask)
-    img = Image.alpha_composite(img, panel)
+    panel.putalpha(panel_mask)
+    canvas = Image.alpha_composite(canvas, panel)
 
     text_layer = _draw_text_lines(
         w, h, lines, font_obj, line_h, box_y0 + lay.pad_v, h_pad, max_text_w, align, color,
+        x_origin=ax0, region_w=aw,
     )
-    composed = Image.alpha_composite(img, text_layer)
+    composed = Image.alpha_composite(canvas, text_layer)
     composed.convert("RGB").save(out_path)
 
     if dropped:
@@ -424,6 +588,7 @@ def overlay(
     font_name: str | None = None,
     align: str = "left",
     layout: LayoutSettings | None = None,
+    border: BorderSettings | None = None,
 ) -> Path:
     """
     Composite text onto an image in the top or bottom zone.
@@ -433,9 +598,13 @@ def overlay(
     otherwise exceed layout.max_panel_fraction of the page — a last-resort
     overflow guard, not a layout mechanism. See docs/text-fitting.md.
 
+    An empty `text` still runs the border/frame step (if `border` is set) —
+    that's how native-mode and long-body-art pages, which have no text panel
+    of their own, get framed: call this with text="" (see docs/page-frame.md).
+
     Args:
         image_path: Source PNG/JPG.
-        text: Story text. Empty string = no overlay, just copies file.
+        text: Story text. Empty string = no text panel (frame, if any, still applies).
         placement: 'top' or 'bottom'.
         out_path: Destination path.
         font: role 'reader' or 'display' — selects the bundled fallback font.
@@ -446,6 +615,8 @@ def overlay(
             asset -> system font -> bundled role fallback. None = use the role font.
         align: 'left' (default), 'center', or 'right' — horizontal alignment of each line.
         layout: LayoutSettings overriding the reference-unit defaults. None = defaults.
+        border: BorderSettings for a deterministic margin/frame (PER-105). None (default)
+            = full-bleed, byte-identical to pre-PER-105 output.
 
     Returns:
         Path to written file.
@@ -455,10 +626,11 @@ def overlay(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     img = Image.open(image_path).convert("RGBA")
+    w, h = img.size
     anchor = "top" if placement == "top" else "bottom"
     return _compose(
-        img, text, out_path, font, font_name, color, box_alpha, align,
-        layout or LayoutSettings(), anchor, out_path.name,
+        img, w, h, text, out_path, font, font_name, color, box_alpha, align,
+        layout or LayoutSettings(), border, anchor, out_path.name,
     )
 
 
@@ -473,14 +645,20 @@ def text_page(
     align: str = "left",
     canvas_from: str | Path | None = None,
     layout: LayoutSettings | None = None,
+    border: BorderSettings | None = None,
 ) -> Path:
     """
     Render a full text page for long story mode.
 
     image_path is a purpose-made background (generated by the render stage with a
     reserved low-detail central section); it is used as-is — no blur, no wash. When
-    canvas_from is set, the background is scale-to-cover + center-cropped to match the
-    canvas_from image's dimensions, so the text page always matches its art page.
+    canvas_from is set, the page canvas matches the canvas_from image's dimensions
+    (so the text page always matches its art page), and the background is
+    scale-to-cover + center-cropped to fill the ART rect within that canvas — the
+    same rect a border (if set) insets the artwork into on every other surface, so
+    text pages get exactly one resample no matter whether a border is set (PER-105:
+    cropping straight to the art rect avoids compositing a border on top of an
+    already-full-canvas crop, which would resample twice).
 
     Text sits on a vertically centered, feathered semi-transparent panel, sized
     from its own content exactly as overlay() sizes a band — both surfaces
@@ -498,6 +676,8 @@ def text_page(
         align: 'left', 'center', or 'right'.
         canvas_from: When set, open this image to get target (W, H); scale-crop image_path to fit.
         layout: LayoutSettings overriding the reference-unit defaults. None = defaults.
+        border: BorderSettings for a deterministic margin/frame (PER-105). None (default)
+            = full-bleed, byte-identical to pre-PER-105 output.
 
     Returns:
         Path to written file.
@@ -510,21 +690,32 @@ def text_page(
     w, h = img.size
 
     if canvas_from is not None:
-        # Get target dims from canvas_from, then scale-to-cover + center-crop the
-        # background to those dims so the text page always matches its art page.
         ref = Image.open(canvas_from)
         tw, th = ref.size
-        scale = max(tw / w, th / h)
+    else:
+        tw, th = w, h
+
+    lay = layout or LayoutSettings()
+    scaled_border = border.scaled(tw, th, lay.reference_size) if border is not None else None
+    ax0, ay0, ax1, ay1 = art_rect(tw, th, scaled_border)
+    aw, ah = ax1 - ax0, ay1 - ay0
+
+    if canvas_from is not None or scaled_border is not None:
+        # Scale-to-cover + center-crop the background to the ART rect's dims
+        # (aw, ah) — with no border and no canvas_from override, aw==w and
+        # ah==h, so this branch is simply never entered and img is used as-is,
+        # exactly as before PER-105.
+        scale = max(aw / w, ah / h)
         new_w = math.ceil(w * scale)
         new_h = math.ceil(h * scale)
         img = img.resize((new_w, new_h), Image.LANCZOS)
-        x0 = (new_w - tw) // 2
-        y0 = (new_h - th) // 2
-        img = img.crop((x0, y0, x0 + tw, y0 + th))
+        x0 = (new_w - aw) // 2
+        y0 = (new_h - ah) // 2
+        img = img.crop((x0, y0, x0 + aw, y0 + ah))
 
     return _compose(
-        img, text, out_path, font, font_name, color, box_alpha, align,
-        layout or LayoutSettings(), "center", out_path.name,
+        img, tw, th, text, out_path, font, font_name, color, box_alpha, align,
+        lay, border, "center", out_path.name,
     )
 
 
@@ -573,6 +764,33 @@ def main() -> None:
     parser.add_argument("--canvas-from", default=None, metavar="PATH",
                         help="(--text-page only) Open this image to get target W×H; scale-crop "
                              "--image to those dims so text page matches art page dimensions.")
+    # Deterministic page frame (PER-105). --frame is the on/off switch — the
+    # individual --border-*/--shadow-* flags only matter alongside it, and
+    # default to None (not a numeric default) so an omitted flag falls through
+    # to overlay_text.py's own DEFAULT_* constant, exactly like the layout
+    # flags above. Omitting --frame entirely reproduces pre-PER-105 full-bleed
+    # output byte-for-byte. See docs/page-frame.md.
+    parser.add_argument("--frame", action="store_true",
+                        help="Composite a deterministic margin/border frame around the "
+                             "artwork instead of full-bleed (default: no frame).")
+    parser.add_argument("--border-width", type=int, default=None,
+                        help=f"Margin width at --reference-size (--frame only; "
+                             f"default {DEFAULT_BORDER_WIDTH}px)")
+    parser.add_argument("--border-color", default=None,
+                        help=f"Margin color as #RRGGBB (--frame only; default {DEFAULT_BORDER_COLOR})")
+    parser.add_argument("--border-radius", type=int, default=None,
+                        help=f"Artwork corner radius at --reference-size (--frame only; "
+                             f"default {DEFAULT_BORDER_RADIUS}px)")
+    parser.add_argument("--shadow", action="store_true",
+                        help="Add a drop shadow under the artwork (--frame only).")
+    parser.add_argument("--shadow-offset", type=int, default=None,
+                        help=f"Shadow offset at --reference-size (--shadow only; "
+                             f"default {DEFAULT_SHADOW_OFFSET}px)")
+    parser.add_argument("--shadow-blur", type=int, default=None,
+                        help=f"Shadow blur radius at --reference-size (--shadow only; "
+                             f"default {DEFAULT_SHADOW_BLUR}px)")
+    parser.add_argument("--shadow-opacity", type=float, default=None,
+                        help=f"Shadow opacity 0-1 (--shadow only; default {DEFAULT_SHADOW_OPACITY})")
     args = parser.parse_args()
 
     layout = LayoutSettings(
@@ -586,17 +804,33 @@ def main() -> None:
         max_panel_fraction=args.max_panel_fraction,
     )
 
+    border = None
+    if args.frame:
+        shadow = None
+        if args.shadow:
+            shadow = ShadowSettings(
+                offset=args.shadow_offset if args.shadow_offset is not None else DEFAULT_SHADOW_OFFSET,
+                blur=args.shadow_blur if args.shadow_blur is not None else DEFAULT_SHADOW_BLUR,
+                opacity=args.shadow_opacity if args.shadow_opacity is not None else DEFAULT_SHADOW_OPACITY,
+            )
+        border = BorderSettings(
+            width=args.border_width if args.border_width is not None else DEFAULT_BORDER_WIDTH,
+            color=args.border_color if args.border_color is not None else DEFAULT_BORDER_COLOR,
+            radius=args.border_radius if args.border_radius is not None else DEFAULT_BORDER_RADIUS,
+            shadow=shadow,
+        )
+
     if args.text_page:
         result = text_page(
             args.image, args.text, args.out, args.font, args.color,
             box_alpha=args.box_alpha, font_name=args.font_name,
-            align=args.align, canvas_from=args.canvas_from, layout=layout,
+            align=args.align, canvas_from=args.canvas_from, layout=layout, border=border,
         )
     else:
         result = overlay(
             args.image, args.text, args.placement, args.out, args.font, args.color,
             box_alpha=args.box_alpha, font_name=args.font_name,
-            align=args.align, layout=layout,
+            align=args.align, layout=layout, border=border,
         )
     print(f"Saved: {result}")
 
