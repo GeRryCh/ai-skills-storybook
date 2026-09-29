@@ -4,7 +4,13 @@
   "style": "soft watercolor, warm Mediterranean palette, children's picture book illustration",
   "style_guide": {
     "medium": "soft watercolor with gentle pen-and-ink outline",
-    "palette": ["warm Jerusalem stone #D4B896", "sage and dry-grass green #A8B87C", "open sky blue #87CEEB", "amber sunset #E8A050", "dusty rose #D49080"],
+    "palette": [
+      "warm Jerusalem stone #D4B896",
+      "sage and dry-grass green #A8B87C",
+      "open sky blue #87CEEB",
+      "amber sunset #E8A050",
+      "dusty rose #D49080"
+    ],
     "line": "thin warm sepia ink, rounded soft corners",
     "lighting": "warm Mediterranean golden light, long soft shadows, clear open sky",
     "mood": "curious, adventurous, warm and reassuring"
@@ -14,7 +20,9 @@
       "id": "pip",
       "name": "Pip",
       "appearance": "small brave hedgehog, round body, soft brown spines, big curious dark eyes, tiny pink nose, wears a tiny red scarf",
-      "ref_image": ["refs/pip-ref.png"],
+      "ref_image": [
+        "refs/pip-ref.png"
+      ],
       "style_sheet": "style-sheet-pip.png"
     },
     {
@@ -22,26 +30,36 @@
       "name": "Gazelle Valley",
       "kind": "location",
       "appearance": "rocky Jerusalem hillside valley with dry golden scrub, winding dusty paths, wild gazelles roaming freely, and stone neighbourhoods on the surrounding hills",
-      "ref_image": ["refs/loc-gazelle-valley.jpg"],
-      "source_url": ["https://commons.wikimedia.org/wiki/File:Gazelle-Valley-093.jpg"]
+      "ref_image": [
+        "refs/loc-gazelle-valley.jpg"
+      ],
+      "source_url": [
+        "https://commons.wikimedia.org/wiki/File:Gazelle-Valley-093.jpg"
+      ]
     }
   ],
   "text_mode": "overlay",
   "resolution": "1K",
   "aspect_ratio": "4:3",
-  "saved_formats": ["pdf", "epub"],
+  "saved_formats": [
+    "pdf",
+    "epub"
+  ],
   "layout": {
     "font_size": 44,
     "max_panel_fraction": 0.85
   },
   "border": {
-    "width": 72,
+    "width": 150,
     "color": "#F5E9D4"
   },
   "pages": [
     {
       "page_num": 1,
-      "cast": ["pip", "gazelle-valley"],
+      "cast": [
+        "pip",
+        "gazelle-valley"
+      ],
       "text": "Pip in the Valley of Gazelles",
       "image_prompt": "Cover of a children's picture book. <pip> stands on a rocky path in <gazelle-valley>, the open valley stretching behind in warm golden afternoon light, two gazelles grazing peacefully in the distance, rolling Jerusalem hills beyond. Soft watercolor, warm Mediterranean palette.",
       "text_placement": "bottom",
@@ -52,7 +70,10 @@
     },
     {
       "page_num": 2,
-      "cast": ["pip", "gazelle-valley"],
+      "cast": [
+        "pip",
+        "gazelle-valley"
+      ],
       "text": "Every morning, Pip explored Gazelle Valley. The rocky paths went on and on!",
       "image_prompt": "<pip> trotting happily along a winding dusty path through <gazelle-valley>, dry golden grasses and wild scrub on either side, three gazelles standing alertly on a nearby rocky slope watching curiously, warm morning light, open blue sky. Children's picture book illustration, soft watercolor.",
       "text_placement": "bottom",
@@ -61,7 +82,10 @@
     },
     {
       "page_num": 3,
-      "cast": ["pip", "gazelle-valley"],
+      "cast": [
+        "pip",
+        "gazelle-valley"
+      ],
       "text": "One day Pip found a baby gazelle, all alone and lost.",
       "image_prompt": "<pip> standing face-to-face with a tiny baby gazelle on a rocky hillside in <gazelle-valley>, both looking at each other with big curious eyes, dry rocky terrain and distant Jerusalem stone buildings in the background, warm afternoon light. Children's picture book illustration, soft watercolor.",
       "text_placement": "bottom",
@@ -70,7 +94,10 @@
     },
     {
       "page_num": 4,
-      "cast": ["pip", "gazelle-valley"],
+      "cast": [
+        "pip",
+        "gazelle-valley"
+      ],
       "text": "Pip led the little one back across the valley — and soon its family came running!",
       "image_prompt": "<pip> trotting ahead leading a baby gazelle across the open floor of <gazelle-valley>, the baby gazelle following close behind, a group of three adult gazelles running joyfully towards them in the background, golden late-afternoon light flooding the valley. Children's picture book illustration, soft watercolor.",
       "text_placement": "bottom",
@@ -79,7 +106,10 @@
     },
     {
       "page_num": 5,
-      "cast": ["pip", "gazelle-valley"],
+      "cast": [
+        "pip",
+        "gazelle-valley"
+      ],
       "text": "The gazelles nuzzled Pip gently. In the valley, everyone looks after everyone.",
       "image_prompt": "<pip> surrounded by a family of four gazelles in <gazelle-valley> at sunset, the gazelles bowing their heads down gently towards Pip, warm amber and rose sunset light over the rocky valley, Jerusalem hillsides glowing in the distance. Children's picture book illustration, soft watercolor.",
       "text_placement": "bottom",
