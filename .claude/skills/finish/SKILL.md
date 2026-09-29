@@ -48,8 +48,8 @@ Run the steps **in order**. If a STOP condition is hit, stop and report — do n
    ```bash
    bash "$FINISH_SCRIPT" "$TASK_ID"
    ```
-   This runs `exec zsh -ic "cc-sd \"/finish-worktree TASK_ID\" --bg --name \"<id-lc>:finish\""`,
-   which returns quickly — the agent is detached. Wait for the Bash call to return
+   The script starts a detached background session named `<id-lc>:finish` that does the
+   actual finishing work, so it returns quickly. Wait for the Bash call to return
    (a few seconds at most) before reporting.
 
 5. **Report.**
